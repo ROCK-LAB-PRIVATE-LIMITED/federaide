@@ -2300,6 +2300,9 @@ class AIAgentView(Vertical):
         if hasattr(self, "current_batch_id"):
             self.session_manager.abort_batch(self.current_batch_id)
 
+        # DROP THE HAMMER: Instantly kill all executing background agent threads
+        toolbox.nuke_all_threads()
+
         self._running_agents.clear()
         if self.workers:
             self.workers.cancel_all()
@@ -3023,8 +3026,10 @@ class AIAgentView(Vertical):
 
     @work(thread=True)
     def run_agent_task(self, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0):
+        toolbox.register_thread()
         if agent.name in self._running_agents:
             self.log_to_ui(f"[dim yellow]Agent {agent.name} is already working on a task.[/dim yellow]")
+            toolbox.unregister_thread()
             return
 
         self._running_agents.add(agent.name)
@@ -3443,6 +3448,7 @@ class AIAgentView(Vertical):
         finally:
             self._running_agents.discard(agent.name)
             self.app.call_from_thread(self._toggle_spinner, False, agent.name, agent.color) 
+            toolbox.unregister_thread()
                
     def _toggle_spinner(self, show: bool, agent_name: str = "Agent", agent_color: str = "#00FFFF"):
         if show:

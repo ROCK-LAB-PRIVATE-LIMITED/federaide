@@ -21,8 +21,40 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
+import ctypes
+
 _LAST_LLM_CALL_TIME = 0.0
 _LLM_LOCK = threading.Lock()
+
+# --- THE HAMMER: GLOBAL THREAD KILLER ---
+_ACTIVE_THREADS = set()
+_THREAD_LOCK = threading.Lock()
+
+def register_thread():
+    with _THREAD_LOCK:
+        _ACTIVE_THREADS.add(threading.get_ident())
+
+def unregister_thread():
+    with _THREAD_LOCK:
+        _ACTIVE_THREADS.discard(threading.get_ident())
+
+def nuke_all_threads():
+    """Injects a fatal SystemExit directly into the bytecode of all registered zombie threads."""
+    with _THREAD_LOCK:
+        current_id = threading.get_ident()
+        for t_id in list(_ACTIVE_THREADS):
+            if t_id == current_id:
+                continue # Don't commit seppuku on the main UI thread
+            try:
+                # Forcefully throw a SystemExit inside the target thread's execution context
+                res = ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(t_id), ctypes.py_object(SystemExit))
+                if res > 1:
+                    # If it failed, revert the effect to prevent memory corruption
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(t_id), 0)
+            except Exception:
+                pass
+        _ACTIVE_THREADS.clear()
+# ----------------------------------------
 
 # Persistent Global Settings Helper
 GLOBAL_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".federate", "global_settings.json")
@@ -1499,6 +1531,13 @@ subagent_app = builder.compile(checkpointer=shared_memory)
 
 # --- Execution Hooks ---
 def run_subagent(search_prompt, task_name, output_dir=".", config=None, batch_id: int = 0):
+    register_thread()
+    try:
+        return _run_subagent_logic(search_prompt, task_name, output_dir, config, batch_id)
+    finally:
+        unregister_thread()
+
+def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, batch_id: int = 0):
     thread_context.task_name = task_name 
     thread_context.log_path = get_storage_path(output_dir, "research_status.log")
     thread_context.batch_id = batch_id
