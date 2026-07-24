@@ -2184,6 +2184,26 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         arg_order: Optional list for positional logic.
     """
     agent_name = _get_agent(config)
+    
+    # --- MODE RESTRICTIONS ---
+    if CURRENT_AGENT_VIEW:
+        mode = getattr(CURRENT_AGENT_VIEW, "agent_mode", "PLAN")
+        if mode == "PLAN":
+            return "Error: Skill staging and compilation is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
+        elif mode == "INTERMEDIATE":
+            kwargs = {
+                "tool_name": tool_name,
+                "source_paths": source_paths,
+                "entry_point": entry_point,
+                "test_input": test_input,
+                "dependencies": dependencies,
+                "custom_dependency_paths": custom_dependency_paths,
+                "pre_install_commands": pre_install_commands,
+                "arg_order": arg_order
+            }
+            if not CURRENT_AGENT_VIEW.confirm_tool_execution("prepare_active_skill", kwargs, agent_name=agent_name):
+                return "Error: Tool execution of 'prepare_active_skill' was rejected by the user."
+
     safe_agent_name = agent_name.replace(" ", "_")
     staging_dir = get_storage_path("agents", "skills", safe_agent_name, "staged_tools", tool_name)
     
@@ -2354,6 +2374,23 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
         arg_order: Optional sequence for positional arguments.
     """
     agent_name = _get_agent(config)
+    
+    # --- MODE RESTRICTIONS ---
+    if CURRENT_AGENT_VIEW:
+        mode = getattr(CURRENT_AGENT_VIEW, "agent_mode", "PLAN")
+        if mode == "PLAN":
+            return "Error: Skill finalization is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
+        elif mode == "INTERMEDIATE":
+            kwargs = {
+                "tool_name": tool_name,
+                "tool_description": tool_description,
+                "usage_guide": usage_guide,
+                "parameters": parameters,
+                "arg_order": arg_order
+            }
+            if not CURRENT_AGENT_VIEW.confirm_tool_execution("finalize_active_skill", kwargs, agent_name=agent_name):
+                return "Error: Tool execution of 'finalize_active_skill' was rejected by the user."
+
     safe_agent_name = agent_name.replace(" ", "_")
     base_skills = get_storage_path("agents", "skills", safe_agent_name)
     staging_dir = get_storage_path(base_skills, "staged_tools", tool_name)
@@ -2444,6 +2481,29 @@ def fix_active_skill(tool_name: str, action: str, documentation: str, tool_descr
     if len(tool_description.strip()) < 50:
         return "Error: The 'tool_description' must be a detailed, descriptive summary explaining what the tool does. Placeholder descriptions are strictly prohibited."
     agent_name = _get_agent(config)
+    
+    # --- MODE RESTRICTIONS ---
+    if CURRENT_AGENT_VIEW:
+        mode = getattr(CURRENT_AGENT_VIEW, "agent_mode", "PLAN")
+        if mode == "PLAN":
+            return "Error: Modifying active skills is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
+        elif mode == "INTERMEDIATE":
+            kwargs = {
+                "tool_name": tool_name,
+                "action": action,
+                "documentation": documentation,
+                "tool_description": tool_description,
+                "parameters": parameters,
+                "file_path": file_path,
+                "source_path": source_path,
+                "content": content,
+                "commit_message": commit_message,
+                "dependencies": dependencies,
+                "arg_order": arg_order
+            }
+            if not CURRENT_AGENT_VIEW.confirm_tool_execution("fix_active_skill", kwargs, agent_name=agent_name):
+                return "Error: Tool execution of 'fix_active_skill' was rejected by the user."
+
     safe_agent_name = agent_name.replace(" ", "_")
     active_dir = get_storage_path("agents", "skills", safe_agent_name, "active_tools", tool_name)
     
@@ -2603,6 +2663,21 @@ def manage_active_skill(action: str, tool_name: str, new_name: str = None, confi
     Actions: 'remove' (deletes the tool), 'rename' (changes tool identity).
     """
     agent_name = _get_agent(config)
+    
+    # --- MODE RESTRICTIONS ---
+    if CURRENT_AGENT_VIEW:
+        mode = getattr(CURRENT_AGENT_VIEW, "agent_mode", "PLAN")
+        if mode == "PLAN":
+            return "Error: Managing/deleting active skills is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
+        elif mode == "INTERMEDIATE":
+            kwargs = {
+                "action": action,
+                "tool_name": tool_name,
+                "new_name": new_name
+            }
+            if not CURRENT_AGENT_VIEW.confirm_tool_execution("manage_active_skill", kwargs, agent_name=agent_name):
+                return "Error: Tool execution of 'manage_active_skill' was rejected by the user."
+
     safe_agent_name = agent_name.replace(" ", "_")
     active_dir = get_storage_path("agents", "skills", safe_agent_name, "active_tools", tool_name)
     
