@@ -519,6 +519,12 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
             description = schema.get("description", "Dynamic tool skill.")
             parameters = schema.get("parameters", {"type": "object", "properties": {}})
             arg_order = schema.get("arg_order") # Optional list for positional logic
+            
+            if arg_order:
+                description += f" [Positional Mode: Arguments must be passed with keys matching this exact order: {', '.join(arg_order)}]"
+            else:
+                description += " [Keyword Mode: Arguments are passed as double-dash options (e.g. --key value). Booleans act as standalone flags (e.g. true -> --key). Lists of simple values are unpacked sequentially (e.g. ['a', 'b'] -> --key a b).]"
+                
             entry_point = meta.get("entry_point")
             
             if not entry_point: continue
@@ -551,6 +557,12 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         missing_args = [r for r in req_params if r not in kwargs or kwargs[r] is None]
                         if missing_args:
                             return f"Error: Missing required parameters for tool '{t_name}': {', '.join(missing_args)}"
+                        
+                        # --- STRICT POSITION VALIDATION: Ensure passed arguments exist in arg_order if in Positional Mode ---
+                        if a_order:
+                            unmapped_args = [k for k in kwargs if k not in a_order]
+                            if unmapped_args:
+                                return f"Error: The parameters {unmapped_args} could not be mapped to the command line. This positional tool expects exactly these keys in order: {a_order}"
                         # ---------------------------------------------------------------
 
                         env = os.environ.copy()
