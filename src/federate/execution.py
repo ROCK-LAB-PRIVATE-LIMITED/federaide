@@ -64,7 +64,7 @@ class SettingsModal(ModalScreen[dict]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="settings_dialog"):
-            yield Label("⚙️ Execution Settings", classes="pane_title")
+            yield Label(" Execution Settings", classes="pane_title")
             yield Select(((k, k) for k in self.configs.keys()), value=self.current_lang, id="lang_select")
             yield Label("Executable Path:")
             yield Input(self.configs[self.current_lang].get("executable", ""), id="exec_input", classes="form-row")
@@ -155,7 +155,7 @@ class TerminalEmulator(VerticalScroll, can_focus=True):
 
         # Resolve user's actual macOS shell (defaulting to bash)
         shell_cmd = "cmd.exe" if sys.platform == "win32" else os.environ.get("SHELL", "bash")
-        self.app.call_from_thread(self._write_raw, f"🚀 Launching Shell: {shell_cmd}\n{'-'*40}\n")
+        self.app.call_from_thread(self._write_raw, f" Launching Shell: {shell_cmd}\n{'-'*40}\n")
         
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -310,7 +310,7 @@ class TerminalEmulator(VerticalScroll, can_focus=True):
             try:
                 if self.process: self.process.terminate()
                 if self.winpty_proc: del self.winpty_proc
-                self._write_raw("\n[⚠️ Process terminated by user.]\n")
+                self._write_raw("\n[ Process terminated by user.]\n")
             except Exception: pass
 
 
@@ -318,7 +318,7 @@ class ExecutionManager(Vertical):
     """A Dashboard view managing multiple running scripts inside Tabs."""
 
     def compose(self) -> ComposeResult:
-        yield Label("⚙️ ACTIVE EXECUTIONS", classes="pane_title")
+        yield Label(" ACTIVE EXECUTIONS", classes="pane_title")
         with TabbedContent(id="exec_tabs"):
             yield TabPane("Idle", Label("\n   No active executions.\n   Press Ctrl+R in the editor to run a file.", id="idle_label"), id="idle_pane")
 
@@ -403,7 +403,7 @@ class VenvManagerModal(ModalScreen[str]):
             except Exception: pass
         
         with Vertical(id="venv_dialog"):
-            yield Label("🐍 UV Virtual Env Manager", classes="pane_title")
+            yield Label(" UV Virtual Env Manager", classes="pane_title")
             yield Label(f"Current Active: [bold green]{self.current_active}[/]")
             yield Select(options, id="venv_select", prompt="Switch Active Venv...")
             

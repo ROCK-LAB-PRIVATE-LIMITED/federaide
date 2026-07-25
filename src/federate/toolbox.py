@@ -433,14 +433,14 @@ def resilient_invoke(model, messages):
                 
             # 2. Fail fast if the model is dead, missing, or rejecting our tool schema
             if "400" in error_str or "404" in error_str or "not found" in error_str_lower or "not exist" in error_str_lower:
-                safe_print(f"[bold red]❌ FATAL API ERROR:[/bold red] {escape(error_str)}")
+                safe_print(f"[bold red] FATAL API ERROR:[/bold red] {escape(error_str)}")
                 raise e # Instantly crash the tool so the UI stops spinning
                 
             # 3. Standard connection drops: print a single-line summary and retry
             first_line = error_str.splitlines()[0] if error_str else "Unknown connection issue"
             clean_err = first_line[:120] + "..." if len(first_line) > 120 else first_line
             retry_delay = load_global_settings().get("api_retry_delay", 15.0)
-            safe_print(f"⚠️ Connection dropped. Retrying in {int(retry_delay)}s... ({clean_err})")
+            safe_print(f" Connection dropped. Retrying in {int(retry_delay)}s... ({clean_err})")
             time.sleep(retry_delay)
     raise Exception("Max network retries exceeded.")
 
@@ -631,9 +631,10 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
                         if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
 
+                        executed_cmd_str = f"[Executed Command: {' '.join(cmd)}]"
                         if proc.returncode != 0:
-                            return f"Skill execution failed ({t_name}):\n{stderr}"
-                        return stdout.strip() or f"Skill {t_name} executed successfully."
+                            return f"Skill execution failed ({t_name}):\n{executed_cmd_str}\n{stderr}"
+                        return f"{executed_cmd_str}\n\nSTDOUT:\n{stdout.strip()}" if stdout.strip() else f"Skill {t_name} executed successfully."
                         
                     except Exception as e:
                         if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
@@ -999,7 +1000,7 @@ def search_web(query: str) -> str:
         check_abort()
         sleep_time = _get_search_delay()
         if sleep_time > 0.0:
-            log_tool(f"⏳ Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
+            log_tool(f" Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
             for _ in range(int(sleep_time * 10)):
                 check_abort()
                 time.sleep(0.1)
@@ -1378,7 +1379,7 @@ def node_execute_search(state: AgentState):
         check_abort()
         sleep_time = _get_search_delay()
         if sleep_time > 0.0:
-            safe_print(f"⏳ Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
+            safe_print(f" Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
             for _ in range(int(sleep_time * 10)):
                 check_abort()
                 time.sleep(0.1)
@@ -1572,14 +1573,14 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
             state = subagent_app.get_state(run_config)
             
             if not state.values:
-                safe_print(f"🔍 {task_name}: Researching...")
+                safe_print(f" {task_name}: Researching...")
                 time_msg = get_gmt_string()
                 final_state = subagent_app.invoke(
                     {"messages":[SystemMessage(content=time_msg), ("user", search_prompt)], "hidden_urls": {}, "source_manifest": {}},
                     run_config
                 )
             else:
-                safe_print(f"🔄 {task_name}: Resuming from saved checkpoint...")
+                safe_print(f" {task_name}: Resuming from saved checkpoint...")
                 final_state = subagent_app.invoke(None, run_config)
             
             # Processing Results
@@ -1598,7 +1599,7 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
                 f.write(final_message)
             
             render_markdown_to_pdf(md_path, pdf_path)
-            safe_print(f"✅ {task_name}: Finished.")
+            safe_print(f" {task_name}: Finished.")
             # --- START TELEGRAM DISPATCH HOOK ---
             if CURRENT_APP:
                 try:
@@ -1610,7 +1611,7 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
                         # Use send_voiceover instead of send_message to avoid the text wall
                         tm.send_voiceover(chat_id, 
                                          full_text=final_message, 
-                                         notification_text=f"📑 {task_name} Research Complete.")
+                                         notification_text=f" {task_name} Research Complete.")
                         
                         # Send the PDF Document
                         tm.send_document(chat_id, pdf_path, caption=f"PDF Report: {task_name}")
@@ -1626,12 +1627,12 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
             # 1. API Rate Limits / Quota Exhaustion
             if any(term in error_str.lower() for term in ["429", "ratelimit", "exhausted", "quota", "limit exceeded", "too many requests"]):
                 quota_delay = load_global_settings().get("quota_retry_delay", 120.0)
-                safe_print(f"⏳ {task_name}: API Rate Limit/Quota hit. Pausing {int(quota_delay)}s...")
+                safe_print(f" {task_name}: API Rate Limit/Quota hit. Pausing {int(quota_delay)}s...")
                 time.sleep(quota_delay)
                 
             # 2. Database Write Collisions
             elif "locked" in error_str:
-                safe_print(f"⏳ {task_name}: Database lock collision. Waiting for disk queue...")
+                safe_print(f" {task_name}: Database lock collision. Waiting for disk queue...")
                 time.sleep(15)
                 
             # 3. THE FIX: Context Length Exceeded Recovery (Simple Truncation)
@@ -1640,10 +1641,10 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
                 
                 # --- EXPLICIT GIVE UP CLAUSE ---
                 if shrink_attempts > max_shrink:
-                    safe_print(f"⚠️ {task_name}: FATAL. Max truncation attempts ({max_shrink}) reached. Aborting module so Master Orchestrator can proceed.")
+                    safe_print(f" {task_name}: FATAL. Max truncation attempts ({max_shrink}) reached. Aborting module so Master Orchestrator can proceed.")
                     return f"Error in {task_name}: Context limits exhausted."
 
-                safe_print(f"✂️ {task_name}: Context limit exceeded (Truncation attempt {shrink_attempts}/{max_shrink}). Simple truncation of last document...")
+                safe_print(f" {task_name}: Context limit exceeded (Truncation attempt {shrink_attempts}/{max_shrink}). Simple truncation of last document...")
                 
                 try:
                     state = subagent_app.get_state(run_config)
@@ -1665,12 +1666,12 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
                                 last_tool.content = kept_content
                                 subagent_app.update_state(run_config, {"messages": [last_tool]})
                                 
-                                safe_print(f"✂️ {task_name}: Truncated last document from {len(content)} to {len(kept_content)} chars. Retrying immediately...")
+                                safe_print(f" {task_name}: Truncated last document from {len(content)} to {len(kept_content)} chars. Retrying immediately...")
                                 continue # Loop back and retry the main LLM call!
                             else:
                                 # Edge Case: The last message is already tiny, but we are STILL over the limit.
                                 # This means the *accumulated* history is too large. We must discard the oldest tool result.
-                                safe_print(f"✂️ {task_name}: Last document is too small to shrink. Dropping oldest tool result to free memory...")
+                                safe_print(f" {task_name}: Last document is too small to shrink. Dropping oldest tool result to free memory...")
                                 valid_tools =[m for m in fetch_msgs if "[Content dropped" not in str(m.content)]
                                 if valid_tools:
                                     oldest_tool = valid_tools[0]
@@ -1678,20 +1679,20 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
                                     subagent_app.update_state(run_config, {"messages": [oldest_tool]})
                                     continue
                                 else:
-                                    safe_print(f"⚠️ {task_name}: FATAL. Cannot shrink further. Aborting.")
+                                    safe_print(f" {task_name}: FATAL. Cannot shrink further. Aborting.")
                                     return f"Error in {task_name}: Context history unresolvable."
                         else:
-                            safe_print(f"⚠️ {task_name}: No tool messages found to shrink. Retrying in 15s...")
+                            safe_print(f" {task_name}: No tool messages found to shrink. Retrying in 15s...")
                             time.sleep(15)
                     else:
                         time.sleep(15)
                 except Exception as shrink_e:
-                    safe_print(f"⚠️ {task_name}: Failed to shrink context ({shrink_e}). Retrying in 15s...")
+                    safe_print(f" {task_name}: Failed to shrink context ({shrink_e}). Retrying in 15s...")
                     time.sleep(15)
                     
             # 4. Standard Network Drops
             else:
-                safe_print(f"⚠️ {task_name}: Network dropped. State saved. Retrying in 15s... ({e})")
+                safe_print(f" {task_name}: Network dropped. State saved. Retrying in 15s... ({e})")
                 time.sleep(15)
     
     
@@ -2052,7 +2053,7 @@ def perform_research(topic: str, specific_instructions: str = "") -> str:
                     # Send only the summary bubble + voiceover + final PDF
                     tm.send_voiceover(chat_id, 
                                      full_text=final_report, 
-                                     notification_text=f"🏁 FINAL CONSOLIDATED REPORT READY: {project_title}")
+                                     notification_text=f" FINAL CONSOLIDATED REPORT READY: {project_title}")
                     tm.send_document(chat_id, pdf_path, caption=f"Consolidated Report PDF: {project_title}")
             except: pass
         # --- Tear Down UI Progress Bars ---
@@ -2445,7 +2446,7 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
             if not meta.get("test_passed", False):
-                return f"Error: 🚨 HARD GUARDRAIL ACTIVATED 🚨\nTool '{tool_name}' FAILED its validation test during `prepare_active_skill`. You are strictly prohibited from finalizing a broken tool. You MUST fix the logic and run `prepare_active_skill` again until it yields a SUCCESS result."
+                return f"Error:  HARD GUARDRAIL ACTIVATED \nTool '{tool_name}' FAILED its validation test during `prepare_active_skill`. You are strictly prohibited from finalizing a broken tool. You MUST fix the logic and run `prepare_active_skill` again until it yields a SUCCESS result."
         except Exception:
             pass
 

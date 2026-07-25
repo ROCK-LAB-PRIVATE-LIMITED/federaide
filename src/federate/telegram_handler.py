@@ -52,7 +52,7 @@ class TelegramConfigModal(ModalScreen[str]):
     
     def compose(self) -> ComposeResult:
         with Vertical(id="tele_config_dialog"):
-            yield Label("📱 Telegram Bot Configuration", classes="pane_title")
+            yield Label(" Telegram Bot Configuration", classes="pane_title")
             
             with Vertical(id="tele_details_box"):
                 yield Checkbox("Enable Telegram Bot", id="tele_active")
@@ -138,7 +138,7 @@ class TelegramManager:
         self.thread = threading.Thread(target=self._poll_worker, daemon=True)
         self.thread.start()
         if self.log_callback:
-            self.log_callback("[bold cyan]📱 Telegram Bot connection established and polling.[/bold cyan]")
+            self.log_callback("[bold cyan] Telegram Bot connection established and polling.[/bold cyan]")
 
     def stop(self):
         self.is_running = False

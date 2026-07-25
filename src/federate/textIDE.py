@@ -307,7 +307,7 @@ class DirectoryModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dir_dialog"):
-            yield Label("📂 Select Working Directory", classes="pane_title")
+            yield Label(" Select Working Directory", classes="pane_title")
             yield Label("Navigate: ↑/↓ | Expand: Enter | Enter Dir: Ctrl+B | Go Up: Backspace", classes="help_text")
             yield ExplorerTree(self.current_path, id="dir_tree_modal")
             
@@ -364,7 +364,7 @@ class FindReplaceModal(ModalScreen[dict]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="fr_dialog"):
-            yield Label("🔍 FIND & REPLACE", classes="pane_title")
+            yield Label(" FIND & REPLACE", classes="pane_title")
             with Horizontal(classes="fr_row"):
                 yield Label("Find:", classes="fr_label")
                 yield Input(placeholder="Search term...", id="find_input")
@@ -565,12 +565,12 @@ class FEDERATE_IDE(App):
         with ContentSwitcher(initial="ai_chat_view", id="main_switcher"):
             with Horizontal(id="code_view"):
                 with Vertical(id="explorer_pane"):
-                    yield Static("📁 EXPLORER", classes="pane_title")
+                    yield Static(" EXPLORER", classes="pane_title")
                     yield ExplorerTree(load_last_dir(), id="dir_tree")
                 with Vertical(id="editor_pane"):
                     yield TabbedContent(id="editor_tabs")
                 with Vertical(id="outline_pane"):
-                    yield Static("📂 STRUCTURE", classes="pane_title")
+                    yield Static(" STRUCTURE", classes="pane_title")
                     yield Tree("Outline", id="outline_tree")
             
             yield ExecutionManager(id="exec_manager_view")
@@ -579,7 +579,7 @@ class FEDERATE_IDE(App):
                 if HAS_AI_AGENT:
                     yield AIAgentView(id="ai_agent_view")
                 else:
-                    yield Static("🤖 AI Assistant Chat System\n\n(Install requirements: langgraph, langchain-openai, duckduckgo-search, bs4)", id="ai_placeholder")
+                    yield Static(" AI Assistant Chat System\n\n(Install requirements: langgraph, langchain-openai, duckduckgo-search, bs4)", id="ai_placeholder")
         yield Footer()
 
     def on_mount(self) -> None:

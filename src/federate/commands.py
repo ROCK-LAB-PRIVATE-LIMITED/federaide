@@ -169,7 +169,7 @@ def process_slash_command(command: str, agent_view):
         #agent_view.setup_agent()
         # Update UI indicators
         agent_view.update_status_bar()
-        agent_view.log_to_ui("[bold green]🔒 System locked to SAFE (PLAN) mode. Restricted tools disabled.[/bold green]")
+        agent_view.log_to_ui("[bold green] System locked to SAFE (PLAN) mode. Restricted tools disabled.[/bold green]")
         return
         
     elif cmd == "/config":
@@ -198,7 +198,7 @@ def process_slash_command(command: str, agent_view):
             "visual_computer_operation": "EXECUTE"
         }
         
-        output = "[bold cyan]🛠️ Available Tools Status:[/bold cyan]\n\n"
+        output = "[bold cyan] Available Tools Status:[/bold cyan]\n\n"
         for t, req_mode in tools_list.items():
             if req_mode == "ALWAYS":
                 status = "[bold green]ACTIVE[/bold green]"
@@ -458,17 +458,17 @@ def process_slash_command(command: str, agent_view):
     elif cmd == "/tts":
         agent_view.tts_enabled = not getattr(agent_view, "tts_enabled", False)
         status = "ON" if agent_view.tts_enabled else "OFF"
-        agent_view.log_to_ui(f"[bold cyan]🔊 Text-to-Speech (TTS) is now {status}.[/bold cyan]")
+        agent_view.log_to_ui(f"[bold cyan] Text-to-Speech (TTS) is now {status}.[/bold cyan]")
 
     elif cmd == "/stt":
         # Toggle HOTWORD mode
         if getattr(agent_view.stt_manager, "mode", None) == "hotword":
             agent_view.stt_manager.stop()
-            agent_view.log_to_ui("[bold yellow]🔇 Hotword STT is now OFF.[/bold yellow]")
+            agent_view.log_to_ui("[bold yellow] Hotword STT is now OFF.[/bold yellow]")
         else:
             started = agent_view.stt_manager.start_hotword()
             if started:
-                agent_view.log_to_ui("[bold green]🎙️ Hotword STT is starting, standby ...[/bold green]")
+                agent_view.log_to_ui("[bold green] Hotword STT is starting, standby ...[/bold green]")
             else:
                 agent_view.log_to_ui("[bold red]Failed to start Hotword STT. Check logs/dependencies.[/bold red]")
     
@@ -484,7 +484,7 @@ def process_slash_command(command: str, agent_view):
             if result == "update":
                 agent_view.tts_manager.reload_config()
                 agent_view.stt_manager.reload_config()
-                agent_view.log_to_ui("[bold green]✅ Audio configuration successfully updated.[/bold green]")
+                agent_view.log_to_ui("[bold green] Audio configuration successfully updated.[/bold green]")
                 
         from audio_handler import AudioConfigModal
         agent_view.app.push_screen(AudioConfigModal(), handle_audio_config)
@@ -493,7 +493,7 @@ def process_slash_command(command: str, agent_view):
         def handle_tele_config(result):
             if result == "update":
                 agent_view.telegram_manager.reload_config()
-                agent_view.log_to_ui("[bold green]✅ Telegram configuration successfully updated.[/bold green]")
+                agent_view.log_to_ui("[bold green] Telegram configuration successfully updated.[/bold green]")
                 
         from telegram_handler import TelegramConfigModal
         agent_view.app.push_screen(TelegramConfigModal(), handle_tele_config)
@@ -563,7 +563,7 @@ def process_slash_command(command: str, agent_view):
             all_mds = [f.replace(".md", "") for f in os.listdir(skills_dir) if f.endswith(".md")]
             passive_skills = [m for m in all_mds if m not in active_skills]
         
-        output = f"### 🗃️ Skills Library for [bold {active_agent.color}]{active_agent.name}[/bold {active_agent.color}]\n\n"
+        output = f"###  Skills Library for [bold {active_agent.color}]{active_agent.name}[/bold {active_agent.color}]\n\n"
         
         output += "**Passive Skills (Playbooks):**\n"
         if passive_skills:
@@ -588,7 +588,7 @@ def process_slash_command(command: str, agent_view):
     
     elif cmd == "/help":
         help_text = """
-### 🛠️ Available Chat Commands
+###  Available Chat Commands
 
 | Command | Description |
 |---|---|
@@ -608,7 +608,7 @@ def process_slash_command(command: str, agent_view):
 | `/skills` | List all passive and active skills currently available to the active agent. |
 | `/settings` | Open global harness settings modal. |
 
-### ⚡ Interactive Features
+###  Interactive Features
 - **File Injection:** Type `&` followed by a file or directory path (e.g. `&src/main.py`). Press **`UP/DOWN`** to dynamically cycle through available files! Hit `ENTER` to inject their content into the AI's prompt context.
 - **Agent Mention:** Type `@AgentName` (e.g. `@Maven tell me about...`) to route your message to a specific agent.
 - **Team Mention:** Type `@team` (e.g. `@team what do you think?`) to trigger all agents in the session simultaneously.

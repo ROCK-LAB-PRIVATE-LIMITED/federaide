@@ -147,7 +147,7 @@ def dispatch_subagent(task_description: str) -> str:
                 else:
                     # Resume from DB
                     stream_input = None
-                    log_tool(f"[dim yellow]🔄 Resuming SWE Subagent from checkpoint...[/dim yellow]")
+                    log_tool(f"[dim yellow] Resuming SWE Subagent from checkpoint...[/dim yellow]")
                 
                 for event in sub_agent.stream(stream_input, config=run_config, stream_mode="updates"):
                     for node_name, node_data in event.items():

@@ -99,7 +99,7 @@ def _download_file(url: str, dest_path: str, log_cb=None, max_retries=3):
         # 3. Download with Retries, Progress Tracking, and Chunking
         for attempt in range(1, max_retries + 1):
             try:
-                log_msg(f"⏳ Downloading model: {filename} (Attempt {attempt}/{max_retries})...")
+                log_msg(f" Downloading model: {filename} (Attempt {attempt}/{max_retries})...")
                 if attempt == 1:
                     ui_notify(f"Starting download for {filename}...", title="Model Download")
                 
@@ -126,7 +126,7 @@ def _download_file(url: str, dest_path: str, log_cb=None, max_retries=3):
                                     mb_tot = total_size / (1024 * 1024)
                                     p_msg = f"{filename}: {progress}% ({mb_dl:.1f}MB / {mb_tot:.1f}MB)"
                                     
-                                    log_msg(f"⏳ {p_msg}")
+                                    log_msg(f" {p_msg}")
                                     ui_notify(p_msg, title="Downloading...")
                                     last_notified = progress
                                     
@@ -137,12 +137,12 @@ def _download_file(url: str, dest_path: str, log_cb=None, max_retries=3):
                 # 4. Atomic rename - rename .part to final file only if fully successful
                 os.replace(part_path, dest_path)
                 
-                log_msg(f"✅ Finished downloading {filename}", "dim green")
+                log_msg(f" Finished downloading {filename}", "dim green")
                 ui_notify(f"Successfully downloaded {filename}!", title="Download Complete", severity="success")
                 return # Exit on success
                 
             except Exception as e:
-                log_msg(f"❌ Error downloading {filename}: {e}", "bold red")
+                log_msg(f" Error downloading {filename}: {e}", "bold red")
                 if attempt == max_retries:
                     if os.path.exists(part_path):
                         try: os.remove(part_path)
@@ -231,7 +231,7 @@ class AudioConfigModal(ModalScreen[str]):
     
     def compose(self) -> ComposeResult:
         with Vertical(id="audio_config_dialog"):
-            yield Label("🎤 Audio Configuration", classes="pane_title")
+            yield Label(" Audio Configuration", classes="pane_title")
             
             with VerticalScroll(id="audio_scroll"):
                 yield Label("Text-to-Speech (TTS) Settings", classes="section_label")
@@ -450,7 +450,7 @@ class MicTestModal(ModalScreen[None]):
         
     def compose(self) -> ComposeResult:
         with Vertical(id="mictest_dialog"):
-            yield Label("🎙️ Microphone & Hotword Tester", classes="pane_title")
+            yield Label(" Microphone & Hotword Tester", classes="pane_title")
             
             config = load_audio_config()
             start_words = config.get("stt_start_words", "AGENT, ASSISTANT, COMPUTER")
@@ -495,11 +495,11 @@ class MicTestModal(ModalScreen[None]):
 
     def test_callback(self, text: str, action: str = "append"):
         if action == "append":
-            self.write_log(f"[bold green]🔄 [STT APPEND TO UI]:[/] {text}")
+            self.write_log(f"[bold green] [STT APPEND TO UI]:[/] {text}")
         elif action == "delete":
-            self.write_log("[bold red]🗑️ [STT DELETE SENTENCE]: (Last statement popped from UI)[/]")
+            self.write_log("[bold red] [STT DELETE SENTENCE]: (Last statement popped from UI)[/]")
         elif action == "submit":
-            self.write_log(f"[bold cyan]🏁 [STT SUBMIT & EXECUTE PROMPT]:[/] {text}")
+            self.write_log(f"[bold cyan] [STT SUBMIT & EXECUTE PROMPT]:[/] {text}")
 
     @on(Button.Pressed, "#mictest_close_btn")
     def close_btn(self):
@@ -846,7 +846,7 @@ class STTManager:
             self.load_models()
             dbg("load_models() block exited cleanly.")
             if self.log_callback:
-                self.log_callback("[bold green]🎙️ STT Engine Loaded & Active. Say your trigger word or 'Attention <agent>' to begin...[/bold green]")
+                self.log_callback("[bold green] STT Engine Loaded & Active. Say your trigger word or 'Attention <agent>' to begin...[/bold green]")
         except Exception as e:
             import traceback
             dbg(f"FATAL EXCEPTION in load_models(): {e}")
@@ -943,7 +943,7 @@ class STTManager:
                         dbg(f"Live Transcribed Text: '{partial_text}'")
 
                     # =========================================================================
-                    # ⚠️ CONTROL WORD EVALUATION (Runs in BOTH recording and non-recording states)
+                    #  CONTROL WORD EVALUATION (Runs in BOTH recording and non-recording states)
                     # =========================================================================
                     
                     # 1. Delete Keyword (Removes last appended statement from UI, stops recording)
@@ -952,7 +952,7 @@ class STTManager:
                         audio_buffer = []
                         is_recording = False
                         self.callback("", action="delete")
-                        if self.log_callback: self.log_callback("[dim red]🗑️ Last sentence deleted.[/dim red]")
+                        if self.log_callback: self.log_callback("[dim red] Last sentence deleted.[/dim red]")
                         self.trigger_recognizer.reset(trigger_stream)
                         trigger_stream = self.trigger_recognizer.create_stream()
                         partial_text = ""
@@ -970,7 +970,7 @@ class STTManager:
                             self.callback(final_text, action="append")
                         self.pending_prefix = "" # Clear prefix
                         audio_buffer = []
-                        if self.log_callback: self.log_callback("[dim yellow]🔇 Dictation paused. Review your input.[/dim yellow]")
+                        if self.log_callback: self.log_callback("[dim yellow] Dictation paused. Review your input.[/dim yellow]")
                         self.trigger_recognizer.reset(trigger_stream)
                         trigger_stream = self.trigger_recognizer.create_stream()
                         partial_text = ""
@@ -995,7 +995,7 @@ class STTManager:
                         continue
 
                     # =========================================================================
-                    # 🎙️ STANDARD DICTATION & TRIGGER EVALUATIONS
+                    #  STANDARD DICTATION & TRIGGER EVALUATIONS
                     # =========================================================================
                     if not is_recording:
                         # Thread-safe contiguous-only lookup from our pre-compiled active_agent_map
@@ -1024,9 +1024,9 @@ class STTManager:
                                 self.tts_manager.stop_all_audio()
                             
                             if target_prefix:
-                                log_msg = f"[dim green]🎙️ {target_prefix.strip()} target detected. Dictation started...[/dim green]"
+                                log_msg = f"[dim green] {target_prefix.strip()} target detected. Dictation started...[/dim green]"
                             else:
-                                log_msg = "[dim green]🎙️ Trigger word detected. Dictation started...[/dim green]"
+                                log_msg = "[dim green] Trigger word detected. Dictation started...[/dim green]"
                             
                             if self.log_callback: self.log_callback(log_msg)
                             self.trigger_recognizer.reset(trigger_stream)
@@ -1060,11 +1060,11 @@ class STTManager:
 
     def _smart_mic_loop(self):
         if self.log_callback:
-            self.log_callback("[dim yellow]⏳ Initializing Smart Mic Models in background...[/dim yellow]")
+            self.log_callback("[dim yellow] Initializing Smart Mic Models in background...[/dim yellow]")
         try:
             self.load_models()
             if self.log_callback:
-                self.log_callback("[bold green]🎙️ Smart Mic Loaded & Active. Speak naturally...[/bold green]")
+                self.log_callback("[bold green] Smart Mic Loaded & Active. Speak naturally...[/bold green]")
         except Exception as e:
             if self.log_callback:
                 self.log_callback(f"[bold red]STT Initialization failed:[/bold red] {e}")
@@ -1097,7 +1097,7 @@ class STTManager:
                         if not is_speaking:
                             is_speaking = True
                             if self.tts_manager: self.tts_manager.stop_all_audio()
-                            if self.log_callback: self.log_callback("[dim green]🎤 (Voice Detected)[/dim green]")
+                            if self.log_callback: self.log_callback("[dim green] (Voice Detected)[/dim green]")
                             audio_buffer = list(preroll_buffer)
                         audio_buffer.append(chunk)
                         silence_counter = 0

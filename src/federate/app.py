@@ -7,7 +7,7 @@ _START_TIME = time.time()
 
 def log_trace(step: str):
     elapsed = time.time() - _START_TIME
-    sys.stdout.write(f"[{elapsed:6.2f}s] ⏳ {step}...\n")
+    sys.stdout.write(f"[{elapsed:6.2f}s]  {step}...\n")
     sys.stdout.flush()
 
 log_trace("Bootstrapping package pathways")
@@ -167,7 +167,7 @@ class DirectoryModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dir_dialog"):
-            yield Label("📂 Select Working Directory", classes="pane_title")
+            yield Label(" Select Working Directory", classes="pane_title")
             yield Label("Navigate: ↑/↓ | Expand: Enter | Enter Dir: Ctrl+B | Go Up: Backspace", classes="help_text")
             yield ExplorerTree(self.current_path, id="dir_tree_modal")
             

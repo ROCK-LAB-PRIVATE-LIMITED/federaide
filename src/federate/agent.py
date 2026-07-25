@@ -161,7 +161,7 @@ class ToolConfirmationModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm_dialog"):
-            yield Label(f"⚠️ Tool Authorization: [bold yellow]{self.tool_name}[/] requested by [bold cyan]{self.agent_name}[/]", classes="pane_title")
+            yield Label(f" Tool Authorization: [bold yellow]{self.tool_name}[/] requested by [bold cyan]{self.agent_name}[/]", classes="pane_title")
             yield Label("[dim]Verify the requested arguments before executing:[/dim]")
             
             with VerticalScroll(id="args_scroll"):
@@ -203,7 +203,7 @@ class ClarificationModal(ModalScreen[str]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="clarify_dialog"):
-            yield Label(f"🤔 Clarification: [bold cyan]{self.agent_name}[/]", classes="pane_title")
+            yield Label(f" Clarification: [bold cyan]{self.agent_name}[/]", classes="pane_title")
             if self.options:
                 yield Label(f"[dim]Select an option for {self.agent_name} or type below:[/dim]")
                 with ListView(id="options_list"):
@@ -262,7 +262,7 @@ class ChatLoadModal(ModalScreen[str]):
         ]
         self.file_map = {f"c_{i}": f for i, f in enumerate(files)}
         with Vertical(id="chat_load_dialog"):
-            yield Label("📂 Load Session History", classes="pane_title")
+            yield Label(" Load Session History", classes="pane_title")
             with VerticalScroll(id="chat_list"):
                 if not files: yield Label("  No sessions found.")
                 for btn_id, path in self.file_map.items():
@@ -273,9 +273,9 @@ class ChatLoadModal(ModalScreen[str]):
                     
                     friendly_name = name_map.get(session_id)
                     if friendly_name:
-                        btn_label = f"📜 {friendly_name} ({agent_name})"
+                        btn_label = f" {friendly_name} ({agent_name})"
                     else:
-                        btn_label = f"📜 {base}"
+                        btn_label = f" {base}"
                         
                     yield Button(btn_label, id=btn_id)
             yield Button("Cancel", id="cancel", variant="error")
@@ -299,12 +299,12 @@ class SwitchAgentModal(ModalScreen[dict]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="switch_dialog"):
-            yield Label("👥 Switch Active Agent", classes="pane_title")
+            yield Label(" Switch Active Agent", classes="pane_title")
             yield Checkbox("Set as Default Agent", id="set_default")
             yield Label(f"[dim]Default: {self.current_default}[/dim]", classes="status_center")
             with VerticalScroll(id="agent_list"):
                 for name in self.agents:
-                    yield Button(f"👤 {name}", id=f"sel_{name}")
+                    yield Button(f" {name}", id=f"sel_{name}")
             yield Button("Cancel", id="cancel", variant="error")
 
     @on(Button.Pressed)
@@ -321,10 +321,10 @@ class ChatManagerModal(ModalScreen[str]):
     """
     def compose(self) -> ComposeResult:
         with Vertical(id="chat_mgr_dialog"):
-            yield Label("💬 Session Manager", classes="pane_title")
-            yield Button("🆕 New Chat Session", id="new_session", variant="success")
-            yield Button("📂 Load Saved Session", id="load_chat", variant="primary")
-            yield Button("❌ Cancel", id="cancel", variant="error")
+            yield Label(" Session Manager", classes="pane_title")
+            yield Button(" New Chat Session", id="new_session", variant="success")
+            yield Button(" Load Saved Session", id="load_chat", variant="primary")
+            yield Button(" Cancel", id="cancel", variant="error")
     @on(Button.Pressed)
     def handle_click(self, event: Button.Pressed): self.dismiss(event.button.id)
 
@@ -341,10 +341,10 @@ class KeyringUnlockModal(ModalScreen[tuple]):
     """
     def compose(self) -> ComposeResult:
         with Vertical(id="unlock_dialog"):
-            yield Label("🔐 Keyring Locked", classes="pane_title")
+            yield Label(" Keyring Locked", classes="pane_title")
             yield Label("Please enter your Master Password:")
             yield Input(placeholder="Master Password", id="master_pwd", password=True)
-            yield Label("⚠️ Resetting or setting a new password will permanently delete any previously saved keys in this keyring.", classes="warning_text")
+            yield Label(" Resetting or setting a new password will permanently delete any previously saved keys in this keyring.", classes="warning_text")
             with Horizontal(classes="modal_buttons"):
                 yield Button("Unlock", id="unlock_btn", variant="success")
                 yield Button("Set New / Reset", id="reset_btn", variant="warning")
@@ -375,7 +375,7 @@ class CopyrightWarningModal(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="warning_dialog"):
-            yield Label("⚠ Copyright Warning", classes="pane_title")
+            yield Label(" Copyright Warning", classes="pane_title")
             yield Label(
                 "You are attempting to include potentially copyrighted images in the research output. "
                 "You are solely responsible for any and all copyright violations that may result if you share the document publicly or use the document commercially. "
@@ -416,7 +416,7 @@ class GlobalSettingsModal(ModalScreen[str]):
     
     def compose(self) -> ComposeResult:
         with Vertical(id="global_config_dialog"):
-            yield Label("⚙️ Global Harness Settings", classes="pane_title")
+            yield Label(" Global Harness Settings", classes="pane_title")
             
             with VerticalScroll(id="global_scroll"):
                 yield Label("Search & Scraping Parameters", classes="section_label")
@@ -715,17 +715,17 @@ class GlobalSettingsModal(ModalScreen[str]):
 
 VOICE_OPTIONS = [
     # American English
-    ("af_heart (US Female ❤️)", "af_heart"),
+    ("af_heart (US Female )", "af_heart"),
     ("af_alloy (US Female)", "af_alloy"),
     ("af_aoede (US Female)", "af_aoede"),
-    ("af_bella (US Female 🔥)", "af_bella"),
+    ("af_bella (US Female )", "af_bella"),
     ("af_jessica (US Female)", "af_jessica"),
     ("af_kore (US Female)", "af_kore"),
-    ("af_nicole (US Female 🎧)", "af_nicole"),
+    ("af_nicole (US Female )", "af_nicole"),
     ("af_nova (US Female)", "af_nova"),
     ("af_river (US Female)", "af_river"),
     ("af_sarah (US Female)", "af_sarah"),
-    ("af_sky (US Female 🤏)", "af_sky"),
+    ("af_sky (US Female )", "af_sky"),
     ("am_adam (US Male)", "am_adam"),
     ("am_echo (US Male)", "am_echo"),
     ("am_eric (US Male)", "am_eric"),
@@ -734,7 +734,7 @@ VOICE_OPTIONS = [
     ("am_michael (US Male)", "am_michael"),
     ("am_onyx (US Male)", "am_onyx"),
     ("am_puck (US Male)", "am_puck"),
-    ("am_santa (US Male 🤏)", "am_santa"),
+    ("am_santa (US Male )", "am_santa"),
     # British English
     ("bf_alice (UK Female)", "bf_alice"),
     ("bf_emma (UK Female)", "bf_emma"),
@@ -747,9 +747,9 @@ VOICE_OPTIONS = [
     # Japanese
     ("jf_alpha (JP Female)", "jf_alpha"),
     ("jf_gongitsune (JP Female)", "jf_gongitsune"),
-    ("jf_nezumi (JP Female 🤏)", "jf_nezumi"),
+    ("jf_nezumi (JP Female )", "jf_nezumi"),
     ("jf_tebukuro (JP Female)", "jf_tebukuro"),
-    ("jm_kumo (JP Male 🤏)", "jm_kumo"),
+    ("jm_kumo (JP Male )", "jm_kumo"),
     # Mandarin Chinese
     ("zf_xiaobei (ZH Female)", "zf_xiaobei"),
     ("zf_xiaoni (ZH Female)", "zf_xiaoni"),
@@ -802,7 +802,7 @@ class OnboardingModal(ModalScreen[dict]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard_dialog"):
-            yield Label("🚀 Welcome to Federate Multiagent Harness", classes="pane_title")
+            yield Label(" Welcome to Federate Multiagent Harness", classes="pane_title")
             with VerticalScroll(id="onboard_scroll"):
                 with Vertical(classes="details_box"):
                     yield Label("Please configure your first agent to get started:", classes="section_label")
@@ -1206,7 +1206,7 @@ class ScheduleModal(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="sched_dialog"):
-            yield Label("⏰ Scheduled Tasks", classes="pane_title")
+            yield Label(" Scheduled Tasks", classes="pane_title")
             yield VerticalScroll(id="task_list")
             
             with Vertical(id="add_form"):
@@ -1832,7 +1832,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
         
         loading_table = Table(show_header=False, expand=True, box=None, padding=(0, 2))
         loading_table.add_column(ratio=1, justify="center")
-        loading_table.add_row(Text.from_markup("[dim]📊 Processing agent telemetry & stats...[/dim]"))
+        loading_table.add_row(Text.from_markup("[dim] Processing agent telemetry & stats...[/dim]"))
         
         tips_text = Text.from_markup(
             "  [bold #f2a813]Tips for getting started:[/bold #f2a813]\n"
@@ -2313,7 +2313,7 @@ class AIAgentView(Vertical):
                 self.query_one("#progress_container").styles.display = "none"
             except: pass
 
-            self.log_to_ui("[bold red]⚠️ Operation Aborted by User.[/bold red]")
+            self.log_to_ui("[bold red] Operation Aborted by User.[/bold red]")
             self.query_one("#ai_chat_input").focus()
         
     
@@ -2487,7 +2487,7 @@ class AIAgentView(Vertical):
         """F3: Opens the global harness settings."""
         def handle_global_config(result):
             if result == "update":
-                self.log_to_ui("[bold green]✅ Global settings successfully updated.[/bold green]")
+                self.log_to_ui("[bold green] Global settings successfully updated.[/bold green]")
                 
         self.app.push_screen(GlobalSettingsModal(), handle_global_config)
     
@@ -3164,7 +3164,7 @@ class AIAgentView(Vertical):
                                                 ))
                                 else:
                                     # Placeholder for unfinished calls to satisfy LangGraph validation
-                                    self.log_to_ui(f"[dim yellow]🛠️ Healing interrupted tool call: {tc_name}[/dim yellow]")
+                                    self.log_to_ui(f"[dim yellow] Healing interrupted tool call: {tc_name}[/dim yellow]")
                                     langchain_messages.append(ToolMessage(
                                         content="[Tool execution was interrupted or cancelled during session transition.]",
                                         name=tc_name,
@@ -3237,7 +3237,7 @@ class AIAgentView(Vertical):
                                 del needed_responses[tcid]
 
                         if needed_responses:
-                            self.log_to_ui(f"[dim yellow]🛠️ Healing {len(needed_responses)} incomplete tool calls in checkpointer...[/dim yellow]")
+                            self.log_to_ui(f"[dim yellow] Healing {len(needed_responses)} incomplete tool calls in checkpointer...[/dim yellow]")
                             healing_messages = []
                             for tid, tname in needed_responses.items():
                                 healing_messages.append(ToolMessage(
@@ -3388,7 +3388,7 @@ class AIAgentView(Vertical):
                         consecutive_fail_count += 1
                         
                         if ("connection" in err_msg or "reset" in err_msg or "timeout" in err_msg or "429" in err_msg) and consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
-                            self.log_to_ui(f"[yellow]⚠️ Stream interrupted ({escape(str(stream_e))}). Retrying {consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS}...[/yellow]")
+                            self.log_to_ui(f"[yellow] Stream interrupted ({escape(str(stream_e))}). Retrying {consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS}...[/yellow]")
                             time.sleep(3)
                             stream_input = None # LangGraph resumes from checkpoint
                             continue
@@ -3437,7 +3437,7 @@ class AIAgentView(Vertical):
                 is_schema_or_api_error = any(term in error_str.lower() or term in repr(e).lower() for term in ["400", "invalid", "empty", "badrequest", "toolmessage", "tool_calls", "validation", "argument"])
 
                 if is_schema_or_api_error and "_rst_" not in thread_id:
-                    self.log_to_ui("[bold yellow]⚠️ State Corruption or API Error Detected. Performing Automated Recovery...[/bold yellow]")
+                    self.log_to_ui("[bold yellow] State Corruption or API Error Detected. Performing Automated Recovery...[/bold yellow]")
                     # Timestamped reset suffix to bypass the broken SQLite thread
                     new_thread_id = f"{thread_id}_rst_{int(time.time())}"
                     # Remove from running agents so it can re-trigger
@@ -3478,7 +3478,7 @@ class AIAgentView(Vertical):
                             if prog.progress < prog.total:
                                 spin_label.update(char)
                             else:
-                                spin_label.update("✅")
+                                spin_label.update("")
                         except Exception: continue
             except Exception: pass
             
@@ -3579,7 +3579,7 @@ class AIAgentView(Vertical):
                 self.schedule_manager.save()
                 
                 self.action_clear_all_contexts()
-                self.log_to_ui(Rule(title="[bold yellow]⏰ INITIATING AUTOMATED SCHEDULED TASK", style="dim"))
+                self.log_to_ui(Rule(title="[bold yellow] INITIATING AUTOMATED SCHEDULED TASK", style="dim"))
                 
                 full_prompt = f"@{task.agent_name} [Automated Scheduled Task]:\n{task.prompt}"
                 
@@ -3886,7 +3886,7 @@ class AIAgentView(Vertical):
                 if percent is not None:
                     prog.update(progress=percent)
                     if percent >= 100:
-                        spin.update("✅") # Stop animating when done
+                        spin.update("") # Stop animating when done
 
                 self.app.call_after_refresh(
                     lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False)
