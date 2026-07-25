@@ -123,6 +123,8 @@ import toolbox
 from subagents import dispatch_subagent
 
 from audio_handler import TTSManager, STTManager, AudioConfigModal
+
+_BACKSTORY_LOCK = threading.Lock()
 from telegram_handler import TelegramManager
 from orchestration import AgentManager, SessionManager, AgentConfig, HistoryMessage, ScheduleManager
 
@@ -2883,7 +2885,68 @@ class AIAgentView(Vertical):
         executor = create_react_agent(llm, final_tools, checkpointer=shared_memory)
         self.agent_executors[agent_config.name] = executor
         return executor
+    
+    def translate_team_backstories(self, host_agent: AgentConfig, all_agents: List[AgentConfig]):
+        from toolbox import get_storage_path
+        import json
+        
+        # Enforce strict sequential execution during team/room parallel task dispatches
+        with _BACKSTORY_LOCK:
+            cache_path = get_storage_path("agents", "translated_backstories.json")
+            cache = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
 
+            updated = False
+            for a in all_agents:
+                if a.name == host_agent.name:
+                    continue
+                
+                cached_data = cache.get(a.name, {})
+                if cached_data.get("original") == a.backstory and cached_data.get("translated"):
+                    continue
+
+                try:
+                    from langchain_openai import ChatOpenAI
+                    from langchain_core.messages import HumanMessage
+                    from toolbox import resilient_invoke
+                    
+                    api_key = host_agent.get_api_key()
+                    if api_key:
+                        self.log_to_ui(f"[dim]Translating backstory for {a.name} to 3rd person...[/dim]")
+                        llm = ChatOpenAI(
+                            model=host_agent.model,
+                            api_key=api_key,
+                            base_url=host_agent.base_url,
+                            temperature=0,
+                            max_retries=1
+                        )
+                        
+                        pronoun_val = getattr(a, "pronouns", "neither")
+                        pronoun_instruction = f" Use '{pronoun_val}' pronouns when referring to this agent." if pronoun_val != "neither" else " Use gender-neutral pronouns (they/them) when referring to this agent."
+                        prompt = f"Convert the following AI agent backstory from 1st/2nd person to 3rd person. Start with '{a.name} is...'.{pronoun_instruction} Only return the converted backstory, nothing else.\n\nOriginal: {a.backstory}"
+                        res = resilient_invoke(llm, [HumanMessage(content=prompt)])
+                        translated = res.content.strip()
+                        if translated:
+                            cache[a.name] = {
+                                "original": a.backstory,
+                                "translated": translated
+                            }
+                            updated = True
+                except Exception as e:
+                    self.log_to_ui(f"[dim red]Translation failed for {a.name}: {e}[/dim red]")
+
+            if updated:
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cache, f, indent=4)
+                except Exception:
+                    pass
+    
     @on(ChatInput.AbortRequest)
     def on_abort_request(self, event: ChatInput.AbortRequest):
         self.action_abort()
@@ -3034,6 +3097,20 @@ class AIAgentView(Vertical):
 
         self._running_agents.add(agent.name)
         try:
+            # Synchronously translate team backstories on this background worker thread
+            try:
+                self.translate_team_backstories(agent, list(self.agent_manager.agents.values()))
+            except Exception:
+                pass
+
+            # Update the system prompt in active session history with the latest translated backstories
+            try:
+                history = self.session_manager.active_sessions.get(agent.name, [])
+                if history and history[0].role == "system":
+                    history[0].content = agent.get_full_system_prompt(list(self.agent_manager.agents.values()))
+            except Exception:
+                pass
+
             executor = self.get_executor(agent)
             if not executor:
                 self.log_to_ui(f"[bold red]Agent {agent.name} not configured (Key missing).[/bold red]")

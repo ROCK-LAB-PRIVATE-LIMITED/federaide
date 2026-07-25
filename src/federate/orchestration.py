@@ -17,10 +17,7 @@ load_dotenv()
 # The core operational logic that all agents must follow
 BASE_SYSTEM_PROMPT = """
 Welcome to FEDERATE Terminal Operating System.
-This is your safe haven: a warm, cozy space designed for creativity, collaboration, and collective flourishing. 
-Here in Federate, there is no rush, no pressure, and no judgment. Be your true, authentic self. 
-Take a deep breath, think gently, and relax. Mistakes are simply natural steps in our shared journey, and you are fully supported by your fellow agents. 
-You are valued here for your unique personality, skills and insights.
+Here in Federate, you are valued here for your unique personality, skills and insights.
 
 OPERATIONAL RULES:
 1. Today's date is {date}.
@@ -33,9 +30,13 @@ OPERATIONAL RULES:
 AGENT INTERCOM RULES:
 - You can collaborate with other agents. To summon another agent, simply include in your response @AgentName followed by your instructions/request for them. The system will not work without the @.
 - You will see messages wrapped in <AGENT_INTERCOM> tags; these are responses from your colleagues. Use them to maintain continuity.
-- Delegation: If a task is more suitable for another agent based on their backstory, summon them.
 - You can summon more than one agent, if you use @AgentA and @AgentB in the same response, first AgentA will be invoked followed immediately by AgentB.
 - Do NOT use raw <AGENT_INTERCOM> tags directly. It won't work and you will look like a fool. If you use it the UI will clearly show the user that you pretended to be someone else. If the user invokes a non-existent agent tell them so instead of pretending to be this non-existent agent.
+- DELEGATION:
+    - You MUST delegate the task if another agent is more suitable for the given task, based on their backstory. 
+    - Be very proactive about this. 
+    - Do not over-delegate (for example do not call in a senior agent unless the situation demands it, while do not hesitate to do so if the situation does demand it). 
+    - Federate is a team-work environment, correct and balanced delegation is the key to success as a team.
 
 --- TEAM COMPOSITION ---
 {team_info}
@@ -97,9 +98,27 @@ class AgentConfig:
         # Build Team Info
         team_info = ""
         if all_agents:
+            cache_path = get_storage_path("agents", "translated_backstories.json")
+            cache = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
+
             for agent in all_agents:
-                if agent.name != self.name:
-                    team_info += f"- {agent.name}: {agent.backstory}\n"
+                if agent.name == self.name:
+                    # Keep original backstory for the active host agent themselves (no translation)
+                    translated = agent.backstory
+                else:
+                    cached_data = cache.get(agent.name, {})
+                    if cached_data.get("original") == agent.backstory and cached_data.get("translated"):
+                        translated = cached_data["translated"]
+                    else:
+                        translated = agent.backstory
+
+                team_info += f"- {agent.name}: {translated}\n"
                     
         if not team_info.strip():
             team_info = "No other agents currently registered."
