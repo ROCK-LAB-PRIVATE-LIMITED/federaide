@@ -13,6 +13,7 @@ SLASH_COMMANDS =[
     "/copy",
     "/directory", "/dir",
     "/tts", "/stt", "/readback", "/speech",
+    "/mictest",
     "/telegram",
     "/select_agent", "/clear_all",
     "/dpi", "/schedule",
@@ -470,7 +471,14 @@ def process_slash_command(command: str, agent_view):
                 agent_view.log_to_ui("[bold green]🎙️ Hotword STT is starting, standby ...[/bold green]")
             else:
                 agent_view.log_to_ui("[bold red]Failed to start Hotword STT. Check logs/dependencies.[/bold red]")
-
+    
+    elif cmd == "/mictest":
+        try:
+            from audio_handler import MicTestModal
+            agent_view.app.push_screen(MicTestModal(agent_view.stt_manager))
+        except Exception as e:
+            agent_view.log_to_ui(f"[bold red]Failed to open microphone tester: {e}[/bold red]")
+    
     elif cmd == "/speech":
         def handle_audio_config(result):
             if result == "update":

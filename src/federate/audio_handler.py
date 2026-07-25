@@ -32,7 +32,7 @@ except ImportError:
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal, VerticalScroll
-from textual.widgets import Label, Input, Button
+from textual.widgets import Label, Input, Button, RichLog
 from textual.screen import ModalScreen
 from textual import on
 
@@ -372,6 +372,35 @@ class AudioConfigModal(ModalScreen[str]):
 
         try: max_paths = int(self.query_one("#stt_max_active_paths", Input).value)
         except: max_paths = 14
+
+        # --- PARAMETER VALIDATION GUARDRAILS ---
+        if feature_dim != 80:
+            self.notify("Error: Feature Dimension must be exactly 80 for the packaged Zipformer model.", severity="error")
+            return
+
+        if decoding_method not in ["greedy_search", "modified_beam_search"]:
+            self.notify("Error: Decoding Method must be 'greedy_search' or 'modified_beam_search'.", severity="error")
+            return
+
+        if num_threads < 1 or num_threads > 16:
+            self.notify("Error: Transducer Threads must be between 1 and 16.", severity="error")
+            return
+
+        if max_paths < 1 or max_paths > 100:
+            self.notify("Error: Maximum Beam Search Paths must be between 1 and 100.", severity="error")
+            return
+
+        if silence_timeout < 0.1 or silence_timeout > 10.0:
+            self.notify("Error: Silence Timeout must be between 0.1 and 10.0 seconds.", severity="error")
+            return
+
+        if pre_roll < 0.0 or pre_roll > 5.0:
+            self.notify("Error: Pre-Roll Buffer must be between 0.0 and 5.0 seconds.", severity="error")
+            return
+
+        if min_speech < 0.0 or min_speech > 5.0:
+            self.notify("Error: Minimum Speech Duration must be between 0.0 and 5.0 seconds.", severity="error")
+            return
         
         config = load_audio_config()
         config.update({
@@ -398,6 +427,91 @@ class AudioConfigModal(ModalScreen[str]):
     @on(Button.Pressed, "#cancel_audio_btn")
     def cancel_btn(self):
         self.dismiss("cancel")
+
+
+class MicTestModal(ModalScreen[None]):
+    """An isolated testing sandbox to dial in STT and voice triggers in real-time."""
+    
+    DEFAULT_CSS = """
+    MicTestModal { align: center middle; background: $background 60%; }
+    #mictest_dialog { width: 75; height: 90%; border: round $primary; background: $surface; padding: 0; }
+    #mictest_header_box { padding: 1 2; margin-bottom: 0; height: auto; background: $surface; border-bottom: solid $primary 30%; overflow-x: scroll; overflow-y: hidden; }
+    #mictest_header_box Label { text-wrap: nowrap; width: auto; }
+    #mictest_log { height: 1fr; border: none; background: $boost; padding: 0 1; }
+    .mictest_row { layout: horizontal; height: auto; margin-top: 1; align: right middle; padding: 1 2; border-top: solid $primary 30%; }
+    .mictest_row Button { margin-left: 1; }
+    """
+    
+    def __init__(self, stt_manager, **kwargs):
+        super().__init__(**kwargs)
+        self.stt_manager = stt_manager
+        self.orig_log_cb = stt_manager.log_callback
+        self.orig_cb = stt_manager.callback
+        
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mictest_dialog"):
+            yield Label("🎙️ Microphone & Hotword Tester", classes="pane_title")
+            
+            config = load_audio_config()
+            start_words = config.get("stt_start_words", "AGENT, ASSISTANT, COMPUTER")
+            stop_words = config.get("stt_stop_words", "STOP LISTENING, END DICTATION")
+            send_words = config.get("stt_send_words", "EXECUTE, FINISH, SEND IT")
+            delete_words = config.get("stt_delete_words", "DELETE LAST, REMOVE LAST, SCRAP THAT")
+            agent_hotword = config.get("stt_agent_hotword", "ATTENTION")
+            energy_threshold = config.get("stt_energy_threshold", 0.005)
+            
+            with Vertical(id="mictest_header_box"):
+                yield Label(f"[bold green]Dictation Triggers:[/] {start_words}")
+                yield Label(f"[bold yellow]Pause/Stop Hotwords:[/] {stop_words}")
+                yield Label(f"[bold red]Deletion Hotwords:[/] {delete_words}")
+                yield Label(f"[bold cyan]Send/Execute Hotwords:[/] {send_words}")
+                yield Label(f"[bold magenta]Agent Invocation Trigger:[/] {agent_hotword} <agent_name>")
+                yield Label(f"[bold]Settings:[/] Device ID: {config.get('stt_device') or 'Default'}, Energy Gate: {energy_threshold}, Silence Timeout: {config.get('stt_silence_timeout', 1.2)}s, Pre-Roll: {config.get('stt_pre_roll', 0.5)}s, Min Speech: {config.get('stt_min_speech_duration', 0.4)}s, Agent Hotword: {config.get('stt_agent_hotword', 'ATTENTION')}, Threads: {config.get('stt_num_threads', 2)}, Feature Dim: {config.get('stt_feature_dim', 80)}, Decoding: {config.get('stt_decoding_method', 'modified_beam_search')}, Max Paths: {config.get('stt_max_active_paths', 14)}")
+                
+            yield RichLog(id="mictest_log", markup=True, wrap=True, auto_scroll=True)
+            
+            with Horizontal(classes="mictest_row"):
+                yield Button("Close Test", id="mictest_close_btn", variant="error")
+
+    def on_mount(self):
+        # Hijack callbacks and activate sandbox test-mode
+        self.stt_manager.log_callback = self.write_log
+        self.stt_manager.callback = self.test_callback
+        self.stt_manager.test_mode = True
+        
+        self.query_one("#mictest_close_btn").focus()
+        
+        self.write_log("[bold green]Starting Hotword STT engine in sandboxed test mode...[/]")
+        started = self.stt_manager.start_hotword()
+        if not started:
+            self.write_log("[bold red]Failed to initialize STT hardware. Check your Mic Device ID.[/]")
+
+    def write_log(self, msg: str):
+        try:
+            log_widget = self.query_one("#mictest_log", RichLog)
+            self.app.call_from_thread(log_widget.write, msg)
+        except Exception:
+            pass
+
+    def test_callback(self, text: str, action: str = "append"):
+        if action == "append":
+            self.write_log(f"[bold green]🔄 [STT APPEND TO UI]:[/] {text}")
+        elif action == "delete":
+            self.write_log("[bold red]🗑️ [STT DELETE SENTENCE]: (Last statement popped from UI)[/]")
+        elif action == "submit":
+            self.write_log(f"[bold cyan]🏁 [STT SUBMIT & EXECUTE PROMPT]:[/] {text}")
+
+    @on(Button.Pressed, "#mictest_close_btn")
+    def close_btn(self):
+        self.dismiss()
+
+    def on_unmount(self):
+        # Shut down engine and cleanly restore standard operational callbacks
+        self.stt_manager.stop()
+        self.stt_manager.log_callback = self.orig_log_cb
+        self.stt_manager.callback = self.orig_cb
+        self.stt_manager.test_mode = False
+
 
 # --- TTS MANAGER ---
 
@@ -563,6 +677,7 @@ class STTManager:
         self.CHUNK_DURATION = 0.1
         self.pending_prefix = ""
         self.active_agent_map = {} # <-- Pre-compiled thread-safe cache
+        self.test_mode = False     # <-- Sandboxed mic test-mode flag
         self.reload_config()
 
     def reload_config(self):
@@ -721,11 +836,21 @@ class STTManager:
         return text.strip(" .,")
 
     def _hotword_loop(self):
+        def dbg(msg):
+            if getattr(self, "test_mode", False) and self.log_callback:
+                self.log_callback(f"[bold magenta][DBG-LOOP][/bold magenta] {msg}")
+
+        dbg("THREAD STARTED: entering _hotword_loop.")
         try:
+            dbg("Entering load_models() block...")
             self.load_models()
+            dbg("load_models() block exited cleanly.")
             if self.log_callback:
                 self.log_callback("[bold green]🎙️ STT Engine Loaded & Active. Say your trigger word or 'Attention <agent>' to begin...[/bold green]")
         except Exception as e:
+            import traceback
+            dbg(f"FATAL EXCEPTION in load_models(): {e}")
+            dbg(traceback.format_exc())
             if self.log_callback:
                 self.log_callback(f"[bold red]STT Initialization failed:[/bold red] {e}")
             self.is_running = False
@@ -735,17 +860,27 @@ class STTManager:
         is_recording = False
         audio_buffer = []
         
+        dbg("Initializing streaming transducer state...")
         try:
             trigger_stream = self.trigger_recognizer.create_stream()
-        except Exception:
+            dbg("Streaming transducer stream successfully created.")
+        except Exception as se:
+            dbg(f"FATAL EXCEPTION in trigger_recognizer.create_stream(): {se}")
             self.is_running = False
             self.mode = None
             return
 
+        chunk_count = 0
         def audio_callback(indata, frames, time, status):
+            nonlocal chunk_count
             if self.is_running: 
                 self.audio_queue.put(indata.copy())
+                if getattr(self, "test_mode", False):
+                    chunk_count += 1
+                    if chunk_count % 500 == 0:
+                        dbg(f"Callback status check: buffered {chunk_count} raw chunks so far.")
 
+        dbg("Initializing sounddevice.InputStream configuration...")
         with AUDIO_LOCK:
             try:
                 # Set blocksize explicitly to 1600 (100ms) to prevent audio callback flooding and high CPU load
@@ -757,7 +892,9 @@ class STTManager:
                     device=self.device, 
                     callback=audio_callback
                 )
-            except Exception:
+                dbg("InputStream successfully configured.")
+            except Exception as ie:
+                dbg(f"FATAL EXCEPTION in sd.InputStream configuration: {ie}")
                 self.is_running = False
                 self.mode = None
                 return
@@ -767,7 +904,9 @@ class STTManager:
         last_partial_text = ""
 
         try:
+            dbg("Starting sounddevice.InputStream context manager...")
             with input_stream:
+                dbg("InputStream context entered. Recording is now active on hardware level.")
                 while self.is_running:
                     try: 
                         chunk = self.audio_queue.get(timeout=0.5)
@@ -780,7 +919,8 @@ class STTManager:
                         while self.trigger_recognizer.is_ready(trigger_stream):
                             self.trigger_recognizer.decode_stream(trigger_stream)
                         partial_text = self.trigger_recognizer.get_result(trigger_stream).upper()
-                    except Exception:
+                    except Exception as pe:
+                        dbg(f"Exception during transducer decoding: {pe}")
                         partial_text = ""
 
                     # --- TIME-BASED DECAY / RESET GUARDRAILS ---
@@ -792,11 +932,15 @@ class STTManager:
                         # Text is non-empty, but has remained unchanged. Check stale duration
                         silence_duration = current_time - last_speech_time
                         if silence_duration > 2.0:
+                            dbg(f"Stale text '{partial_text}' detected for {silence_duration:.1f}s. Recreating stream.")
                             self.trigger_recognizer.reset(trigger_stream)
                             trigger_stream = self.trigger_recognizer.create_stream()
                             partial_text = ""
                             last_partial_text = ""
                             last_speech_time = current_time
+
+                    if partial_text.strip():
+                        dbg(f"Live Transcribed Text: '{partial_text}'")
 
                     # =========================================================================
                     # ⚠️ CONTROL WORD EVALUATION (Runs in BOTH recording and non-recording states)
@@ -804,6 +948,7 @@ class STTManager:
                     
                     # 1. Delete Keyword (Removes last appended statement from UI, stops recording)
                     if any(word in partial_text for word in self.delete_words):
+                        dbg("Control Match: Delete keyword. Clearing buffer.")
                         audio_buffer = []
                         is_recording = False
                         self.callback("", action="delete")
@@ -817,6 +962,7 @@ class STTManager:
 
                     # 2. Stop/Pause Keyword (Ends active dictation session, flushes to box)
                     elif any(word in partial_text for word in self.stop_words):
+                        dbg("Control Match: Stop keyword. Pausing dictation.")
                         is_recording = False
                         text = self._flush_whisper(audio_buffer, self.stop_words)
                         if text: 
@@ -834,6 +980,7 @@ class STTManager:
 
                     # 3. Send/Execute Keyword (Instantly fires the final prompt from the text box)
                     elif any(word in partial_text for word in self.send_words):
+                        dbg("Control Match: Send keyword. Submitting prompt.")
                         is_recording = False
                         text = self._flush_whisper(audio_buffer, self.send_words)
                         final_text = self.pending_prefix + text
@@ -857,18 +1004,23 @@ class STTManager:
                             # Strictly contiguous check (e.g. "ATTENTION RITA" must be contiguous)
                             if trigger_phrase in partial_text:
                                 target_prefix = prefix
+                                dbg(f"CONTIGUOUS ATTENTION TRIGGER MATCHED: {target_prefix}")
                                 break
 
                         # Mutual Exclusion: Standard trigger check is strictly bypassed if an Agent target has matched
                         trigger_matched = False
                         if not target_prefix:
                             trigger_matched = any(word in partial_text for word in self.start_words)
+                            if trigger_matched:
+                                dbg(f"STANDARD TRIGGER MATCHED: start_words={self.start_words}")
 
                         # Clean, unblocked evaluation
                         if target_prefix or trigger_matched:
+                            dbg("TRIGGER CONDITIONS MET. Transitioning to recording state...")
                             is_recording = True
                             self.pending_prefix = target_prefix # Save the matched prefix
                             if self.tts_manager: 
+                                dbg("Stopping any active TTS playback...")
                                 self.tts_manager.stop_all_audio()
                             
                             if target_prefix:
@@ -881,19 +1033,27 @@ class STTManager:
                             trigger_stream = self.trigger_recognizer.create_stream() # Wipes buffer clean
                     else:
                         audio_buffer.append(chunk)
+                        if getattr(self, "test_mode", False) and len(audio_buffer) % 10 == 0:
+                            dbg(f"Dictation Active: Buffered {len(audio_buffer)} chunks of active speech.")
 
                         # 4. Natural Pause (Appends to input box, keeps listening)
                         if self.trigger_recognizer.is_endpoint(trigger_stream):
+                            dbg("Transducer endpoint (natural pause) detected.")
                             text = self._flush_whisper(audio_buffer, [])
+                            dbg(f"Endpoint raw Whisper output: '{text}'")
                             if text: 
                                 final_text = self.pending_prefix + text
+                                dbg(f"Dispatching endpoint text: '{final_text}'")
                                 self.callback(final_text, action="append")
                                 self.pending_prefix = "" 
                             audio_buffer = []
                             self.trigger_recognizer.reset(trigger_stream)
                             trigger_stream = self.trigger_recognizer.create_stream()
 
-        except Exception:
+        except Exception as e:
+            import traceback
+            dbg(f"FATAL EXCEPTION inside input_stream context: {e}")
+            dbg(traceback.format_exc())
             self.is_running = False
             self.mode = None
             self.pending_prefix = ""
