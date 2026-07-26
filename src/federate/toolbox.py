@@ -2186,25 +2186,106 @@ def manage_agenda(action: str, agenda_data: str = "", project_name: str = "") ->
 
 
 
+_MEMORY_FILE_LOCK = threading.Lock()
+
+def _load_memory_json(filepath: str) -> list:
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+def _save_memory_json(filepath: str, data: list):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
 @tool
-def update_core_memory(section: str, content: str, config: RunnableConfig) -> str:
+def update_core_memory(section: str, subject: str = "", content: str = "", id: str = "", config: RunnableConfig = None) -> str:
     """
-    Permanently saves information to your core memory.
-    CRITICAL ROUTING RULES: 
-    - If the info is about the USER (their name, preferences, role, projects), section MUST be "USER".
-    - If the info is about the ENVIRONMENT, FACTS, or RULES, section MUST be "MEMORY".
-    """
-    agent_name = _get_agent(config)
-    memory_dir = get_storage_path("agents", "memory", agent_name)
-    os.makedirs(memory_dir, exist_ok=True)
+    Manages core memorylets in USER.json or MEMORY.json.
     
-    if section.upper() not in ["MEMORY", "USER"]:
-        return "Error: section must be MEMORY or USER"
+    ROUTING RULES:
+    - section='USER': User traits, role, background, preferences.
+    - section='MEMORY': Facts about project, environment, codebase, architecture, or rules.
+    
+    OPERATIONS:
+    1. ADD: Pass section, subject, and content. Leave 'id' empty ("").
+    2. EDIT: Pass section, target 'id', updated subject, and updated content.
+    3. DELETE: Pass section and target 'id', with content="" (empty string).
+    """
+    agent_name = _get_agent(config) if config else "Agent"
+    sec = section.upper().strip() if section else ""
+    
+    # Early Guard 1: Invalid Section
+    if sec not in ["MEMORY", "USER"]:
+        return f"[{agent_name}] Error: 'section' must be 'MEMORY' or 'USER'."
         
-    path = get_storage_path(memory_dir, f"{section.upper()}.md")
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(f"\n- {content}")
-    return f"[{agent_name}] {section.upper()}.md successfully updated."
+    # Clean and sanitize string parameters
+    target_id = id.strip() if id and id.lower() not in ["null", "none", "undefined"] else ""
+    text_content = content.strip()
+    text_subject = subject.strip()
+    
+    # Early Guard 2: Complete Blank Call
+    if not target_id and not text_subject and not text_content:
+        return f"[{agent_name}] Error: Invalid parameters. Provide 'content' to add a new memorylet, or an 'id' to edit/delete."
+
+    # Early Guard 3: Attempting to ADD without content
+    if not target_id and not text_content:
+        return f"[{agent_name}] Error: 'content' is required when creating a new memorylet."
+
+    # Thread lock prevents race conditions when LLM invokes multiple tool calls simultaneously
+    with _MEMORY_FILE_LOCK:
+        memory_dir = get_storage_path("agents", "memory", agent_name)
+        file_path = get_storage_path(memory_dir, f"{sec}.json")
+        memories = _load_memory_json(file_path)
+        
+        # 1. DELETE OPERATION (Target ID provided, content is empty)
+        if target_id and not text_content:
+            initial_count = len(memories)
+            memories = [m for m in memories if m.get("id") != target_id]
+            if len(memories) == initial_count:
+                return f"[{agent_name}] Error: Memorylet with ID '{target_id}' not found in {sec}.json."
+            _save_memory_json(file_path, memories)
+            return f"[{agent_name}] Memorylet '{target_id}' deleted from {sec}.json."
+            
+        # 2. EDIT OPERATION (Target ID provided, content is non-empty)
+        elif target_id:
+            found = False
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for m in memories:
+                if m.get("id") == target_id:
+                    if text_subject:
+                        m["subject"] = text_subject
+                    m["content"] = text_content
+                    m["timestamp"] = now_str
+                    found = True
+                    break
+            if not found:
+                return f"[{agent_name}] Error: Memorylet with ID '{target_id}' not found in {sec}.json. Omit 'id' to create a new memorylet."
+            _save_memory_json(file_path, memories)
+            return f"[{agent_name}] Memorylet '{target_id}' updated in {sec}.json."
+            
+        # 3. ADD OPERATION (No Target ID provided, content is non-empty)
+        else:
+            # Simple auto-increment serial integer ID: "1", "2", "3", ...
+            existing_ids = [int(m["id"]) for m in memories if str(m.get("id", "")).isdigit()]
+            new_id = str(max(existing_ids) + 1) if existing_ids else "1"
+            
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            memorylet = {
+                "id": new_id,
+                "subject": text_subject or "General",
+                "content": text_content,
+                "timestamp": now_str
+            }
+            memories.append(memorylet)
+            _save_memory_json(file_path, memories)
+            return f"[{agent_name}] Memorylet '{new_id}' successfully saved to {sec}.json."
 
 @tool
 def save_skill(skill_name: str, content: str, config: RunnableConfig) -> str:

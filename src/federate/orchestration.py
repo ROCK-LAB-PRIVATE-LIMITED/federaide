@@ -127,12 +127,30 @@ class AgentConfig:
         agents_dir = get_storage_path("agents")
         memory_dir = os.path.join(agents_dir, "memory", safe_name)
         os.makedirs(memory_dir, exist_ok=True)
-        mem_path = os.path.join(memory_dir, "MEMORY.md")
-        user_path = os.path.join(memory_dir, "USER.md")
+        mem_path = os.path.join(memory_dir, "MEMORY.json")
+        user_path = os.path.join(memory_dir, "USER.json")
         quagmire_path = os.path.join(memory_dir, "QUAGMIRES.md")
 
-        memory_content = open(mem_path).read() if os.path.exists(mem_path) else "No core facts recorded."
-        user_content = open(user_path).read() if os.path.exists(user_path) else "No user preferences recorded."
+        def _format_memory_json(path: str, default_text: str) -> str:
+            if not os.path.exists(path):
+                return f"{default_text}\n---"
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, list) or not data:
+                    return f"{default_text}\n---"
+                
+                blocks = [
+                    f"[id: {item.get('id', '')},\nSubject: {item.get('subject', 'General')}\nContent: {item.get('content', '')}]"
+                    for item in data if isinstance(item, dict)
+                ]
+                body = "\n\n".join(blocks) if blocks else default_text
+                return f"{body}\n---"
+            except Exception:
+                return f"{default_text}\n---"
+
+        memory_content = _format_memory_json(mem_path, "No core facts recorded.")
+        user_content = _format_memory_json(user_path, "No user preferences recorded.")
         quagmire_content = open(quagmire_path).read() if os.path.exists(quagmire_path) else "No known traps."
 
         # Load Layer 3: Skills Index
@@ -222,7 +240,15 @@ class AgentConfig:
             prompt += "\n  7. ACTIVATION: New tools appear after a session reset (Mode Toggle or Clear Context)."
         
         prompt += "\n\nMEMORY MANAGEMENT RULES:"
-        prompt += "\n- BE PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` the exact moment you learn a new preference, project detail, architectural decision, or established fact. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
+        prompt += "\n- BE EXTREMELY PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` IMMEDIATELY on learning any new fact that you did not already know, whether from user responses or toolcalls or however else. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
+        prompt += "\n- The memories are stored locally and are free to use. They can also be edited or deleted later so if there is a doubt on whether or not to save the memory, lean towards saving it. Before every response, consider if you have come to know something novel that you did not know before, if so, `update_core_memory` as follows:"
+        prompt += "\n  - ADD: Pass section, subject, content, and leave 'id' empty (\"\")."
+        prompt += "\n  - EDIT: Pass section, target 'id' (e.g., '1' from the `[id: ...]` memorylet block), updated subject, and updated content."
+        prompt += "\n  - DELETE: Pass section and target 'id' (e.g., '1'), with content=\"\" (empty string)."
+        prompt += "\n- Break down facts into atomic concepts (memorylets) and save them individually. If you learn 4 new facts from a response or a set of tool calls, do NOT clump them into a single memorylet, call the `update_core_memory` tool 4 times back to back, each for a different fact. This helps organise your memory better, reduces your workload and makes future updates easier. For example the user's actual name and what they prefer to be called should be stored separately."
+        prompt += "\n- Do NOT forget to save ALL new facts. if calling `update_core_memory` multiple times with multiple facts, DO NOT STOP BEFORE ALL FACTS ARE SAVED. If you find that you forgot to save a fact in the last response, do so NOW."
+        prompt += "\n- Whenever possible, try to edit existing memory instead of adding new, consider if the subject already exists, update that memory instead of creating a new entry. ALWAYS check for contradicting memory, if any found, attempt to intelligently unify them by deleting the older one and editing the newer one if necessary. The memorylet id is serial in nature, higher value indicates more recent memory."
+        prompt += "\n- You generally do not have to explicitly tell the user that you saved or edited a memory, it is already evident from the UI."
         prompt += "\n- Use `search_episodic_memory` to find concepts and session IDs from the past."
         prompt += "\n- Use `retrieve_episodic_memory` to retrieve the full context of a session after searching memory, if necessary."
         prompt += "\n- Use `read_skill` to read the steps for a skill listed in your library."
