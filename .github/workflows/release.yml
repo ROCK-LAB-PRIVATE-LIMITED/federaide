@@ -191,3 +191,96 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # --- NEW JOB: Update Landing Page Version & Deploy to GitHub Pages ---
+  deploy_landing:
+    name: Update & Deploy Landing Page
+    needs: publish
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout Main Branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Inject pyproject.toml Version into Landing Page & Sitemap
+        run: |
+          python - << 'EOF'
+          import re, tomllib, datetime
+
+          # 1. Read version from pyproject.toml
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+              version = data.get("project", {}).get("version")
+              if not version:
+                  version = data.get("tool", {}).get("poetry", {}).get("version")
+
+          if not version:
+              raise ValueError("Could not extract version from pyproject.toml")
+
+          print(f" Extracted version from pyproject.toml: {version}")
+
+          # 2. Update softwareVersion in landing/index.html
+          with open("landing/index.html", "r", encoding="utf-8") as f:
+              html = f.read()
+
+          html_updated = re.sub(
+              r'("softwareVersion":\s*")[^"]+(")',
+              f'\\1{version}\\2',
+              html
+          )
+
+          with open("landing/index.html", "w", encoding="utf-8") as f:
+              f.write(html_updated)
+
+          print(f" Updated softwareVersion to {version} in landing/index.html")
+
+          # 3. Update <lastmod> in landing/sitemap.xml
+          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+          try:
+              with open("landing/sitemap.xml", "r", encoding="utf-8") as f:
+                  sitemap = f.read()
+
+              sitemap_updated = re.sub(
+                  r'(<lastmod>)[^<]+(</lastmod>)',
+                  f'\\1{today}\\2',
+                  sitemap
+              )
+
+              with open("landing/sitemap.xml", "w", encoding="utf-8") as f:
+                  f.write(sitemap_updated)
+
+              print(f" Updated sitemap <lastmod> to {today} in landing/sitemap.xml")
+          except FileNotFoundError:
+              print("ℹ️ landing/sitemap.xml not found, skipping sitemap update.")
+
+          EOF
+
+      - name: Commit Updated Landing Files Back to Repo
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(landing): auto-update version to match pyproject.toml release [skip ci]"
+          file_pattern: "landing/index.html landing/sitemap.xml"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'landing'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
