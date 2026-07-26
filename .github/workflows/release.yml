@@ -2,12 +2,87 @@ name: Build and Publish Wheels
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+    paths:
+      - 'pyproject.toml'
   workflow_dispatch:
 
 jobs:
+  check_version:
+    name: Detect Version & Create Tag
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.check.outputs.bumped }}
+      version: ${{ steps.check.outputs.version }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Fetches HEAD and HEAD~1
+
+      - name: Check for Version Bump
+        id: check
+        run: |
+          python - << 'EOF'
+          import subprocess, tomllib, os
+
+          def get_version(ref):
+              try:
+                  content = subprocess.check_output(
+                      ["git", "show", f"{ref}:pyproject.toml"],
+                      text=True,
+                      stderr=subprocess.DEVNULL
+                  )
+                  data = tomllib.loads(content)
+                  return data.get("project", {}).get("version") or data.get("tool", {}).get("poetry", {}).get("version")
+              except Exception:
+                  return None
+
+          curr = get_version("HEAD")
+          prev = get_version("HEAD~1")
+
+          print(f"Previous version (HEAD~1): {prev}")
+          print(f"Current version  (HEAD)  : {curr}")
+
+          is_dispatch = "${{ github.event_name }}" == "workflow_dispatch"
+
+          if curr and (curr != prev or is_dispatch):
+              tag = f"v{curr}"
+              print(f"🎉 New release detected: {tag}")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f"bumped=true\n")
+                  f.write(f"version={curr}\n")
+                  f.write(f"tag_name={tag}\n")
+          else:
+              print("ℹ️ Version did not change. Skipping build.")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f"bumped=false\n")
+          EOF
+
+      - name: Create and Push Git Tag
+        if: steps.check.outputs.bumped == 'true'
+        env:
+          TAG_NAME: ${{ steps.check.outputs.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if ! git ls-remote --tags origin "refs/tags/${TAG_NAME}" | grep -q "${TAG_NAME}"; then
+            echo "Creating and pushing git tag: ${TAG_NAME}"
+            git tag "${TAG_NAME}"
+            git push origin "${TAG_NAME}"
+          else
+            echo "Tag ${TAG_NAME} already exists on remote."
+          fi
+
   build_wheels:
+    needs: check_version
+    if: needs.check_version.outputs.bumped == 'true'
     name: Build Wheel for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     defaults:
@@ -147,6 +222,8 @@ jobs:
 
   build_sdist:
     name: Build Source Distribution
+    needs: check_version
+    if: needs.check_version.outputs.bumped == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
@@ -168,9 +245,9 @@ jobs:
   publish:
     name: Publish Release to PyPI
     environment: pypi
-    needs: [build_wheels, build_sdist]
+    needs: [check_version, build_wheels, build_sdist]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.check_version.outputs.bumped == 'true'
     permissions:
       id-token: write
       contents: write
@@ -189,15 +266,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.check_version.outputs.tag_name }}
           files: dist/*
           generate_release_notes: true
 
   # --- NEW JOB: Update Landing Page Version & Deploy to GitHub Pages ---
   deploy_landing:
     name: Update & Deploy Landing Page
-    needs: publish
+    needs: [check_version, publish]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: needs.check_version.outputs.bumped == 'true'
     permissions:
       contents: write
       pages: write
