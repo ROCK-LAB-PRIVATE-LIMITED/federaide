@@ -237,7 +237,7 @@ jobs:
 
           html_updated = re.sub(
               r'("softwareVersion":\s*")[^"]+(")',
-              f'\\1{version}\\2',
+              rf'\g<1>{version}\g<2>',
               html
           )
 
@@ -254,7 +254,7 @@ jobs:
 
               sitemap_updated = re.sub(
                   r'(<lastmod>)[^<]+(</lastmod>)',
-                  f'\\1{today}\\2',
+                  rf'\g<1>{today}\g<2>',
                   sitemap
               )
 
