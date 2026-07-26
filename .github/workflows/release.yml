@@ -267,11 +267,6 @@ jobs:
 
           EOF
 
-      - name: Commit Updated Landing Files Back to Repo
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore(landing): auto-update version to match pyproject.toml release [skip ci]"
-          file_pattern: "landing/index.html landing/sitemap.xml"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
