@@ -2643,11 +2643,24 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
     """
     agent_name = _get_agent(config)
     
+    # Determine if this call is strictly a read-only operation
+    action_clean = (action or "").lower().strip()
+    is_read_only = (
+        action_clean in ["list", "read"] 
+        and not documentation 
+        and not tool_description 
+        and arg_order is None 
+        and not content 
+        and not source_path 
+        and not dependencies 
+        and not commit_message
+    )
+
     # --- MODE RESTRICTIONS ---
-    if CURRENT_AGENT_VIEW:
+    if CURRENT_AGENT_VIEW and not is_read_only:
         mode = getattr(CURRENT_AGENT_VIEW, "agent_mode", "PLAN")
         if mode == "PLAN":
-            return "Error: Modifying active skills is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
+            return f"Error: Modifying active skills (action='{action}') is not allowed in SAFE (PLAN) mode. Please switch to SEMI-AUTO or FULL-AUTO mode."
         elif mode == "INTERMEDIATE":
             kwargs = {
                 "tool_name": tool_name,
