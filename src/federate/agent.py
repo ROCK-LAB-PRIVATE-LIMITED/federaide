@@ -3540,6 +3540,21 @@ class AIAgentView(Vertical):
                                             
                                             self.log_to_ui(box_widget)
                         
+                        # Detect completely empty responses and inject a retry prompt natively
+                        if not full_ai_response.strip() and not tool_outputs and not tool_calls:
+                            consecutive_fail_count += 1
+                            if consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
+                                self.log_to_ui(f"[bold yellow] Agent returned an empty response. Prompting LLM to retry ({consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS})...[/bold yellow]")
+                                stream_input = {"messages": [HumanMessage(content="System Guardrail: Your previous response was completely empty. You must provide a text response or call a tool.")]}
+                                current_ai_text = ""
+                                full_ai_response = ""
+                                current_ai_widget = None
+                                tool_outputs = []
+                                tool_calls = []
+                                continue
+                            else:
+                                raise ValueError("Empty response received from API after multiple retries")
+
                         # Success: exit retry loop
                         break
 

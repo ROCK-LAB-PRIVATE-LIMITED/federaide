@@ -318,10 +318,22 @@ shared_memory = SqliteSaver(shared_db_conn)
 shared_memory.setup() # Automatically creates the required SQL tables
 
 def _get_agent(config: RunnableConfig) -> str:
-    """Extracts the agent name natively from the LangGraph session ID."""
+    """Extracts the agent name natively from the LangGraph session ID or thread context."""
+    if hasattr(thread_context, "agent_name") and thread_context.agent_name:
+        return thread_context.agent_name
+        
     thread_id = config.get("configurable", {}).get("thread_id", "")
     if not thread_id: return "Rita"
-    # thread_id format is "sess_171000000_Maven"
+    
+    # Handle automated recovery thread IDs (e.g., sess_123_Rita_rst_1785142122)
+    if thread_id.startswith("sess_"):
+        parts = thread_id.split("_", 2)
+        if len(parts) >= 3:
+            agent_part = parts[2]
+            if "_rst_" in agent_part:
+                return agent_part.split("_rst_")[0]
+            return agent_part
+            
     return thread_id.split("_")[-1]
 
 def resilient_invoke(model, messages):
