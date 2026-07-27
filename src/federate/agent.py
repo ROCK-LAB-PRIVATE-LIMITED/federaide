@@ -908,6 +908,10 @@ class ConfigModal(ModalScreen[str]):
                     yield Input(value=self.agent_config.backstory, id="ai_backstory")
                     yield Label("Model:")
                     yield Input(value=self.agent_config.model, id="ai_model")
+                    yield Label("Reasoning Effort (o1, o3, gemini-thinking models):")
+                    yield Select([("Low", "low"), ("Medium", "medium"), ("High", "high")], value=getattr(self.agent_config, "reasoning_effort", "high"), id="ai_reasoning_effort", allow_blank=False)
+                    yield Label("Temperature:")
+                    yield Input(value=str(getattr(self.agent_config, "temperature", 1.0)), id="ai_temperature")
                     yield Label("Base URL Preset:")
                     current_url = self.agent_config.base_url or "https://openrouter.ai/api/v1"
                     matched_preset = "custom"
@@ -1010,6 +1014,11 @@ class ConfigModal(ModalScreen[str]):
             if self.query_one(f"#disable_{tool_name}", Checkbox).value:
                 disabled_tools.append(tool_name)
 
+        try:
+            temp = float(self.query_one("#ai_temperature", Input).value.strip())
+        except ValueError:
+            temp = 1.0
+
         return {
             "name": self.query_one("#ai_name", Input).value.strip(),
             "backstory": self.query_one("#ai_backstory", Input).value.strip(),
@@ -1026,7 +1035,9 @@ class ConfigModal(ModalScreen[str]):
             "enabled_tools": enabled_tools,
             "disabled_tools": disabled_tools,
             "tts_voice": (self.query_one("#ai_tts_voice", Select).value if self.query_one("#ai_tts_voice", Select).value != Select.BLANK else None) or "af_sarah",
-            "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her"
+            "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her",
+            "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "high",
+            "temperature": temp
         }
 
     def _apply_save(self, is_new: bool):
@@ -1081,7 +1092,9 @@ class ConfigModal(ModalScreen[str]):
             disabled_tools=fields["disabled_tools"],
             tts_voice=fields["tts_voice"], # <-- NEW
             pronouns=fields["pronouns"], # <-- NEW
-            disable_all_tools=fields["disable_all_tools"] # <-- NEW
+            disable_all_tools=fields["disable_all_tools"], # <-- NEW
+            reasoning_effort=fields["reasoning_effort"],
+            temperature=fields["temperature"]
         )
 
 
@@ -2748,12 +2761,12 @@ class AIAgentView(Vertical):
             
         llm = ChatOpenAI(
             model=model, 
-            temperature=0,
+            temperature=getattr(agent_config, "temperature", 1.0),
             api_key=api_key,
             base_url=base_url,
             max_retries=5,
             timeout=120,
-            model_kwargs={"reasoning_effort": "high"}
+            model_kwargs={"reasoning_effort": getattr(agent_config, "reasoning_effort", "high")}
         )
 
         # Unified message pre-processor to intercept tool outputs and extract image payloads.
@@ -3006,7 +3019,8 @@ class AIAgentView(Vertical):
                             api_key=api_key,
                             base_url=host_agent.base_url,
                             temperature=0,
-                            max_retries=1
+                            max_retries=1,
+                            model_kwargs={"reasoning_effort": getattr(host_agent, "reasoning_effort", "high")}
                         )
                         
                         pronoun_val = getattr(a, "pronouns", "neither")
@@ -3959,7 +3973,8 @@ class AIAgentView(Vertical):
                 api_key=api_key,
                 base_url=agent.base_url,
                 temperature=0,
-                max_retries=1
+                max_retries=1,
+                model_kwargs={"reasoning_effort": getattr(agent, "reasoning_effort", "high")}
             )
             naming_prompt = (
                 "Based on the following first user query and agent response of a session, "
@@ -4114,7 +4129,9 @@ class AIAgentView(Vertical):
                     model=result["model"],
                     base_url=result["base_url"],
                     color="#00FFFF",
-                    enabled_tools=["read_file", "curl_url", "save_file", "edit_file", "dispatch_subagent", "run_terminal_command"]
+                    enabled_tools=["read_file", "curl_url", "save_file", "edit_file", "dispatch_subagent", "run_terminal_command"],
+                    reasoning_effort="high",
+                    temperature=1.0
                 )
                 
                 if result["name"] != old_name:

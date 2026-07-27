@@ -62,6 +62,8 @@ class AgentConfig:
     tts_voice: str = "af_sarah" # <-- NEW: Unique Agent Voice Field (Default: Sarah)
     pronouns: str = "she/her" # <-- NEW: Binary Pronoun Field (Default: she/her)
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
+    reasoning_effort: str = "high"
+    temperature: float = 1.0
     
     def get_api_key(self) -> str:
         try:
@@ -300,7 +302,7 @@ class AgentManager:
                     print(f"Error loading agent {filename}: {e}")
         
         if not self.agents:
-            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose senior developer.")
+            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose senior developer.", reasoning_effort="high", temperature=1.0)
             self.save_agent(default)
             self.agents[default.name] = default
 
