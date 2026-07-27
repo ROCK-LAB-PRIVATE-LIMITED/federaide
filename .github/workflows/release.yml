@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'pyproject.toml'
-  workflow_dispatch:
 
 jobs:
   check_version:
@@ -268,6 +267,7 @@ jobs:
         with:
           tag_name: ${{ needs.check_version.outputs.tag_name }}
           files: dist/*
+          body: ${{ github.event.head_commit.message }}
           generate_release_notes: true
 
   # --- NEW JOB: Update Landing Page Version & Deploy to GitHub Pages ---
