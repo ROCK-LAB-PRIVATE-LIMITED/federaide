@@ -147,7 +147,7 @@ def save_session_name_map(m: dict):
         pass
 
 # --- MODAL SCREENS ---
-class ToolConfirmationModal(ModalScreen[bool]):
+class ToolConfirmationModal(ModalScreen[str]):
     DEFAULT_CSS = """
     ToolConfirmationModal { align: center middle; background: $background 60%; }
     #confirm_dialog { width: 70; height: 75%; border: thick $warning; background: $surface; padding: 1 2; }
@@ -175,18 +175,23 @@ class ToolConfirmationModal(ModalScreen[bool]):
                 
             with Horizontal(classes="buttons"):
                 yield Button("Approve (Execute)", id="approve", variant="success")
-                yield Button("Reject (Abort)", id="reject", variant="error")
+                yield Button("Reject", id="reject", variant="warning")
+                yield Button("Stop", id="stop", variant="error")
 
     def on_mount(self):
         self.query_one("#approve").focus()
 
     @on(Button.Pressed, "#approve")
     def on_approve(self):
-        self.dismiss(True)
+        self.dismiss("approve")
 
     @on(Button.Pressed, "#reject")
     def on_reject(self):
-        self.dismiss(False)
+        self.dismiss("reject")
+
+    @on(Button.Pressed, "#stop")
+    def on_stop(self):
+        self.dismiss("stop")
         
 class ClarificationModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -1301,6 +1306,54 @@ class ScheduleModal(ModalScreen[None]):
                 self.refresh_list()
                 self.notify("Loaded task into inputs for modification.", severity="information")
 
+class ScheduledTaskPromptModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    ScheduledTaskPromptModal { align: center middle; background: $background 60%; }
+    #sched_prompt_dialog { width: 65; height: auto; border: thick $warning; background: $surface; padding: 1 2; }
+    .task_msg { margin: 1 0; text-style: bold; }
+    .buttons { height: auto; align: right middle; margin-top: 1; }
+    .buttons Button { margin-left: 1; }
+    """
+
+    def __init__(self, task, **kwargs):
+        super().__init__(**kwargs)
+        self.sched_task = task
+        self.time_left = 60
+        self.timer = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sched_prompt_dialog"):
+            yield Label(f" Scheduled Task Due: [bold cyan]{self.sched_task.agent_name}[/bold cyan]", classes="pane_title")
+            yield Label(f"Auto-running in [bold yellow]{self.time_left}s[/bold yellow] if no action taken...", id="prompt_msg", classes="task_msg")
+            with Horizontal(classes="buttons"):
+                yield Button("Run Now", id="run_now", variant="success")
+                yield Button("Defer 15 Min", id="defer", variant="warning")
+                yield Button("Skip", id="skip", variant="error")
+
+    def on_mount(self):
+        self.query_one("#run_now").focus()
+        self.timer = self.set_interval(1.0, self.update_countdown)
+
+    def update_countdown(self):
+        self.time_left -= 1
+        if self.time_left <= 0:
+            if self.timer:
+                self.timer.stop()
+            self.dismiss("run_now")
+        else:
+            try:
+                self.query_one("#prompt_msg", Label).update(
+                    f"Auto-running in [bold yellow]{self.time_left}s[/bold yellow] if no action taken..."
+                )
+            except Exception:
+                pass
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        if self.timer:
+            self.timer.stop()
+        self.dismiss(event.button.id)
+
 class ChatInput(TextArea):
     """Custom Multiline TextArea that supports cycling suggestions and Enter-to-submit."""
     
@@ -2259,8 +2312,12 @@ class AIAgentView(Vertical):
         result_event = threading.Event()
         final_result = [False]
 
-        def handle_result(res: bool):
-            final_result[0] = bool(res)
+        def handle_result(res: Any):
+            if res == "stop":
+                self.action_abort()
+                final_result[0] = False
+            else:
+                final_result[0] = (res == "approve")
             result_event.set()
 
         # Thread-safe instantiation and push of the ModalScreen on the main event loop thread
@@ -3628,7 +3685,7 @@ class AIAgentView(Vertical):
 
     def tick_scheduler(self):
         """Checks the clock and fires off scheduled tasks natively as a Ghost User with catch-up logic."""
-        if getattr(self, "shell_mode", False) or not hasattr(self, "schedule_manager"):
+        if getattr(self, "shell_mode", False) or not hasattr(self, "schedule_manager") or getattr(self, "_scheduler_prompt_active", False):
             return
             
         now = datetime.now()
@@ -3636,6 +3693,7 @@ class AIAgentView(Vertical):
         
         for task in self.schedule_manager.tasks:
             if not task.is_active: continue
+            if getattr(task, "snooze_until", 0.0) > time.time(): continue
             
             run_today = False
             last_scheduled = self._get_last_scheduled(task, now)
@@ -3651,20 +3709,34 @@ class AIAgentView(Vertical):
             if run_today:
                 if self._running_agents:
                     continue 
-                
-                task.last_run_date = current_date
-                self.schedule_manager.save()
-                
-                self.action_clear_all_contexts()
-                self.log_to_ui(Rule(title="[bold yellow] INITIATING AUTOMATED SCHEDULED TASK", style="dim"))
-                
-                full_prompt = f"@{task.agent_name} [Automated Scheduled Task]:\n{task.prompt}"
-                
-                from agent import ChatInput
-                chat_input = self.query_one("#ai_chat_input", ChatInput)
-                
-                event = ChatInput.Submitted(chat_input, full_prompt)
-                self.on_input_submitted(event)
+
+                self._scheduler_prompt_active = True
+
+                def handle_action(action: str):
+                    self._scheduler_prompt_active = False
+                    if action == "defer":
+                        task.snooze_until = time.time() + 900.0  # Defer 15 minutes
+                        self.notify(f"Scheduled task '{task.prompt[:30]}...' deferred for 15 minutes.", severity="warning")
+                    elif action == "skip":
+                        task.last_run_date = current_date
+                        self.schedule_manager.save()
+                        self.notify("Scheduled task skipped.", severity="information")
+                    elif action == "run_now":
+                        task.last_run_date = current_date
+                        self.schedule_manager.save()
+                        self.action_clear_all_contexts()
+                        self.log_to_ui(Rule(title="[bold yellow] INITIATING AUTOMATED SCHEDULED TASK", style="dim"))
+                        
+                        full_prompt = f"@{task.agent_name} [Automated Scheduled Task]:\n{task.prompt}"
+                        
+                        from agent import ChatInput
+                        chat_input = self.query_one("#ai_chat_input", ChatInput)
+                        
+                        event = ChatInput.Submitted(chat_input, full_prompt)
+                        self.on_input_submitted(event)
+
+                self.app.push_screen(ScheduledTaskPromptModal(task), handle_action)
+                break
     
     def update_tokens(self):
         try:

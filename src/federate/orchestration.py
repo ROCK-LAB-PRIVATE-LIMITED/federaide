@@ -530,6 +530,7 @@ class ScheduledTask:
     is_active: bool = True
     date_str: str = "" # Format: "YYYY-MM-DD"
     repeat: str = "daily" # Options: daily, weekly, monthly, annually
+    snooze_until: float = 0.0
 
 class ScheduleManager:
     def __init__(self, storage_dir: str = None):
