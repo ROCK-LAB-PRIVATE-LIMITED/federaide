@@ -2447,9 +2447,35 @@ class AIAgentView(Vertical):
             color = "blue"
 
             if hm.role == "ai":
-                # This was the agent whose file we are reading
-                label = owner_name
-                color = "magenta"
+                agent = self.agent_manager.get_agent(owner_name)
+                color = agent.color if agent else "magenta"
+
+                if content and content.strip():
+                    self._write_log(Rule(style="dim"))
+                    self._write_log(f"[bold {color}]{owner_name}:[/bold {color}]", is_markdown=False)
+                    self._write_log(content, is_markdown=True)
+
+                if hm.tool_calls:
+                    for tc in hm.tool_calls:
+                        tc_name = tc.get("name", "tool")
+                        tc_args = str(tc.get("args", {}))
+                        self._write_log(Rule(style="dim"))
+                        self._write_log(f"[#808080]Calling Tool: {escape(tc_name)} with args: {escape(tc_args)}[/#808080]")
+
+                if hm.tool_outputs:
+                    for out in hm.tool_outputs:
+                        t_name = out.get("name", "tool")
+                        t_content = str(out.get("content", ""))
+                        if t_name in ["search_web", "SearchWeb"]:
+                            summary = "[Search results successfully parsed and delivered to active agent context]"
+                        else:
+                            summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', t_content)
+                            summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
+                            summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
+
+                        box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{escape(summary)}"
+                        box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                        self._write_log(box_widget)
             else: # role == "human"
                 # Check for synced intercom tags from other agents
                 intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
@@ -2468,9 +2494,9 @@ class AIAgentView(Vertical):
                     label = "User"
                     color = "blue"
 
-            self._write_log(Rule(style="dim"))
-            self._write_log(f"[bold {color}]{label}:[/bold {color}]", is_markdown=False)
-            self._write_log(content, is_markdown=True)
+                self._write_log(Rule(style="dim"))
+                self._write_log(f"[bold {color}]{label}:[/bold {color}]", is_markdown=False)
+                self._write_log(content, is_markdown=True)
     
     def action_open_active_config(self):
         """F4: Opens the editor. Distinguishes between Renaming and Cloning."""
