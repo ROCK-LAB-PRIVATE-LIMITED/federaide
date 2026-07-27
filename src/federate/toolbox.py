@@ -498,7 +498,6 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
         return []
 
     dynamic_tools = []
-    # Each tool is a subdirectory now
     for tool_folder in os.listdir(active_tools_dir):
         tool_path = get_storage_path(active_tools_dir, tool_folder)
         if not os.path.isdir(tool_path): continue
@@ -517,59 +516,34 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
             
             tool_name = schema.get("name", tool_folder)
             description = schema.get("description", "Dynamic tool skill.")
-            parameters = schema.get("parameters", {"type": "object", "properties": {}})
-            arg_order = schema.get("arg_order") # Optional list for positional logic
-            
-            if arg_order:
-                description += f" [Positional Mode: Arguments must be passed with keys matching this exact order: {', '.join(arg_order)}]"
-            else:
-                description += " [Keyword Mode: Arguments are passed as double-dash options (e.g. --key value). Booleans act as standalone flags (e.g. true -> --key). Lists of simple values are unpacked sequentially (e.g. ['a', 'b'] -> --key a b).]"
-                
+            arg_order = schema.get("arg_order") or meta.get("arg_order")
             entry_point = meta.get("entry_point")
+            test_input = meta.get("test_input", {})
             
             if not entry_point: continue
             
-            # Full path to the script inside the 'logic' folder
             script_path = get_storage_path(tool_path, "logic", entry_point)
             if not os.path.exists(script_path): continue
 
             venv_dir = get_storage_path(tool_path, "venv")
             python_exe = _get_venv_python(venv_dir)
 
-            # Build Pydantic model and get valid parameter names
-            properties = parameters.get("properties", {})
-            required = parameters.get("required", [])
-            valid_params = list(properties.keys())
-            
-            # Create the dynamic execution function
-            def make_run_func(s_path, t_name, p_exe, t_dir, a_order, v_params, req_params, tool_props):
+            mode_str = f"Positional CLI arguments order: [{', '.join(arg_order)}]" if arg_order else "Keyword CLI flags (--key value)"
+            enhanced_description = f"{description}\n\nExecution Mode: {mode_str}"
+            if test_input:
+                sample_call = f"{tool_name}(" + ", ".join([f"{k}={repr(v)}" for k, v in test_input.items()]) + ")"
+                enhanced_description += f"\nExample Call: {sample_call}"
+
+            def make_run_func(s_path, t_name, p_exe, t_dir, a_order, t_input):
                 def run_dynamic_script(**kwargs):
                     try:
                         check_abort()
                         log_tool(f"Executing dynamic skill: [bold cyan]{t_name}[/]")
-                        
-                        # --- STRICT VALIDATION: Ensure all arguments are in the schema ---
-                        unknown_args = [k for k in kwargs if k not in v_params]
-                        if unknown_args:
-                            return f"Error: Unknown parameters for tool '{t_name}': {', '.join(unknown_args)}. This tool only accepts: {', '.join(v_params)}"
-                        
-                        # --- MANDATORY VALIDATION: Ensure all required arguments are present ---
-                        missing_args = [r for r in req_params if r not in kwargs or kwargs[r] is None]
-                        if missing_args:
-                            return f"Error: Missing required parameters for tool '{t_name}': {', '.join(missing_args)}"
-                        
-                        # --- STRICT POSITION VALIDATION: Ensure passed arguments exist in arg_order if in Positional Mode ---
-                        if a_order:
-                            unmapped_args = [k for k in kwargs if k not in a_order]
-                            if unmapped_args:
-                                return f"Error: The parameters {unmapped_args} could not be mapped to the command line. This positional tool expects exactly these keys in order: {a_order}"
-                        # ---------------------------------------------------------------
 
                         env = os.environ.copy()
-                        # Add venv bin to path so shell scripts can see installed deps
                         venv_bin = os.path.dirname(p_exe)
                         env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
-                        env["VIRTUAL_ENV"] = t_dir # Standard venv indicator
+                        env["VIRTUAL_ENV"] = t_dir
 
                         if s_path.endswith(".py") and os.path.exists(p_exe):
                             cmd = [p_exe, s_path]
@@ -578,51 +552,53 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         else:
                             cmd = [s_path]
 
-                        # --- ARGUMENT PASSING: Hybrid Logic ---
+                        # Filter out unprovided / None arguments completely
+                        active_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+                        # --- ARGUMENT PASSING: Direct & Non-destructive ---
                         if a_order:
-                            # Positional Mode: Build command by following the defined sequence
+                            # Positional Mode
                             for arg_name in a_order:
-                                val = kwargs.get(arg_name)
+                                clean_arg = arg_name.lstrip("-")
+                                val = active_kwargs.get(clean_arg, active_kwargs.get(arg_name))
                                 if val is not None:
-                                    # Type Validation against schema
-                                    prop_meta = tool_props.get(arg_name, {})
-                                    expected_type = prop_meta.get("type", "string").lower()
-
-                                    if expected_type == "array" and isinstance(val, str):
-                                        return (f"Error: Parameter '{arg_name}' for tool '{t_name}' expects an ARRAY (list of strings), "
-                                                f"but you sent a single STRING: \"{val}\".\n\n"
-                                                f"CORRECT FORMAT: \"{arg_name}\": [\"val1\", \"val2\"]\n"
-                                                f"INCORRECT FORMAT: \"{arg_name}\": \"val1 val2\"")
-
                                     if isinstance(val, list):
-                                        # Variadic Spreading: ["a", "b"] -> ... a b
                                         cmd.extend([str(item) for item in val])
                                     else:
                                         cmd.append(str(val))
-                        else:
-                            # Keyword Mode: Pass complex objects as JSON strings, simple ones as-is
-                            for k, v in kwargs.items():
-                                # SAFETY NORMALIZATION: Strip any leading dashes from the key
+                            # Pass any extra kwargs not in a_order as flags
+                            for k, v in active_kwargs.items():
                                 clean_k = k.lstrip("-")
-                                
-                                # SMART FLAG PARSING: If value is boolean, treat as standard CLI switch/flag
+                                if k not in a_order and clean_k not in a_order:
+                                    if isinstance(v, bool):
+                                        if v: cmd.append(f"--{clean_k}")
+                                    elif isinstance(v, list):
+                                        if all(isinstance(item, (str, int, float)) for item in v):
+                                            cmd.append(f"--{clean_k}")
+                                            cmd.extend([str(item) for item in v])
+                                        else:
+                                            cmd.extend([f"--{clean_k}", json.dumps(v)])
+                                    elif isinstance(v, dict):
+                                        cmd.extend([f"--{clean_k}", json.dumps(v)])
+                                    else:
+                                        cmd.extend([f"--{clean_k}", str(v)])
+                        else:
+                            # Keyword / Flag Mode
+                            for k, v in active_kwargs.items():
+                                clean_k = k.lstrip("-")
                                 if isinstance(v, bool):
-                                    if v:
-                                        cmd.append(f"--{clean_k}")
-                                # HYBRID LIST GUARD: Unpack simple file/string lists, but keep JSON dumps for complex nested arrays
+                                    if v: cmd.append(f"--{clean_k}")
                                 elif isinstance(v, list):
                                     if all(isinstance(item, (str, int, float)) for item in v):
                                         cmd.append(f"--{clean_k}")
                                         cmd.extend([str(item) for item in v])
                                     else:
-                                        val_str = json.dumps(v)
-                                        cmd.extend([f"--{clean_k}", val_str])
+                                        cmd.extend([f"--{clean_k}", json.dumps(v)])
+                                elif isinstance(v, dict):
+                                    cmd.extend([f"--{clean_k}", json.dumps(v)])
                                 else:
-                                    val_str = json.dumps(v) if isinstance(v, dict) else str(v)
-                                    cmd.extend([f"--{clean_k}", val_str])
-                        # --------------------------------------
+                                    cmd.extend([f"--{clean_k}", str(v)])
 
-                        # Print actual executed command to the logging feed
                         log_tool(f"Command: [dim]{' '.join(cmd)}[/]")
 
                         proc = subprocess.Popen(
@@ -634,20 +610,50 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                             start_new_session=True,
                             env=env
                         )
-                        
+
                         while proc.poll() is None:
                             check_abort()
                             time.sleep(0.1)
-                            
+
                         stdout, stderr = proc.communicate()
                         if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
                         if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
 
-                        executed_cmd_str = f"[Executed Command: {' '.join(cmd)}]"
-                        if proc.returncode != 0:
-                            return f"Skill execution failed ({t_name}):\n{executed_cmd_str}\n{stderr}"
-                        return f"{executed_cmd_str}\n\nSTDOUT:\n{stdout.strip()}" if stdout.strip() else f"Skill {t_name} executed successfully."
-                        
+                        # Loud execution report featuring concrete tool calling examples
+                        executed_cmd_str = " ".join(cmd)
+                        agent_call_str = f"{t_name}(" + ", ".join([f"{k}={repr(v)}" for k, v in active_kwargs.items()]) + ")"
+
+                        report = [
+                            f"[Executed Shell Command]: {executed_cmd_str}",
+                            f"[Agent Call]: {agent_call_str}",
+                            f"[Exit Code]: {proc.returncode}",
+                            "",
+                            f"--- PERFECTLY FORMED TOOL CALL EXAMPLES ({t_name}) ---"
+                        ]
+
+                        if t_input:
+                            test_ex = f"{t_name}(" + ", ".join([f"{k}={repr(v)}" for k, v in t_input.items()]) + ")"
+                            report.append(f"  Example 1 (Verified Staged Input): {test_ex}")
+
+                        if a_order:
+                            pos_ex = f"{t_name}(" + ", ".join([f"{a}='<val>'" for a in a_order]) + ")"
+                            report.append(f"  Example 2 (Positional Syntax): {pos_ex}")
+                            report.append(f"  [Mode]: Positional CLI Arguments -> Maps to order: {a_order}")
+                        else:
+                            report.append(f"  Example 2 (Keyword Syntax): {t_name}(key_name='value', boolean_flag='true')")
+                            report.append(f"  [Mode]: Keyword CLI Flags -> Maps to '--key_name value'")
+
+                        report.append("-----------------------------------------------------------------")
+
+                        if stdout.strip():
+                            report.append(f"\nSTDOUT:\n{stdout.strip()}")
+                        else:
+                            report.append("\nSTDOUT: (empty)")
+                        if stderr.strip():
+                            report.append(f"\nSTDERR:\n{stderr.strip()}")
+
+                        return "\n".join(report)
+
                     except Exception as e:
                         if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
                             try: os.killpg(os.getpgid(proc.pid), 9)
@@ -656,31 +662,57 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         return f"Error running dynamic skill {t_name}: {e}"
                 return run_dynamic_script
 
-            # Build Pydantic model
-            properties = parameters.get("properties", {})
-            required = parameters.get("required", [])
-            fields = {}
-            for prop_name, prop_meta in properties.items():
-                prop_type = prop_meta.get("type", "string").lower()
-                python_type = {
-                    "string": str, "integer": int, "number": float,
-                    "boolean": bool, "array": list, "object": dict
-                }.get(prop_type, str)
-                default_val = ... if prop_name in required else None
-                fields[prop_name] = (python_type, Field(default=default_val, description=prop_meta.get("description", "")))
+            from pydantic import BaseModel, ConfigDict, create_model
 
-            args_schema = create_model(f"{tool_name}_schema", **fields)
+            class DynamicToolBase(BaseModel):
+                model_config = ConfigDict(extra='allow')
+
+                def model_dump(self, *args, **kwargs):
+                    d = super().model_dump(*args, **kwargs)
+                    if getattr(self, '__pydantic_extra__', None):
+                        d.update(self.__pydantic_extra__)
+                    return d
+
+                def dict(self, *args, **kwargs):
+                    d = super().dict(*args, **kwargs)
+                    if getattr(self, '__pydantic_extra__', None):
+                        d.update(self.__pydantic_extra__)
+                    return d
+
+            field_definitions = {}
+            if isinstance(test_input, dict):
+                for k, v in test_input.items():
+                    clean_k = k.lstrip("-")
+                    field_definitions[clean_k] = (Optional[Any], None)
+
+            if isinstance(arg_order, list):
+                for a in arg_order:
+                    clean_a = a.lstrip("-")
+                    if clean_a not in field_definitions:
+                        field_definitions[clean_a] = (Optional[Any], None)
+
+            if isinstance(schema, dict) and "properties" in schema and isinstance(schema["properties"], dict):
+                for k in schema["properties"].keys():
+                    clean_k = k.lstrip("-")
+                    if clean_k not in field_definitions:
+                        field_definitions[clean_k] = (Optional[Any], None)
+
+            ToolInputModel = create_model(
+                f"{tool_name}_Input",
+                __base__=DynamicToolBase,
+                **field_definitions
+            )
 
             dynamic_tools.append(StructuredTool.from_function(
-                func=make_run_func(script_path, tool_name, python_exe, tool_path, arg_order, valid_params, required, properties),
+                func=make_run_func(script_path, tool_name, python_exe, tool_path, arg_order, test_input),
                 name=tool_name,
-                description=description,
-                args_schema=args_schema
+                description=enhanced_description,
+                args_schema=ToolInputModel
             ))
-            
+
         except Exception as e:
             print(f"Error loading dynamic skill {tool_folder}: {e}")
-                
+
     return dynamic_tools
 
 # --- SWE AGENT TOOLS ---
@@ -2463,12 +2495,14 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         else:
             result += f"FAILURE: Tool exited with code {proc.returncode}. Fix the logic and try again."
 
-        # Save metadata for Stage 2
+        # Save metadata and test_input for Stage 2 auto-schema generation
         meta = {
             "entry_point": entry_point, 
             "dependencies": dependencies or [],
             "custom_dependency_paths": custom_dependency_paths or [],
             "pre_install_commands": pre_install_commands or [],
+            "arg_order": arg_order,
+            "test_input": test_input,
             "test_passed": test_passed
         }
         with open(get_storage_path(staging_dir, "metadata.json"), "w") as f:
@@ -2493,18 +2527,16 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         return f"Error during staging: {e}"
 
 @tool
-def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: str, parameters: Dict[str, Any], arg_order: List[str] = None, config: RunnableConfig = None) -> str:
+def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: str, arg_order: List[str] = None, config: RunnableConfig = None) -> str:
     """
     Stage 2 of Learning a new Executable Tool. Commits a successfully tested tool to the live library.
-    Each tool is initialized as a local git repository for version control.
+    No JSON schema required!
     
     Args:
         tool_name: Unique name for the tool.
         tool_description: Concise overview of what the tool does.
-        usage_guide: COMPULSORY. A comprehensive manual in Markdown format. 
-                    Include syntax examples, parameter details, and typical workflows.
-        parameters: JSON schema of arguments.
-        arg_order: Optional sequence for positional arguments.
+        usage_guide: COMPULSORY. A comprehensive manual in Markdown format with usage examples.
+        arg_order: Optional sequence list for positional arguments (e.g. ['param1', 'param2']). Omit for keyword flags mode.
     """
     agent_name = _get_agent(config)
     
@@ -2518,7 +2550,6 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
                 "tool_name": tool_name,
                 "tool_description": tool_description,
                 "usage_guide": usage_guide,
-                "parameters": parameters,
                 "arg_order": arg_order
             }
             if not CURRENT_AGENT_VIEW.confirm_tool_execution("finalize_active_skill", kwargs, agent_name=agent_name):
@@ -2532,23 +2563,25 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
     if not os.path.exists(staging_dir):
         return f"Error: Tool '{tool_name}' is not in staging. Call 'prepare_active_skill' first."
         
-    # --- HARD GUARDRAIL: Prevent finalizing broken tools ---
     meta_path = get_storage_path(staging_dir, "metadata.json")
+    staged_meta = {}
     if os.path.exists(meta_path):
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            if not meta.get("test_passed", False):
-                return f"Error:  HARD GUARDRAIL ACTIVATED \nTool '{tool_name}' FAILED its validation test during `prepare_active_skill`. You are strictly prohibited from finalizing a broken tool. You MUST fix the logic and run `prepare_active_skill` again until it yields a SUCCESS result."
+                staged_meta = json.load(f)
+            if not staged_meta.get("test_passed", False):
+                return f"Error: HARD GUARDRAIL ACTIVATED\nTool '{tool_name}' FAILED its validation test during `prepare_active_skill`. You MUST fix the logic and re-run `prepare_active_skill` until it succeeds."
         except Exception:
             pass
 
+    if arg_order is None:
+        arg_order = staged_meta.get("arg_order")
+
     try:
-        # 1. Create schema.json
+        # 1. Create schema.json without schema parameter boilerplate
         schema = {
             "name": tool_name, 
             "description": tool_description, 
-            "parameters": parameters,
             "arg_order": arg_order
         }
         with open(get_storage_path(staging_dir, "schema.json"), "w", encoding="utf-8") as f:
@@ -2586,33 +2619,28 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
         return f"Error finalizing skill: {e}"
 
 @tool
-def fix_active_skill(tool_name: str, action: str, documentation: str, tool_description: str, parameters: Dict[str, Any], file_path: str = None, source_path: str = None, content: str = None, commit_message: str = None, dependencies: List[str] = None, arg_order: List[str] = None, config: RunnableConfig = None) -> str:
+def fix_active_skill(tool_name: str, action: str, documentation: str = None, tool_description: str = None, file_path: str = None, source_path: str = None, content: str = None, commit_message: str = None, dependencies: List[str] = None, arg_order: List[str] = None, config: RunnableConfig = None) -> str:
     """
     Allows editing and maintaining an existing Active Skill with automatic version control.
-    Compulsorily requires the latest documentation manual, tool description, and parameters schema for the active skill to be provided on every call.
-    If nothing changed, simply provide the current/old data again.
     
     Actions:
     - 'list': List all files in the tool's directory.
     - 'read': Read a specific file (relative to tool root).
-    - 'edit': Replace a file's content. Use 'source_path' (from workspace) or 'content' (string).
+    - 'edit': Replace a file's content or modify settings (arg_order, description).
     - 'install': Add/Update pip dependencies in the tool's venv.
-    - 'commit': Manually commit changes (usually handled automatically by edit/install).
+    - 'commit': Manually commit changes.
     
     Args:
         tool_name: The tool to maintain.
         action: The action to perform (list, read, edit, install, commit).
-        documentation: The full, up-to-date manual/documentation for the skill (compulsory).
-        tool_description: The full, up-to-date description of what the tool does (compulsory). This cannot be a placeholder (such as "updated description" or "test"). It must be a detailed, descriptive summary.
-        parameters: The full, up-to-date JSON schema of parameters/arguments (compulsory).
-        file_path: The target file inside the tool's library (e.g., 'script.py').
-        source_path: For 'edit' action: A path to a file in your workspace to copy from.
-        content: For 'edit' action: A string of code to write directly.
-        dependencies: For 'install' action: A list of pip packages.
-        arg_order: Optional sequence list for positional arguments to update schema.json.
+        documentation: Optional manual markdown content to update.
+        tool_description: Optional updated description summary.
+        file_path: Target file inside tool library (e.g. 'script.py').
+        source_path: For 'edit' action: Workspace path to copy code from.
+        content: For 'edit' action: Code string to write directly.
+        dependencies: For 'install' action: List of pip packages.
+        arg_order: Optional sequence list for positional CLI arguments.
     """
-    if len(tool_description.strip()) < 50:
-        return "Error: The 'tool_description' must be a detailed, descriptive summary explaining what the tool does. Placeholder descriptions are strictly prohibited."
     agent_name = _get_agent(config)
     
     # --- MODE RESTRICTIONS ---
@@ -2626,7 +2654,6 @@ def fix_active_skill(tool_name: str, action: str, documentation: str, tool_descr
                 "action": action,
                 "documentation": documentation,
                 "tool_description": tool_description,
-                "parameters": parameters,
                 "file_path": file_path,
                 "source_path": source_path,
                 "content": content,
@@ -2643,40 +2670,42 @@ def fix_active_skill(tool_name: str, action: str, documentation: str, tool_descr
     if not os.path.exists(active_dir):
         return f"Error: Tool '{tool_name}' not found."
         
-    # Compulsorily update the passive skill manual with the provided documentation on every call
-    try:
-        safe_name = "".join([c if c.isalnum() or c == '_' else "_" for c in tool_name])
-        manual_path = get_storage_path("agents", "skills", safe_agent_name, f"{safe_name}_manual.md")
-        with open(manual_path, "w", encoding="utf-8") as f:
-            f.write(documentation)
-    except Exception as e:
-        return f"Error updating compulsory manual: {e}"
+    # Update documentation ONLY IF explicitly passed
+    if documentation:
+        try:
+            safe_name = "".join([c if c.isalnum() or c == '_' else "_" for c in tool_name])
+            manual_path = get_storage_path("agents", "skills", safe_agent_name, f"{safe_name}_manual.md")
+            with open(manual_path, "w", encoding="utf-8") as f:
+                f.write(documentation)
+        except Exception as e:
+            return f"Error updating manual: {e}"
         
-    # Compulsorily update schema.json with the provided schema and description on every call
-    try:
-        schema_path = get_storage_path(active_dir, "schema.json")
-        schema_data = {}
-        if os.path.exists(schema_path):
-            try:
-                with open(schema_path, "r", encoding="utf-8") as f:
-                    schema_data = json.load(f)
-            except Exception:
-                pass
-        
-        schema_data["name"] = tool_name
-        schema_data["description"] = tool_description
-        schema_data["parameters"] = parameters
-        if arg_order is not None:
-            schema_data["arg_order"] = arg_order
-        
-        os.makedirs(os.path.dirname(schema_path), exist_ok=True)
-        with open(schema_path, "w", encoding="utf-8") as f:
-            json.dump(schema_data, f, indent=4)
-        
-        subprocess.run(["git", "add", "schema.json"], cwd=active_dir, capture_output=True)
-        subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Compulsory update of schema.json for {tool_name}"], cwd=active_dir, capture_output=True)
-    except Exception as e:
-        return f"Error updating compulsory schema.json: {e}"
+    # Update schema.json ONLY IF tool_description or arg_order is explicitly passed
+    if tool_description or arg_order is not None:
+        try:
+            schema_path = get_storage_path(active_dir, "schema.json")
+            schema_data = {}
+            if os.path.exists(schema_path):
+                try:
+                    with open(schema_path, "r", encoding="utf-8") as f:
+                        schema_data = json.load(f)
+                except Exception:
+                    pass
+            
+            schema_data["name"] = tool_name
+            if tool_description:
+                schema_data["description"] = tool_description
+            if arg_order is not None:
+                schema_data["arg_order"] = arg_order
+            
+            os.makedirs(os.path.dirname(schema_path), exist_ok=True)
+            with open(schema_path, "w", encoding="utf-8") as f:
+                json.dump(schema_data, f, indent=4)
+            
+            subprocess.run(["git", "add", "schema.json"], cwd=active_dir, capture_output=True)
+            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Update schema.json for {tool_name}"], cwd=active_dir, capture_output=True)
+        except Exception as e:
+            return f"Error updating schema.json: {e}"
         
     try:
         if action == "list":

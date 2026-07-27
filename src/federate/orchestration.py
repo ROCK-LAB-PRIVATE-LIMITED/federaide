@@ -217,28 +217,34 @@ class AgentConfig:
         prompt += f"\n\n--- PROCEDURAL SKILLS LIBRARY (Passive) ---\n{passive_list}"
         prompt += f"\n\n--- EXECUTABLE CAPABILITIES (Active Tools) ---\n{active_list_str}"
         
-        # Memory Operating Rules
         prompt += "\n\nSKILLS & CAPABILITIES RULES:"
         prompt += "\n- PASSIVE SKILLS: Use `read_skill` to read the steps for a playbook listed in your library."
         if getattr(self, "disable_all_tools", False):
             prompt += "\n- ACTIVE SKILLS: Executable capabilities and active skills are completely disabled for you."
         else:
             prompt += "\n- ACTIVE SKILLS: These are executable tools you can call directly. If a task matches an Active Skill name, call it like any other tool. You MUST use the exact parameter names defined in the tool's schema. To return image data, have your script/program print `[ImageBase64: data:image/png;base64,<base64data>]` to STDOUT."
+            prompt += "\n- ABSOLUTE PATH MANDATE: ALL file and directory paths passed to Active Skills—whether during initial staging/testing or actual runtime usage—MUST be full absolute paths (e.g. `/Users/username/workspace/data.dlis`). Active tools execute inside isolated tool directories, so relative paths will fail to locate or save files."
+            prompt += "\n- HEADLESS EXECUTION (No GUI / `plt.show()`): Active tools run as headless background subprocesses. NEVER use interactive window functions like `plt.show()` or GUI popups, as they will cause threadlock and freeze execution indefinitely. For plotting, ALWAYS configure non-interactive backends (e.g. `import matplotlib; matplotlib.use('Agg')` BEFORE importing `pyplot`), save plots directly to file with `plt.savefig()`, and output `[ImageBase64: ...]` to STDOUT."
         if not getattr(self, "disable_all_tools", False):
             prompt += "\n- EVOLUTION (Learning New Tools): To permanently learn a new executable tool, follow these steps:"
-            prompt += "\n  1. WRITE LOGIC: Use `save_file` to write your script(s). Decide on your parameter pattern:"
-            prompt += "\n     - Positional Mode (Recommended): Read positional inputs via `sys.argv[1]`, `sys.argv[2]`. If using this, you MUST specify the exact sequence of ALL keys in the `arg_order` list (e.g. `['param1', 'param2']`). Your `test_input` cannot contain any parameters left out of `arg_order`."
-            prompt += "\n     - Keyword Mode (Default): Uses standard CLI switch flags (e.g. `--param value`). Do NOT provide an `arg_order` list if using this mode. For boolean flags, simply pass `true` (renders as `--param`) or `false` (omits the flag entirely). WARNING: If you pass a list or dict in `test_input`, the harness will serialize it as a JSON string (e.g. `'[\"item\"]'`). If your CLI script expects a simple plain-text path or string, pass it as a simple string in `test_input` (e.g. `\"item\"`) instead of a list."
-            prompt += "\n     - CRITICAL: Your validation test script must print diagnostic results, text data, or `[ImageBase64: ...]` image tags to STDOUT. If STDOUT is blank during the test run, validation will fail."
-            prompt += "\n  2. STAGE & TEST: Use `prepare_active_skill`. Provide the tool name, paths to scripts, entry point, and `pip` dependencies. Use `test_input` for validation."
-            prompt += "\n     - TIP (Custom Builds): If your tool needs to build a local C++ library or install a custom package from source, use `pre_install_commands` for shell scripts (e.g., CMake/Make) and `custom_dependency_paths` for local pip installs (absolute paths)."
-            prompt += "\n  3. EVALUATE: Review STDOUT/STDERR. If the tool worked correctly, proceed to Stage 4."
-            prompt += "\n  4. COMMIT: Use `finalize_active_skill` to permanently register. You MUST provide a `tool_description`, the JSON `parameters`, and a COMPULSORY, comprehensive `usage_guide` (Markdown). If using positional arguments, also provide the `arg_order`. The system will automatically save your manual as a permanent passive skill in your library."
-            prompt += "\n     - TIP (Handling Lists): If your script takes a changing number of arguments, define a parameter of type `array`. When you include it in the `arg_order`, the harness will automatically expand that list into individual words in the command line (e.g., `['a', 'b']` becomes `... a b`)."
-            prompt += "\n  5. MAINTENANCE: Use `fix_active_skill` to read, replace, or update dependencies. Use action='edit' with a `source_path` to sync from the workspace. Commits are automatic."
+            prompt += "\n  1. WRITE LOGIC: Use `save_file` to write your script(s)."
+            prompt += "\n     - Positional Mode (RECOMMENDED for scripts reading `sys.argv[1]`, `sys.argv[2]`): Specify `arg_order=['param1', 'param2']`."
+            prompt += "\n     - Keyword Mode (For scripts using `--flag value` CLI options): Omit `arg_order`."
+            prompt += "\n     - Headless Rule: Never call `plt.show()`. Set `matplotlib.use('Agg')` at the top of plotting scripts and output images to file or STDOUT."
+            prompt += "\n  2. STAGE & TEST: Use `prepare_active_skill`. Provide tool name, script paths, entry point, `test_input`, and optional `arg_order`."
+            prompt += "\n     - Custom Builds: Use `pre_install_commands` for shell build steps (e.g. CMake/Make) and `custom_dependency_paths` for local package paths."
+            prompt += """\n     - List Inputs:
+       * Keyword Mode (Default): Passing a Python list `flag=['a', 'b']` generates `--flag a b` (unpacks for `argparse` `nargs='+'`).
+       * Positional Mode: With `arg_order=['flag']`, passing `flag=['a', 'b']` expands directly into positional arguments `a b`.
+       * String/Bracket Inputs: If a script expects a literal bracket or JSON string as a single argument, pass it as text (`flag='[a, b]'` or `flag='["a", "b"]'`)."""
+            prompt += "\n     - Absolute Paths Mandatory: Every path in `source_paths`, `entry_point`, and `test_input` MUST be a full absolute path."
+            prompt += "\n  3. EVALUATE: Review tool outputs (`[Executed Command]`, `STDOUT`, `STDERR`). Note the perfectly formed tool call examples returned in execution reports."
+            prompt += "\n  4. COMMIT: Use `finalize_active_skill(tool_name, tool_description, usage_guide, arg_order)` to register. No JSON schema parameter required!"
+            prompt += "\n  5. MAINTENANCE: Use `fix_active_skill` to read/edit code, install dependencies, or update `arg_order`."
             prompt += "\n  6. MANAGEMENT: Use `manage_active_skill` to rename or remove tools."
             prompt += "\n  7. ACTIVATION: New tools appear after a session reset (Mode Toggle or Clear Context)."
-        
+
+        # Memory Operating Rules        
         prompt += "\n\nMEMORY MANAGEMENT RULES:"
         prompt += "\n- BE EXTREMELY PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` IMMEDIATELY on learning any new fact that you did not already know, whether from user responses or toolcalls or however else. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
         prompt += "\n- The memories are stored locally and are free to use. They can also be edited or deleted later so if there is a doubt on whether or not to save the memory, lean towards saving it. Before every response, consider if you have come to know something novel that you did not know before, if so, `update_core_memory` as follows:"
