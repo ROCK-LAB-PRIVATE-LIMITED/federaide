@@ -1,4 +1,4 @@
 User-agent: *
 Disallow:
 
-Sitemap: https://www.federate.rocklab.in/sitemap.xml
+Sitemap: https://federate.rocklab.in/sitemap.xml
