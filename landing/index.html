@@ -291,7 +291,8 @@
         .hero-actions { display: flex; justify-content: center; gap: 1.2rem; margin-top: 2.5rem; }
         
         .hero-image-wrapper { 
-            margin-top: clamp(0.8rem, 2vh, 2rem); 
+            margin-top: 1rem; 
+            margin-bottom: clamp(1rem, 2.5vh, 2.5rem); 
             position: relative; 
             border-radius: 12px;
             width: 100%;
@@ -590,17 +591,22 @@
 <body>
 
     <div class="container">
-        <main id="main-content" style="padding-top: 3rem;">
+        <main id="main-content" style="padding-top: 0rem;">
             <!-- Hero Section -->
             <section id="hero">
                 <div class="ambient-glow"></div>
-                <h1 class="reveal-up delay-1"><span class="gradient-title">Your Personal Team</span><br>of AI Agents.</h1>
-                <p class="reveal-up delay-2" style="max-width: 780px; margin: 0 auto;">
+                <div class="hero-image-wrapper reveal-up delay-1">
+                    <!-- Desktop Screenshot: Large and broad -->
+                    <img src="./assets/federate2.webp" width="1920" height="1080" alt="Federate Desktop Workspace Interface - AI Agent Management TUI" class="hero-img" loading="eager" fetchpriority="high" decoding="async">
+                </div>
+
+                <h1 class="reveal-up delay-2"><span class="gradient-title">Your Personal Team</span><br>of AI Agents.</h1>
+                <p class="reveal-up delay-3" style="max-width: 780px; margin: 0 auto;">
                     Federate is a multi-agent harness for your Mac, PC or Android. The agents talk to each other, do your research, organize your files, and automate your boring tasks.
                 </p>
 
                 <!-- Hover-Expanding Install Button to Terminal Command Bar -->
-                <div id="hero-install-box" class="reveal-up delay-2 hero-install-container" tabindex="0">
+                <div id="hero-install-box" class="reveal-up delay-3 hero-install-container" tabindex="0">
                     <!-- Default State: Button View -->
                     <div class="install-btn-preview">
                         <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 3h20v18H2V3zm2 2v14h16V5H4zm3 3l4 4-4 4 1.41 1.41L12.83 12 8.41 7.59 7 8zm6 7h5v2h-5v-2z"/></svg>
@@ -616,11 +622,6 @@
                             <svg aria-hidden="true" focusable="false" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v40c0 30.9-25.1 56-56 56H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></svg>
                         </button>
                     </div>
-                </div>
-                
-                <div class="hero-image-wrapper reveal-up delay-3">
-                    <!-- Desktop Screenshot: Large and broad -->
-                    <img src="./assets/federate2.webp" width="1920" height="1080" alt="Federate Desktop Workspace Interface - AI Agent Management TUI" class="hero-img" loading="eager" fetchpriority="high" decoding="async">
                 </div>
             </section>
 
