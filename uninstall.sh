@@ -80,5 +80,5 @@ fi
 echo "======================================================================"
 echo " 🎉 FEDERaiDE.AI has been successfully uninstalled."
 echo " Note: Your local configuration databases, models, and workspaces "
-echo " in ~/.federaide and your workspace folders have been preserved."
+echo " in ~/.federate and your workspace folders have been preserved."
 echo "======================================================================"
