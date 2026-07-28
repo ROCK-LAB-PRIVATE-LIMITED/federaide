@@ -1276,34 +1276,38 @@ def get_installed_version() -> str:
         except Exception:
             return "0.9.27"
 
-def execute_system_update() -> tuple[bool, str]:
-    import subprocess, sys, os
-    
-    # 1. WINDOWS: Stream official update script directly from GitHub
-    if os.name == "nt" or sys.platform == "win32":
-        for script in ["update.ps1", "install.ps1"]:
-            ps_cmd = f"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | iex"
-            try:
-                cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if res.returncode == 0:
-                    return True, res.stdout
-            except Exception:
-                pass
-        return False, "Failed to execute official Windows update script from GitHub."
+    def start_update_process(self):
+        if self.is_updating:
+            return
+        self.is_updating = True
+        
+        status_lbl = self.query_one("#update_status", Label)
+        status_lbl.update("[bold yellow]⏳ Exiting application to launch terminal updater...[/bold yellow]")
+        
+        try:
+            for btn in self.query("#update_btn_container Button"):
+                btn.disabled = True
+        except Exception:
+            pass
+            
+        import threading
+        def _run_external_update():
+            import time, os, sys, subprocess
+            time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
+            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
+            
+            if os.name == "nt" or sys.platform == "win32":
+                # Spawn a new detached console so Windows releases the python file lock on the executable
+                cmd = 'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \\"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.ps1 | iex; Write-Host \\\'Update complete. You can safely close this window.\\\'; Start-Sleep -Seconds 10\\""'
+                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                os._exit(0)
+            else:
+                # Replace the shutting-down Python process with bash in the exact same terminal
+                os.execvp("bash", ["bash", "-c", "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.sh | bash; exec bash"])
 
-    # 2. UNIX (macOS / Linux / Termux): Stream official update script directly from GitHub
-    else:
-        for script in ["update.sh", "install.sh"]:
-            sh_cmd = f"curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | bash"
-            try:
-                cmd = ["bash", "-c", sh_cmd]
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if res.returncode == 0:
-                    return True, res.stdout
-            except Exception:
-                pass
-        return False, "Failed to execute official Unix update script from GitHub."
+        # Run in a non-daemon thread so it survives the main thread exit long enough to trigger execvp/Popen
+        threading.Thread(target=_run_external_update, daemon=False).start()
+        self.app.exit()
 
 SLASH_COMMAND_DESCS = {
     "/tools": "List status of all available AI tools",
@@ -4085,9 +4089,7 @@ class AIAgentView(Vertical):
 
         def show_modal():
             def handle_update_result(action: str):
-                if action == "restart":
-                    self.restart_application()
-                elif action == "skip":
+                if action == "skip":
                     st = load_global_settings()
                     st["skipped_version"] = latest_ver
                     save_global_settings(st)
@@ -4096,21 +4098,6 @@ class AIAgentView(Vertical):
             self.app.push_screen(UpdateModal(installed_ver, latest_ver, release_notes), handle_update_result)
 
         self.app.call_from_thread(show_modal)
-
-    def restart_application(self):
-        import os, sys
-        try:
-            import toolbox
-            toolbox.ABORT_EVENT.set()
-            toolbox.nuke_all_threads()
-        except Exception:
-            pass
-        print('\033[?25h', end='', flush=True)
-        try:
-            os.system('cls' if os.name == 'nt' else 'clear')
-        except Exception:
-            pass
-        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def request_clarification(self, options: Optional[List[str]] = None, agent_name: str = "Agent") -> str:
         """Pushes the ClarificationModal and waits for the result."""
