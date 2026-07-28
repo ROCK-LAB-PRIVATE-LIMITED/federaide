@@ -492,7 +492,7 @@ class UpdateModal(ModalScreen[str]):
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
                     "Write-Host 'Update process finished. Restarting...'; "
-                    "Start-Sleep -Seconds 5; "
+                    "Start-Sleep -Seconds 2; "
                     "federaide"
                 )
                 cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
@@ -1261,7 +1261,7 @@ class ConfigModal(ModalScreen[str]):
 def get_installed_version() -> str:
     try:
         import importlib.metadata
-        return importlib.metadata.version("federate")
+        return importlib.metadata.version("federaide")
     except Exception:
         try:
             import federate
