@@ -1,11 +1,11 @@
 # install.ps1
 # ==============================================================================
-#            Federate Native Windows PowerShell Installer Script
+#            FEDERaiDE Native Windows PowerShell Installer Script
 # ==============================================================================
 $ErrorActionPreference = "Stop"
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "          Federate Universal uv-Based Installer Bootstrapper        " -ForegroundColor Cyan
+Write-Host "          FEDERaiDE Universal uv-Based Installer Bootstrapper        " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 
 # 1. Ensure uv is installed
@@ -85,8 +85,8 @@ if ($pathList -notcontains $localBin) {
 }
 
 # 3. Run installation via uv
-Write-Host "[*] Installing Federate with extras (audio, vision) on standardized Python 3.13..." -ForegroundColor Yellow
-uv tool install --refresh --python 3.13 "federate[audio,vision]"
+Write-Host "[*] Installing FEDERaiDE with extras (audio, vision) on standardized Python 3.13..." -ForegroundColor Yellow
+uv tool install --refresh --python 3.13 "federaide[audio,vision]"
 
 Write-Host "======================================================================" -ForegroundColor Green
 Write-Host " 🎉 Windows installation complete!" -ForegroundColor Green

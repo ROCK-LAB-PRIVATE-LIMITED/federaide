@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-#            Federate Unified Cross-Platform Installer Script
+#            FEDERaiDE Unified Cross-Platform Installer Script
 # ==============================================================================
 # Supported Platforms:
 # - macOS (Intel x86_64 & Apple Silicon ARM64)
@@ -11,7 +11,7 @@
 set -e
 
 echo "======================================================================"
-echo "          Federate Universal uv-Based Installer Bootstrapper        "
+echo "          FEDERaiDE Universal uv-Based Installer Bootstrapper        "
 echo "======================================================================"
 
 # 1. Platform and Shell Detection
@@ -54,8 +54,8 @@ if [ "$IS_WINDOWS_BASH" = true ]; then
             irm https://astral.sh/uv/install.ps1 | iex
             \$env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
         }
-        Write-Host '[*] Installing Federate on standardized Python 3.13 environment...' -ForegroundColor Cyan
-        uv tool install --refresh --python 3.13 'federate[all]'
+        Write-Host '[*] Installing FEDERaiDE on standardized Python 3.13 environment...' -ForegroundColor Cyan
+        uv tool install --refresh --python 3.13 'federaide[all]'
     "
     echo "======================================================================"
     echo " 🎉 Windows installation complete!"
@@ -104,7 +104,7 @@ ensure_uv_unix() {
     if ! command -v uv &> /dev/null; then
         echo "[!] uv installation could not be verified automatically."
         echo "[*] Please install uv manually (https://docs.astral.sh/uv/) and run:"
-        echo "    uv tool install --refresh federate[all]"
+        echo "    uv tool install --refresh federaide[all]"
         return 1
     fi
 
@@ -112,14 +112,14 @@ ensure_uv_unix() {
 }
 
 # 5. Perform Unix-Based Installation using uv tool
-install_federate_unix() {
+install_federaide_unix() {
     # GitHub repository config parameters for pre-compiled "Tyre" wheels
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"  # <-- CHANGE THIS to your GitHub organization/username
-    REPO_NAME="Federate"       # <-- CHANGE THIS to your repository name
+    REPO_NAME="FEDERaiDE"       # <-- CHANGE THIS to your repository name
     BRANCH="main"
 
     # Use Termux/Android writable temp directory variable if defined, falling back to /tmp
-    TYRES_DIR="${TMPDIR:-/tmp}/federate_tyres"
+    TYRES_DIR="${TMPDIR:-/tmp}/federaide_tyres"
     rm -rf "$TYRES_DIR" && mkdir -p "$TYRES_DIR"
     RAW_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/tyres"
 
@@ -166,7 +166,7 @@ EOF
         
         export ANDROID_API_LEVEL=19
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
-            echo "[*] Installing Federate with full extras [all] using pre-compiled wheels on Python 3.13..."
+            echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
             uv tool install --refresh --python 3.13 \
                 --find-links "$TYRES_DIR" \
                 --find-links "https://geoarkadeep.github.io/Tyres/" \
@@ -174,7 +174,7 @@ EOF
                 --with tree-sitter \
                 --with keyrings.alt \
                 --with weasyprint \
-                "federate"
+                "federaide"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
@@ -186,7 +186,7 @@ EOF
                 --with tree-sitter-c \
                 --with keyrings.alt \
                 --with weasyprint \
-                federate
+                federaide
         fi
         
         # Ensure the executable directory is added to the Termux path permanently
@@ -215,12 +215,12 @@ EOF
         done
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
-            echo "[*] Installing Federate with full extras [all] using pre-compiled wheels on Python 3.13..."
-            uv tool install --refresh --python 3.13 --find-links "$TYRES_DIR" "federate[all]"
+            echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
+            uv tool install --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
-            uv tool install --refresh --python 3.13 federate
+            uv tool install --refresh --python 3.13 federaide
         fi
 
     else
@@ -250,7 +250,7 @@ EOF
                         touch "$profile"
                         if ! grep -q "DYLD_FALLBACK_LIBRARY_PATH" "$profile"; then
                             echo "" >> "$profile"
-                            echo "# Federate.AI WeasyPrint library path" >> "$profile"
+                            echo "# FEDERaiDE.AI WeasyPrint library path" >> "$profile"
                             echo "export DYLD_FALLBACK_LIBRARY_PATH=\"$BREW_LIB_DIR:\$DYLD_FALLBACK_LIBRARY_PATH\"" >> "$profile"
                             echo "[*] Configured DYLD_FALLBACK_LIBRARY_PATH in $profile"
                         fi
@@ -267,7 +267,7 @@ EOF
 import urllib.request, json, time, random
 def get_pypi_version():
     try:
-        url = f'https://pypi.org/pypi/federate/json?cb={random.randint(1, 1000000)}'
+        url = f'https://pypi.org/pypi/federaide/json?cb={random.randint(1, 1000000)}'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode('utf-8'))
@@ -292,15 +292,15 @@ else:
     print('')
 " 2>/dev/null || echo "")
 
-        echo "[*] Installing Federate with all features on standardized Python 3.13 environment..."
+        echo "[*] Installing FEDERaiDE with all features on standardized Python 3.13 environment..."
         if [ -n "$LATEST_VER" ]; then
             echo "[*] Target version resolved: v$LATEST_VER"
-            if ! uv tool install --refresh --python 3.13 "federate[all]==$LATEST_VER"; then
+            if ! uv tool install --refresh --python 3.13 "federaide[all]==$LATEST_VER"; then
                 echo "[!] Explicit installation of v$LATEST_VER failed. Falling back to standard resolution..."
-                uv tool install --refresh --python 3.13 "federate[all]"
+                uv tool install --refresh --python 3.13 "federaide[all]"
             fi
         else
-            uv tool install --refresh --python 3.13 "federate[all]"
+            uv tool install --refresh --python 3.13 "federaide[all]"
         fi
     fi
 
@@ -310,17 +310,17 @@ else:
 
 # Execute Unix sequence
 if ensure_uv_unix; then
-    install_federate_unix
+    install_federaide_unix
     echo "======================================================================"
     echo " 🎉 Installation finished successfully!"
     echo "======================================================================"
-    echo " To ensure both 'uv' and 'federate' are on your shell's PATH, "
+    echo " To ensure both 'uv' and 'federaide' are on your shell's PATH, "
     echo " please restart your terminal or run:"
     echo "     source \$HOME/.local/bin/env"
     echo "     source ~/.bashrc  (or ~/.zshrc if using Zsh)"
     echo ""
     echo " To run the application:"
-    echo "     federate"
+    echo "     federaide"
     echo "======================================================================"
 else
     echo "[!] Installation could not be completed."

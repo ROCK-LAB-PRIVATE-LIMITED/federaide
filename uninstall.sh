@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-#            Federate.AI Unified Cross-Platform Uninstaller Script
+#            FEDERaiDE.AI Unified Cross-Platform Uninstaller Script
 # ==============================================================================
 # Supported Platforms:
 # - macOS (Intel & Apple Silicon)
@@ -11,7 +11,7 @@
 set -e
 
 echo "======================================================================"
-echo "          Federate.AI Universal uv-Based Uninstaller                   "
+echo "          FEDERaiDE.AI Universal uv-Based Uninstaller                   "
 echo "======================================================================"
 
 # 1. Platform and Shell Detection
@@ -41,13 +41,13 @@ if [ "$IS_WINDOWS_BASH" = true ]; then
     
     # Delegate to PowerShell to remove only the executable environment
     powershell.exe -ExecutionPolicy Bypass -Command "
-        Write-Host '[*] Uninstalling Federate executable via uv...' -ForegroundColor Cyan
+        Write-Host '[*] Uninstalling FEDERaiDE executable via uv...' -ForegroundColor Cyan
         if (Get-Command uv -ErrorAction SilentlyContinue) {
-            uv tool uninstall federate
+            uv tool uninstall federaide
         } else {
             Write-Host '[!] uv command not found. Performing manual tool environment purge...' -ForegroundColor Yellow
-            \$uvToolPath = Join-Path \$env:USERPROFILE 'AppData\Roaming\uv\tools\federate'
-            \$uvBinPath = Join-Path \$env:USERPROFILE '.local\bin\federate.exe'
+            \$uvToolPath = Join-Path \$env:USERPROFILE 'AppData\Roaming\uv\tools\federaide'
+            \$uvBinPath = Join-Path \$env:USERPROFILE '.local\bin\federaide.exe'
             if (Test-Path \$uvToolPath) { Remove-Item -Recurse -Force \$uvToolPath }
             if (Test-Path \$uvBinPath) { Remove-Item -Force \$uvBinPath }
         }
@@ -62,23 +62,23 @@ fi
 # 3. Unix-Based Uninstallation (Linux, macOS, Termux, WSL)
 # Remove only the uv-managed tool environment and binaries
 if command -v uv &> /dev/null; then
-    echo "[*] Removing Federate executable and virtual environments via uv..."
-    uv tool uninstall federate || true
+    echo "[*] Removing FEDERaiDE executable and virtual environments via uv..."
+    uv tool uninstall federaide || true
 else
     echo "[!] 'uv' command not found on PATH."
     echo "[*] Performing direct filesystem purge of the isolated tool environment..."
     
     # Direct filesystem fallback: Purge standard tool and symlink directories
     # to guarantee uninstallation even if uv was deleted or path is broken
-    rm -f "$HOME/.local/bin/federate" || true
+    rm -f "$HOME/.local/bin/federaide" || true
     
     # Remove from standard Linux/Termux and macOS uv directories
-    rm -rf "$HOME/.local/share/uv/tools/federate" || true
-    rm -rf "$HOME/Library/Application Support/uv/tools/federate" || true
+    rm -rf "$HOME/.local/share/uv/tools/federaide" || true
+    rm -rf "$HOME/Library/Application Support/uv/tools/federaide" || true
 fi
 
 echo "======================================================================"
-echo " 🎉 Federate.AI has been successfully uninstalled."
+echo " 🎉 FEDERaiDE.AI has been successfully uninstalled."
 echo " Note: Your local configuration databases, models, and workspaces "
-echo " in ~/.federate and your workspace folders have been preserved."
+echo " in ~/.federaide and your workspace folders have been preserved."
 echo "======================================================================"

@@ -1,6 +1,6 @@
 # update.ps1
 # ==============================================================================
-#            Federate Native Windows PowerShell Updater Script
+#            FEDERaiDE Native Windows PowerShell Updater Script
 # ==============================================================================
 param(
     [switch]$Force
@@ -9,7 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "          Federate Universal uv-Based Updater                          " -ForegroundColor Cyan
+Write-Host "          FEDERaiDE Universal uv-Based Updater                          " -ForegroundColor Cyan
 Write-Host "======================================================================" -ForegroundColor Cyan
 
 # 1. Ensure uv is on the path for this session
@@ -25,13 +25,13 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # 2. Get current installed version
 $installedVer = $null
 $toolList = (uv tool list 2>$null) -join "`n"
-if ($toolList -match 'federate\s+v([\d\.]+)') {
+if ($toolList -match 'federaide\s+v([\d\.]+)') {
     $installedVer = $Matches[1]
 }
 
 if (-not $installedVer) {
     try {
-        $installedVer = python -c "import importlib.metadata; print(importlib.metadata.version('federate'))" 2>$null
+        $installedVer = python -c "import importlib.metadata; print(importlib.metadata.version('federaide'))" 2>$null
         $installedVer = $installedVer.Trim()
     } catch {}
 }
@@ -48,7 +48,7 @@ Write-Host "[*] Querying PyPI for the latest version..." -ForegroundColor Yellow
 function Get-PyPiVersion {
     try {
         $cb = Get-Random -Minimum 1 -Maximum 1000000
-        $url = "https://pypi.org/pypi/federate/json?cb=$cb"
+        $url = "https://pypi.org/pypi/federaide/json?cb=$cb"
         $response = Invoke-RestMethod -Uri $url -TimeoutSec 10 -Headers @{"User-Agent"="Mozilla/5.0"}
         return $response.info.version
     } catch {
@@ -89,16 +89,16 @@ if ($installedVer -and $latestVer -and ($installedVer -eq $latestVer)) {
 
 if ($upToDate -and -not $Force) {
     Write-Host "======================================================================" -ForegroundColor Green
-    Write-Host " ℹ️ Federate is already up-to-date (v$installedVer)." -ForegroundColor Green
+    Write-Host " ℹ️ FEDERaiDE is already up-to-date (v$installedVer)." -ForegroundColor Green
     Write-Host " If you want to force-reinstall or refresh the installation, please run:" -ForegroundColor Green
     Write-Host "     .\update.ps1 -Force" -ForegroundColor Green
     Write-Host "======================================================================" -ForegroundColor Green
     exit 0
 }
 
-Write-Host "[*] Upgrading Federate on standardized Python 3.13..." -ForegroundColor Yellow
-uv tool install --upgrade --refresh --python 3.13 "federate[audio,ide,vision]"
+Write-Host "[*] Upgrading FEDERaiDE on standardized Python 3.13..." -ForegroundColor Yellow
+uv tool install --upgrade --refresh --python 3.13 "federaide[audio,ide,vision]"
 
 Write-Host "======================================================================" -ForegroundColor Green
-Write-Host " 🎉 Federate has been successfully updated!" -ForegroundColor Green
+Write-Host " 🎉 FEDERaiDE has been successfully updated!" -ForegroundColor Green
 Write-Host "======================================================================" -ForegroundColor Green

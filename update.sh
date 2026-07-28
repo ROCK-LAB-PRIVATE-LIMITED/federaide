@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-#            Federate Unified Cross-Platform Updater Script
+#            FEDERaiDE Unified Cross-Platform Updater Script
 # ==============================================================================
 # Supported Platforms:
 # - macOS (Intel & Apple Silicon)
@@ -11,7 +11,7 @@
 set -e
 
 echo "======================================================================"
-echo "          Federate Universal uv-Based Updater                          "
+echo "          FEDERaiDE Universal uv-Based Updater                          "
 echo "======================================================================"
 
 # 1. Platform and Shell Detection
@@ -64,14 +64,14 @@ done
 # 4. Check for uv installation
 if ! command -v uv &> /dev/null; then
     echo "[!] 'uv' command not detected on your environment PATH."
-    echo "[*] Please run the installer script (install.sh) first to initialize uv and Federate."
+    echo "[*] Please run the installer script (install.sh) first to initialize uv and FEDERaiDE."
     exit 1
 fi
 
 # 5. Determine installed version
-INSTALLED_VER=$(python3 -c "import importlib.metadata; print(importlib.metadata.version('federate'))" 2>/dev/null || \
-                python3 -c "import pkg_resources; print(pkg_resources.get_distribution('federate').version)" 2>/dev/null || \
-                uv tool list 2>/dev/null | grep -E '^federate ' | awk '{print $2}' | tr -d 'v' || echo "")
+INSTALLED_VER=$(python3 -c "import importlib.metadata; print(importlib.metadata.version('federaide'))" 2>/dev/null || \
+                python3 -c "import pkg_resources; print(pkg_resources.get_distribution('federaide').version)" 2>/dev/null || \
+                uv tool list 2>/dev/null | grep -E '^federaide ' | awk '{print $2}' | tr -d 'v' || echo "")
 
 if [ -n "$INSTALLED_VER" ]; then
     echo "[*] Installed Version: v$INSTALLED_VER"
@@ -85,7 +85,7 @@ LATEST_VER=$(python3 -c "
 import urllib.request, json, time, random
 def get_pypi_version():
     try:
-        url = f'https://pypi.org/pypi/federate/json?cb={random.randint(1, 1000000)}'
+        url = f'https://pypi.org/pypi/federaide/json?cb={random.randint(1, 1000000)}'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode('utf-8'))
@@ -128,7 +128,7 @@ fi
 
 if [ "$UP_TO_DATE" = true ] && [ "$FORCE" = false ]; then
     echo "======================================================================"
-    echo " ℹ️ Federate is already up-to-date (v$INSTALLED_VER)."
+    echo " ℹ️ FEDERaiDE is already up-to-date (v$INSTALLED_VER)."
     echo " If you want to force-reinstall or refresh the installation, please run:"
     echo "     ./update.sh --force"
     echo "======================================================================"
@@ -165,13 +165,13 @@ EOF
     echo "    [*] Building platform-agnostic universal wheel for sqlite-vec..."
     (cd "$BUILD_DIR" && uv build --wheel)
     
-    TYRES_DIR="${TMPDIR:-/tmp}/federate_tyres"
+    TYRES_DIR="${TMPDIR:-/tmp}/federaide_tyres"
     rm -rf "$TYRES_DIR" && mkdir -p "$TYRES_DIR"
     cp "$BUILD_DIR/dist/"*.whl "$TYRES_DIR/" 2>/dev/null || true
 
     export ANDROID_API_LEVEL=19
 
-    echo "[*] Upgrading Federate on Python 3.13..."
+    echo "[*] Upgrading FEDERaiDE on Python 3.13..."
     uv tool install --upgrade --refresh --python 3.13 \
         --find-links "$TYRES_DIR" \
         --find-links "https://geoarkadeep.github.io/Tyres/" \
@@ -179,7 +179,7 @@ EOF
         --with tree-sitter \
         --with keyrings.alt \
         --with weasyprint \
-        "federate"
+        "federaide"
 
     unset UV_FIND_LINKS
     rm -rf "$BUILD_DIR"
@@ -187,11 +187,11 @@ EOF
 
 elif [ "$OS_NAME" = "Linux" ] && [ "$IS_ARM" = true ]; then
     echo "[*] Linux ARM64 (aarch64) environment detected."
-    TYRES_DIR="${TMPDIR:-/tmp}/federate_tyres"
+    TYRES_DIR="${TMPDIR:-/tmp}/federaide_tyres"
     rm -rf "$TYRES_DIR" && mkdir -p "$TYRES_DIR"
     
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"
-    REPO_NAME="Federate"
+    REPO_NAME="FEDERaiDE"
     BRANCH="main"
     RAW_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/tyres"
     
@@ -211,12 +211,12 @@ elif [ "$OS_NAME" = "Linux" ] && [ "$IS_ARM" = true ]; then
     done
 
     if [ "$DOWNLOAD_SUCCESS" = true ]; then
-        echo "[*] Upgrading Federate with full extras [all] using pre-compiled wheels on Python 3.13..."
-        uv tool install --upgrade --refresh --python 3.13 --find-links "$TYRES_DIR" "federate[all]"
+        echo "[*] Upgrading FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
+        uv tool install --upgrade --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
     else
         echo "[!] Pre-compiled wheels not found."
         echo "[!] Falling back to basic upgrade to prevent compilation hangs."
-        uv tool install --upgrade --refresh --python 3.13 federate
+        uv tool install --upgrade --refresh --python 3.13 federaide
     fi
     rm -rf "$TYRES_DIR"
 
@@ -247,7 +247,7 @@ else
                     touch "$profile"
                     if ! grep -q "DYLD_FALLBACK_LIBRARY_PATH" "$profile"; then
                         echo "" >> "$profile"
-                        echo "# Federate.AI WeasyPrint library path" >> "$profile"
+                        echo "# FEDERaiDE.AI WeasyPrint library path" >> "$profile"
                         echo "export DYLD_FALLBACK_LIBRARY_PATH=\"$BREW_LIB_DIR:\$DYLD_FALLBACK_LIBRARY_PATH\"" >> "$profile"
                         echo "[*] Configured DYLD_FALLBACK_LIBRARY_PATH in $profile"
                     fi
@@ -258,10 +258,10 @@ else
             echo "    brew install pango cairo glib gobject-introspection"
         fi
     fi
-    echo "[*] Upgrading Federate on Python 3.13..."
-    uv tool install --upgrade --refresh --python 3.13 "federate[all]"
+    echo "[*] Upgrading FEDERaiDE on Python 3.13..."
+    uv tool install --upgrade --refresh --python 3.13 "federaide[all]"
 fi
 
 echo "======================================================================"
-echo " 🎉 Federate has been successfully updated!"
+echo " 🎉 FEDERaiDE has been successfully updated!"
 echo "======================================================================"
