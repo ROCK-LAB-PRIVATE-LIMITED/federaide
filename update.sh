@@ -172,7 +172,7 @@ EOF
     export ANDROID_API_LEVEL=19
 
     echo "[*] Upgrading FEDERaiDE on Python 3.13..."
-    uv tool install --upgrade --refresh --python 3.13 \
+    uv tool install --force --upgrade --refresh --python 3.13 \
         --find-links "$TYRES_DIR" \
         --find-links "https://geoarkadeep.github.io/Tyres/" \
         --with pycryptodome \
@@ -212,11 +212,11 @@ elif [ "$OS_NAME" = "Linux" ] && [ "$IS_ARM" = true ]; then
 
     if [ "$DOWNLOAD_SUCCESS" = true ]; then
         echo "[*] Upgrading FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
-        uv tool install --upgrade --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+        uv tool install --force --upgrade --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
     else
         echo "[!] Pre-compiled wheels not found."
         echo "[!] Falling back to basic upgrade to prevent compilation hangs."
-        uv tool install --upgrade --refresh --python 3.13 federaide
+        uv tool install --force --upgrade --refresh --python 3.13 federaide
     fi
     rm -rf "$TYRES_DIR"
 
@@ -259,7 +259,7 @@ else
         fi
     fi
     echo "[*] Upgrading FEDERaiDE on Python 3.13..."
-    uv tool install --upgrade --refresh --python 3.13 "federaide[all]"
+    uv tool install --force --upgrade --refresh --python 3.13 "federaide[all]"
 fi
 
 echo "======================================================================"

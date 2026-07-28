@@ -97,7 +97,7 @@ if ($upToDate -and -not $Force) {
 }
 
 Write-Host "[*] Upgrading FEDERaiDE on standardized Python 3.13..." -ForegroundColor Yellow
-uv tool install --upgrade --refresh --python 3.13 "federaide[audio,ide,vision]"
+uv tool install --force --upgrade --refresh --python 3.13 "federaide[audio,ide,vision]"
 
 Write-Host "======================================================================" -ForegroundColor Green
 Write-Host " 🎉 FEDERaiDE has been successfully updated!" -ForegroundColor Green

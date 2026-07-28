@@ -55,7 +55,7 @@ if [ "$IS_WINDOWS_BASH" = true ]; then
             \$env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
         }
         Write-Host '[*] Installing FEDERaiDE on standardized Python 3.13 environment...' -ForegroundColor Cyan
-        uv tool install --refresh --python 3.13 'federaide[all]'
+        uv tool install --force --refresh --python 3.13 'federaide[all]'
     "
     echo "======================================================================"
     echo " 🎉 Windows installation complete!"
@@ -104,7 +104,7 @@ ensure_uv_unix() {
     if ! command -v uv &> /dev/null; then
         echo "[!] uv installation could not be verified automatically."
         echo "[*] Please install uv manually (https://docs.astral.sh/uv/) and run:"
-        echo "    uv tool install --refresh federaide[all]"
+        echo "    uv tool install --force --refresh federaide[all]"
         return 1
     fi
 
@@ -167,7 +167,7 @@ EOF
         export ANDROID_API_LEVEL=19
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
-            uv tool install --refresh --python 3.13 \
+            uv tool install --force --refresh --python 3.13 \
                 --find-links "$TYRES_DIR" \
                 --find-links "https://geoarkadeep.github.io/Tyres/" \
                 --with pycryptodome \
@@ -178,7 +178,7 @@ EOF
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
-            uv tool install --refresh --python 3.13 \
+            uv tool install --force --refresh --python 3.13 \
                 --with pycryptodome \
                 --with tree-sitter \
                 --with tree-sitter-python \
@@ -216,11 +216,11 @@ EOF
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
-            uv tool install --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
-            uv tool install --refresh --python 3.13 federaide
+            uv tool install --force --refresh --python 3.13 federaide
         fi
 
     else
@@ -295,12 +295,12 @@ else:
         echo "[*] Installing FEDERaiDE with all features on standardized Python 3.13 environment..."
         if [ -n "$LATEST_VER" ]; then
             echo "[*] Target version resolved: v$LATEST_VER"
-            if ! uv tool install --refresh --python 3.13 "federaide[all]==$LATEST_VER"; then
+            if ! uv tool install --force --refresh --python 3.13 "federaide[all]==$LATEST_VER"; then
                 echo "[!] Explicit installation of v$LATEST_VER failed. Falling back to standard resolution..."
-                uv tool install --refresh --python 3.13 "federaide[all]"
+                uv tool install --force --refresh --python 3.13 "federaide[all]"
             fi
         else
-            uv tool install --refresh --python 3.13 "federaide[all]"
+            uv tool install --force --refresh --python 3.13 "federaide[all]"
         fi
     fi
 
