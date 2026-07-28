@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "federate"
-version = "1.0.38"
+name = "federaide"
+version = "1.0.39"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "Apache Software License"}
@@ -95,9 +95,9 @@ federate = "federate.app:main"
 fedide = "federate.textIDE:main"
 
 [project.urls]
-Homepage = "https://federate.rocklab.in"
-Repository = "https://github.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai"
-Issues = "https://github.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/issues"
+Homepage = "https://federaide.rocklab.in"
+Repository = "https://github.com/ROCK-LAB-PRIVATE-LIMITED/federaide"
+Issues = "https://github.com/ROCK-LAB-PRIVATE-LIMITED/federaide/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
