@@ -483,16 +483,31 @@ class UpdateModal(ModalScreen[str]):
         import threading
         def _run_external_update():
             import time, os, sys, subprocess
-            time.sleep(1.0)
-            print('\033[?25h', end='', flush=True)
+            time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
+            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
             
             if os.name == "nt" or sys.platform == "win32":
-                cmd = 'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \\"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.ps1 | iex; Write-Host \\\'Update complete. You can safely close this window.\\\'; Start-Sleep -Seconds 10\\""'
+                # Windows PowerShell execution pointing to federate.ai repository
+                ps_cmd = (
+                    "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.ps1 | iex } "
+                    "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex }; "
+                    "Write-Host 'Update process finished. You can safely close this window.'; "
+                    "Start-Sleep -Seconds 10"
+                )
+                cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
                 subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
                 os._exit(0)
             else:
-                os.execvp("bash", ["bash", "-c", "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.sh | bash; exec bash"])
+                # Unix Bash execution pointing to federate.ai repository
+                sh_cmd = (
+                    "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; "
+                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.sh | bash) || "
+                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash); "
+                    "exec bash"
+                )
+                os.execvp("bash", ["bash", "-c", sh_cmd])
 
+        # Run in a non-daemon thread so it survives the main thread exit long enough to trigger execvp/Popen
         threading.Thread(target=_run_external_update, daemon=False).start()
         self.app.exit()
 
