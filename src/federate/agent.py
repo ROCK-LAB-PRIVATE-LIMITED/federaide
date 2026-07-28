@@ -1277,9 +1277,9 @@ def get_installed_version() -> str:
             return "0.9.27"
 
 def execute_system_update() -> tuple[bool, str]:
-    import subprocess, sys, os, shutil
+    import subprocess, sys, os
     
-    # 1. WINDOWS: Stream update script directly from GitHub
+    # 1. WINDOWS: Stream official update script directly from GitHub
     if os.name == "nt" or sys.platform == "win32":
         for script in ["update.ps1", "install.ps1"]:
             ps_cmd = f"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | iex"
@@ -1290,8 +1290,9 @@ def execute_system_update() -> tuple[bool, str]:
                     return True, res.stdout
             except Exception:
                 pass
+        return False, "Failed to execute official Windows update script from GitHub."
 
-    # 2. UNIX (macOS / Linux / Termux): Stream update script directly from GitHub
+    # 2. UNIX (macOS / Linux / Termux): Stream official update script directly from GitHub
     else:
         for script in ["update.sh", "install.sh"]:
             sh_cmd = f"curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | bash"
@@ -1302,32 +1303,7 @@ def execute_system_update() -> tuple[bool, str]:
                     return True, res.stdout
             except Exception:
                 pass
-
-    # 3. Direct uv tool fallback
-    uv_path = shutil.which("uv")
-    if not uv_path:
-        user_bin_uv = os.path.join(os.path.expanduser("~"), ".local", "bin", "uv" + (".exe" if os.name == "nt" else ""))
-        if os.path.exists(user_bin_uv):
-            uv_path = user_bin_uv
-
-    if uv_path:
-        try:
-            cmd = [uv_path, "tool", "install", "--upgrade", "--refresh", "federate[all]"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if res.returncode == 0:
-                return True, res.stdout
-        except Exception:
-            pass
-
-    # 4. Direct pip fallback
-    try:
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "federate[all]"]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if res.returncode == 0:
-            return True, res.stdout
-        return False, res.stderr or res.stdout
-    except Exception as e:
-        return False, str(e)
+        return False, "Failed to execute official Unix update script from GitHub."
 
 SLASH_COMMAND_DESCS = {
     "/tools": "List status of all available AI tools",
