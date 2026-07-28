@@ -46,7 +46,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 }
 
 Write-Host "======================================================================" -ForegroundColor Green
-Write-Host " 🎉 FEDERaiDE.AI has been successfully uninstalled." -ForegroundColor Green
+Write-Host " 🎉 FEDERaiDE has been successfully uninstalled." -ForegroundColor Green
 Write-Host " Note: Your local configuration databases, models, and workspaces " -ForegroundColor Green
 Write-Host " have been preserved." -ForegroundColor Green
 Write-Host "======================================================================" -ForegroundColor Green
