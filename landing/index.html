@@ -10,15 +10,17 @@
     <meta name="author" content="Rock Lab Private Limited">
     <meta name="theme-color" content="#060709">
     <link rel="canonical" href="https://federate.rocklab.in">
-    <link rel="icon" type="image/png" href="./assets/federate_logo.webp">
-    <link rel="apple-touch-icon" href="./assets/federate_logo.webp">
+    <!-- Favicon & Icons (Google Search SERP + Browser Tabs) -->
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="192x192" href="./assets/federate_logo.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./assets/federate_logo.png">
 
     <!-- Preconnect Hints for Core Web Vitals Optimization -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- Preload the critical display font to prevent text layout shifting (FOUT) -->
     <link rel="preload" href="https://fonts.gstatic.com/s/michroma/v21/PN_zRfy9qWD8fEagAPg9pTn5_PDb.woff2" as="font" type="font/woff2" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Space+Grotesk:wght@300;400;700&family=Space+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 
     <!-- Open Graph / Social Media Metadata -->
     <meta property="og:type" content="website">
@@ -26,7 +28,10 @@
     <meta property="og:title" content="Federate | Multimodal Multiagent Orchestration Harness">
     <meta property="og:description" content="Multimodal multiagent orchestration harness and universal automation system. Turn your computer or phone into a home for autonomous AI agents with zero coding required.">
     <meta property="og:url" content="https://federate.rocklab.in">
-    <meta property="og:image" content="https://federate.rocklab.in/assets/federate_logo.webp">
+    <meta property="og:image" content="https://federate.rocklab.in/assets/federate_logo.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="512">
+    <meta property="og:image:height" content="512">
     <meta property="og:image:alt" content="Federate AI Agent Team Workspace Interface">
     <meta property="og:locale" content="en_US">
 
@@ -34,7 +39,7 @@
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Federate | P2P Multimodal Agent Orchestration Harness">
     <meta name="twitter:description" content="P2P multimodal agent orchestration harness and universal automation system. Turn your computer or phone into a home for autonomous AI agents with zero coding required.">
-    <meta name="twitter:image" content="https://federate.rocklab.in/assets/federate_logo.webp">
+    <meta name="twitter:image" content="https://federate.rocklab.in/assets/federate_logo.png">
     <meta name="twitter:image:alt" content="Federate AI Agent Team Workspace Interface">
 
     <!-- Structured Data (JSON-LD) for Search Engines -->
@@ -46,9 +51,9 @@
           "@type": "SoftwareApplication",
           "@id": "https://federate.rocklab.in/#software",
           "name": "Federate - P2P Agentic Harness",
-          "softwareVersion": "1.0.16",
+          "softwareVersion": "1.0.26",
           "url": "https://federate.rocklab.in",
-          "image": "https://federate.rocklab.in/assets/federate_logo.webp",
+          "image": "https://federate.rocklab.in/assets/federate_logo.png",
           "operatingSystem": "Windows, macOS, Linux, Android",
           "applicationCategory": "DeveloperApplication",
           "description": "Federate is a peer-to-peer agentic harness that turns your computer or phone into a home for autonomous AI agents that collaborate and handle your daily tasks. Zero coding required.",
@@ -126,7 +131,7 @@
             --brand-teal: #3ddbd9;    /* Electric Cyan */
             --brand-green: #8cc84b;   /* Matrix Green */
             
-            --font-main: 'Space Grotesk', sans-serif;
+            --font-main: 'Space Mono', monospace;
             --font-mono: 'Space Mono', monospace;
             --font-display: 'Michroma', sans-serif;
         }
@@ -272,28 +277,45 @@
         }
 
         /* Hero Section */
-        #hero { text-align: center; padding-top: 1rem; padding-bottom: 4rem; }
+        #hero { 
+            text-align: center; 
+            padding-top: 0.5rem; 
+            padding-bottom: 1rem; 
+            min-height: calc(100vh - 3rem);
+            height: calc(100dvh - 3rem);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #hero h1 { margin-bottom: clamp(0.5rem, 1.5vh, 1.5rem); }
         .hero-actions { display: flex; justify-content: center; gap: 1.2rem; margin-top: 2.5rem; }
         
         .hero-image-wrapper { 
-            margin-top: 3rem; 
+            margin-top: clamp(0.8rem, 2vh, 2rem); 
             position: relative; 
             border-radius: 12px;
-            padding: 1px;
-            background: linear-gradient(180deg, var(--brand-yellow) 0%, var(--brand-red) 100%);
-            box-shadow: 0 30px 70px rgba(0,0,0,0.8);
             width: 100%;
             max-width: 800px;
             margin-left: auto;
             margin-right: auto;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         
         .hero-img {
-            width: 100%;
+            width: auto;
             height: auto; 
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
             display: block; 
             border-radius: 11px;
             background: var(--bg-base);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         /* --- Elegant Showcase Block System --- */
@@ -383,6 +405,129 @@
         }
         .card p { margin-bottom: 0; font-size: 1.05rem; }
 
+        /* Hero Interactive Hover Install Transition (Pinned Button + Horizontal Scroll + Zero Vertical Shift) */
+        .hero-install-container {
+            position: relative;
+            width: 100%;
+            max-width: 420px;
+            height: 50px; /* Strict height locks vertical position to eliminate vertical CLS */
+            margin: clamp(0.5rem, 1.5vh, 1.25rem) auto 0 auto;
+            transition: max-width 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                        opacity 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.1), 
+                        transform 0.8s cubic-bezier(0.175, 0.885, 0.32, 1.1);
+            outline: none;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .hero-install-container:hover,
+        .hero-install-container:focus-within {
+            max-width: clamp(300px, 92vw, 780px); /* Smooth horizontal expansion bounded to screen width */
+            transition-delay: 0s !important;
+        }
+
+        .install-btn-preview {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--bg-surface);
+            border: 1px solid var(--brand-orange);
+            color: var(--brand-orange);
+            padding: 0 0.8rem;
+            border-radius: 10px;
+            font-family: var(--font-mono);
+            font-size: clamp(0.72rem, 3.2vw, 0.88rem);
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: opacity 0.25s ease, border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
+            box-shadow: 0 4px 20px rgba(233, 132, 53, 0.15);
+            white-space: nowrap;
+            z-index: 2;
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .install-btn-preview:hover {
+            border-color: var(--brand-yellow);
+            color: var(--brand-yellow);
+            box-shadow: 0 0 25px rgba(242, 168, 19, 0.25);
+        }
+
+        .hero-install-container:hover .install-btn-preview,
+        .hero-install-container:focus-within .install-btn-preview {
+            opacity: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .hero-terminal-reveal {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            margin-bottom: 0 !important;
+            padding: 0 0.6rem 0 1rem !important;
+            display: flex !important;
+            flex-direction: row !important; /* Overrides mobile media query column stack */
+            align-items: center !important;
+            justify-content: space-between !important;
+            gap: 0.6rem !important;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.25s ease 0.05s, border-color 0.3s ease;
+            border-color: var(--brand-orange) !important;
+            box-shadow: 0 0 25px rgba(233, 132, 53, 0.15);
+            border-radius: 10px;
+            box-sizing: border-box;
+            z-index: 1;
+        }
+
+        .hero-install-container:hover .hero-terminal-reveal,
+        .hero-install-container:focus-within .hero-terminal-reveal {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            z-index: 2;
+        }
+
+        .hero-terminal-reveal .code-content {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            white-space: nowrap !important;
+            overflow-x: auto !important;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+            line-height: 1.2;
+        }
+
+        .hero-terminal-reveal #hero-copy-btn {
+            flex-shrink: 0 !important; /* Pinned strictly to right edge, never shrinks or wraps */
+            align-self: center !important;
+        }
+
+        .hero-terminal-reveal .code-content::-webkit-scrollbar {
+            height: 3px;
+        }
+
+        .hero-terminal-reveal .code-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+
+        /* Prevent accidental text selection during scrolling */
+        a, button, img, .hero-install-container, .btn, .copy-btn {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
         /* Installation Terminal Blocks */
         .terminal-block {
             background: #08090c; border-radius: 10px; padding: 1.4rem;
@@ -453,10 +598,29 @@
                 <p class="reveal-up delay-2" style="max-width: 780px; margin: 0 auto;">
                     Federate is a multi-agent harness for your Mac, PC or Android. The agents talk to each other, do your research, organize your files, and automate your boring tasks. Absolutely zero coding required.
                 </p>
+
+                <!-- Hover-Expanding Install Button to Terminal Command Bar -->
+                <div id="hero-install-box" class="reveal-up delay-2 hero-install-container" tabindex="0">
+                    <!-- Default State: Button View -->
+                    <div class="install-btn-preview">
+                        <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 3h20v18H2V3zm2 2v14h16V5H4zm3 3l4 4-4 4 1.41 1.41L12.83 12 8.41 7.59 7 8zm6 7h5v2h-5v-2z"/></svg>
+                        <span>Install with a single terminal command</span>
+                    </div>
+
+                    <!-- Hover State: Command Bar View -->
+                    <div class="terminal-block hero-terminal-reveal">
+                        <div class="code-content" style="white-space: nowrap; overflow-x: auto;">
+                            <span id="hero-cmd-text" style="color:#d4d4d4; font-size: clamp(0.65rem, 1.35vw, 0.8rem);">curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash</span>
+                        </div>
+                        <button id="hero-copy-btn" class="copy-btn" aria-label="Copy install command" style="padding: 0.6rem; align-self: center;" data-cmd="curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash" onclick="copyCommand(this)">
+                            <svg aria-hidden="true" focusable="false" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v40c0 30.9-25.1 56-56 56H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></svg>
+                        </button>
+                    </div>
+                </div>
                 
                 <div class="hero-image-wrapper reveal-up delay-3">
                     <!-- Desktop Screenshot: Large and broad -->
-                    <img src="./assets/federate2.webp" width="1920" height="1080" alt="Federate Desktop Workspace Interface - AI Agent Management TUI" class="hero-img" fetchpriority="high" decoding="async">
+                    <img src="./assets/federate2.webp" width="1920" height="1080" alt="Federate Desktop Workspace Interface - AI Agent Management TUI" class="hero-img" loading="eager" fetchpriority="high" decoding="async">
                 </div>
             </section>
 
@@ -633,31 +797,83 @@
     </div>
 
     <script>
-        // High-Reliability Clipboard Copy
+        // High-Reliability & Cross-Browser Clipboard Copy with Fallback & Animations
+        async function writeToClipboard(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+            } else {
+                // Fallback for HTTP / local environments or unsupported contexts
+                const textArea = document.createElement("textarea");
+                textArea.value = text;
+                textArea.style.position = "fixed";
+                textArea.style.left = "-999999px";
+                textArea.style.top = "-999999px";
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    const successful = document.execCommand('copy');
+                    if (!successful) throw new Error('execCommand failed');
+                } finally {
+                    textArea.remove();
+                }
+            }
+        }
+
         function copyCommand(btn) {
             const textToCopy = btn.getAttribute('data-cmd');
-            
-            navigator.clipboard.writeText(textToCopy).then(() => {
+            if (!textToCopy) return;
+
+            writeToClipboard(textToCopy).then(() => {
                 const span = btn.querySelector('span');
-                const originalText = span.innerText;
-                
-                span.innerText = 'Copied!';
+                const originalText = span ? span.innerText : null;
+
+                // Update text if span exists (text buttons)
+                if (span) {
+                    span.innerText = 'Copied!';
+                }
+
+                // Apply green visual state & pulse animation (works for both text and icon-only buttons)
                 btn.style.borderColor = 'var(--brand-green)';
                 btn.style.color = 'var(--brand-green)';
-                
+                btn.style.transform = 'scale(1.12)';
+
                 setTimeout(() => {
-                    span.innerText = originalText;
+                    if (span && originalText !== null) {
+                        span.innerText = originalText;
+                    }
                     btn.style.borderColor = '';
                     btn.style.color = '';
+                    btn.style.transform = '';
                 }, 2000);
             }).catch(err => {
                 console.error('Clipboard copy failed: ', err);
-                alert("Could not copy to clipboard. Please select the text manually.");
+                alert("Could not copy automatically. Please select and copy the text manually.");
             });
+        }
+
+        // Vanilla JS OS Detection & Dynamic Command Switcher
+        function initOSDetection() {
+            const userAgent = window.navigator.userAgent || '';
+            const platform = window.navigator.platform || '';
+            const isWindows = /win/i.test(platform) || /win/i.test(userAgent);
+
+            const winCmd = 'irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.ps1 | iex';
+            const unixCmd = 'curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash';
+
+            const cmdText = document.getElementById('hero-cmd-text');
+            const copyBtn = document.getElementById('hero-copy-btn');
+
+            if (cmdText && copyBtn) {
+                const targetCmd = isWindows ? winCmd : unixCmd;
+                cmdText.innerText = targetCmd;
+                copyBtn.setAttribute('data-cmd', targetCmd);
+            }
         }
 
         // High-Performance Intersection Observer with Absolute Pixel Hysteresis (Bi-Directional, Anti-Flicker)
         document.addEventListener('DOMContentLoaded', () => {
+            initOSDetection();
             const observerOptions = {
                 root: null,
                 rootMargin: '0px',

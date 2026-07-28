@@ -407,6 +407,91 @@ class CopyrightWarningModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class UpdateModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    UpdateModal { align: center middle; background: $background 60%; }
+    #update_dialog { width: 75; height: 80%; border: thick $primary; background: $surface; padding: 1 2; }
+    #update_notes_scroll { margin: 1 0; height: 1fr; border: round $accent; background: $boost; padding: 1 2; }
+    .update_status_msg { margin: 1 0; text-style: bold; text-align: center; }
+    .buttons { height: auto; align: right middle; margin-top: 1; }
+    .buttons Button { margin-left: 1; }
+    """
+
+    def __init__(self, current_ver: str, latest_ver: str, release_notes: str, **kwargs):
+        super().__init__(**kwargs)
+        self.current_ver = current_ver
+        self.latest_ver = latest_ver
+        self.release_notes = release_notes
+        self.is_updating = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="update_dialog"):
+            yield Label(f" Software Update Available: v{self.current_ver} ➔ v{self.latest_ver}", classes="pane_title")
+            yield Label(f"Release Notes for v{self.latest_ver}:", classes="field_label")
+            with VerticalScroll(id="update_notes_scroll"):
+                if self.release_notes:
+                    yield Static(Markdown(self.release_notes))
+                else:
+                    yield Label("[dim]No release notes available.[/dim]")
+            
+            yield Label("", id="update_status", classes="update_status_msg")
+            
+            with Horizontal(classes="buttons", id="update_btn_container"):
+                yield Button("Update Now", id="btn_update_now", variant="success")
+                yield Button("Skip Version", id="btn_skip_ver", variant="warning")
+                yield Button("Remind Later", id="btn_defer_update", variant="primary")
+                yield Button("Close", id="btn_close_update", variant="error")
+
+    def on_mount(self):
+        self.query_one("#btn_update_now").focus()
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        btn_id = event.button.id
+        if btn_id == "btn_close_update":
+            self.dismiss("close")
+        elif btn_id == "btn_defer_update":
+            self.dismiss("defer")
+        elif btn_id == "btn_skip_ver":
+            self.dismiss("skip")
+        elif btn_id == "btn_update_now":
+            self.start_update_process()
+        elif btn_id == "btn_restart_now":
+            self.dismiss("restart")
+
+    def start_update_process(self):
+        if self.is_updating:
+            return
+        self.is_updating = True
+        
+        status_lbl = self.query_one("#update_status", Label)
+        status_lbl.update("[bold yellow]⏳ Updating Federate in background... Please wait.[/bold yellow]")
+        
+        for btn in self.query("#update_btn_container Button"):
+            btn.disabled = True
+            
+        self.perform_update_worker()
+
+    @work(thread=True)
+    def perform_update_worker(self):
+        success, output = execute_system_update()
+        self.app.call_from_thread(self.on_update_finished, success, output)
+
+    def on_update_finished(self, success: bool, output: str):
+        status_lbl = self.query_one("#update_status", Label)
+        container = self.query_one("#update_btn_container")
+        container.query("*").remove()
+        
+        if success:
+            status_lbl.update("[bold green]🎉 Update installed successfully! Restart required.[/bold green]")
+            container.mount(Button("Restart Now", id="btn_restart_now", variant="success"))
+            container.mount(Button("Later", id="btn_close_update", variant="error"))
+            self.query_one("#btn_restart_now").focus()
+        else:
+            status_lbl.update(f"[bold red]❌ Update failed:[/bold red] {escape(str(output)[:150])}")
+            container.mount(Button("Close", id="btn_close_update", variant="error"))
+            self.query_one("#btn_close_update").focus()
+
 class GlobalSettingsModal(ModalScreen[str]):
     DEFAULT_CSS = """
     GlobalSettingsModal { align: center middle; background: $background 60%; }
@@ -1153,8 +1238,47 @@ class ConfigModal(ModalScreen[str]):
 # --- TEXTUAL AI UI WIDGET ---
 
 # Mapping of slash command descriptions for the table
+def get_installed_version() -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("federate")
+    except Exception:
+        try:
+            import federate
+            return getattr(federate, "__version__", "0.9.27")
+        except Exception:
+            return "0.9.27"
+
+def execute_system_update() -> tuple[bool, str]:
+    import shutil, subprocess, sys, os
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        user_bin_uv = os.path.join(os.path.expanduser("~"), ".local", "bin", "uv" + (".exe" if os.name == "nt" else ""))
+        if os.path.exists(user_bin_uv):
+            uv_path = user_bin_uv
+
+    if uv_path:
+        try:
+            cmd = [uv_path, "tool", "install", "--upgrade", "--refresh", "federate[all]"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if res.returncode == 0:
+                return True, res.stdout
+        except Exception:
+            pass
+
+    try:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "federate[all]"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if res.returncode == 0:
+            return True, res.stdout
+        return False, res.stderr or res.stdout
+    except Exception as e:
+        return False, str(e)
+
 SLASH_COMMAND_DESCS = {
     "/tools": "List status of all available AI tools",
+    "/update": "Check for software updates and view release notes",
+    "/version": "Show currently installed Federate version",
     "/arm": "Toggle ARM/SAFE (Execute/Plan) mode",
     "/config": "Open active agent configuration",
     "/safe": "Lock system to SAFE (Plan, read-only) mode",
@@ -1998,7 +2122,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
     from rich.table import Table
     from rich.rule import Rule
 
-    title_text = Text.from_markup("[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERATE[/bold #da6057]\n\u00a9 Rock Lab Private Limited", justify="center")
+    title_text = Text.from_markup(f"[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERATE[/bold #da6057] [dim]v{get_installed_version()}[/dim]\n\u00a9 Rock Lab Private Limited", justify="center")
     divider = Rule(style="#f2a813")
 
     table = Table(
@@ -2297,6 +2421,7 @@ class AIAgentView(Vertical):
         self.spinner_idx = 0
         self.set_interval(0.1, self.tick_spinners)
         self.set_interval(60.0, self.tick_scheduler)
+        self.check_for_updates_bg(manual=False)
 
     def select_agent(self, name: str) -> bool:
         agent = self.agent_manager.get_agent(name)
@@ -3841,6 +3966,121 @@ class AIAgentView(Vertical):
             self.update_status_bar()
         except Exception:
             pass
+
+    @work(thread=True)
+    def check_for_updates_bg(self, manual: bool = False):
+        import urllib.request, json
+        from toolbox import load_global_settings, save_global_settings
+        
+        installed_ver = get_installed_version()
+        latest_ver = None
+        release_notes = ""
+        
+        try:
+            url = "https://pypi.org/pypi/federate/json"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Federate-App'})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                pypi_data = json.loads(resp.read().decode('utf-8'))
+                latest_ver = pypi_data.get("info", {}).get("version")
+        except Exception as e:
+            if manual:
+                self.log_to_ui(f"[bold red]Failed to check for updates:[/bold red] {e}")
+            return
+
+        if not latest_ver:
+            if manual:
+                self.log_to_ui("[bold red]Could not resolve latest version from PyPI.[/bold red]")
+            return
+
+        def ver_tuple(v):
+            return tuple(int(x) for x in re.sub(r'[^0-9.]', '', v).split('.') if x.isdigit())
+
+        is_newer = ver_tuple(latest_ver) > ver_tuple(installed_ver)
+
+        if not is_newer:
+            if manual:
+                self.log_to_ui(f"[bold green]Federate is up-to-date![/bold green] Installed version: v{installed_ver}")
+            return
+
+        settings = load_global_settings()
+        skipped = settings.get("skipped_version", "")
+        if not manual and skipped == latest_ver:
+            return
+
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; FederateApp/1.0)'}
+        
+        # 1. Fetch release list to build cumulative update notes across all intermediate versions
+        try:
+            gh_list_url = "https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases?per_page=100"
+            req_gh_list = urllib.request.Request(gh_list_url, headers=headers)
+            with urllib.request.urlopen(req_gh_list, timeout=8) as resp_gh_list:
+                releases_data = json.loads(resp_gh_list.read().decode('utf-8'))
+                
+            cumulative_notes = []
+            if isinstance(releases_data, list):
+                for rel in releases_data:
+                    tag = rel.get("tag_name", "")
+                    tag_ver = ver_tuple(tag)
+                    if tag_ver > ver_tuple(installed_ver) and tag_ver <= ver_tuple(latest_ver):
+                        body = rel.get("body", "").strip()
+                        if body:
+                            rel_title = rel.get("name") or f"Release {tag}"
+                            cumulative_notes.append(f"## {rel_title}\n\n{body}")
+            
+            if cumulative_notes:
+                release_notes = "\n\n---\n\n".join(cumulative_notes)
+        except Exception:
+            pass
+
+        # 2. Single-tag fallback if full release list lookup fails
+        if not release_notes:
+            for endpoint in [
+                f"https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases/tags/v{latest_ver}",
+                f"https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases/tags/{latest_ver}",
+                "https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases/latest"
+            ]:
+                try:
+                    req_gh = urllib.request.Request(endpoint, headers=headers)
+                    with urllib.request.urlopen(req_gh, timeout=8) as resp_gh:
+                        gh_data = json.loads(resp_gh.read().decode('utf-8'))
+                        body = gh_data.get("body", "")
+                        if body and body.strip():
+                            release_notes = body
+                            break
+                except Exception:
+                    continue
+
+        if not release_notes or not release_notes.strip():
+            release_notes = f"## Release v{latest_ver}\n\nA new update for Federate (**v{latest_ver}**) is available with bug fixes and performance improvements."
+
+        def show_modal():
+            def handle_update_result(action: str):
+                if action == "restart":
+                    self.restart_application()
+                elif action == "skip":
+                    st = load_global_settings()
+                    st["skipped_version"] = latest_ver
+                    save_global_settings(st)
+                    self.log_to_ui(f"[dim]Skipped update v{latest_ver}. Type /update anytime to update.[/dim]")
+
+            self.app.push_screen(UpdateModal(installed_ver, latest_ver, release_notes), handle_update_result)
+
+        self.app.call_from_thread(show_modal)
+
+    def restart_application(self):
+        import os, sys
+        try:
+            import toolbox
+            toolbox.ABORT_EVENT.set()
+            toolbox.nuke_all_threads()
+        except Exception:
+            pass
+        print('\033[?25h', end='', flush=True)
+        try:
+            os.system('cls' if os.name == 'nt' else 'clear')
+        except Exception:
+            pass
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def request_clarification(self, options: Optional[List[str]] = None, agent_name: str = "Agent") -> str:
         """Pushes the ClarificationModal and waits for the result."""

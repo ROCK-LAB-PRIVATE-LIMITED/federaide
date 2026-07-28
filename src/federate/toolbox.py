@@ -60,6 +60,7 @@ def nuke_all_threads():
 GLOBAL_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".federate", "global_settings.json")
 
 DEFAULT_GLOBAL_SETTINGS = {
+    "skipped_version": "",
     "search_pacing_delay": 65.0,
     "max_search_results": 10,
     "scraper_max_bytes": 1000000,

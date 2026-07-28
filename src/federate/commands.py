@@ -19,6 +19,7 @@ SLASH_COMMANDS =[
     "/dpi", "/schedule",
     "/skills",
     "/settings",
+    "/update", "/version",
     "/help"
 ]
 
@@ -585,6 +586,14 @@ def process_slash_command(command: str, agent_view):
         if hasattr(agent_view, "action_open_global_settings"):
             agent_view.action_open_global_settings()
         return
+
+    elif cmd == "/update":
+        agent_view.log_to_ui("[dim cyan]Checking for updates...[/dim cyan]")
+        agent_view.check_for_updates_bg(manual=True)
+
+    elif cmd in ["/version", "/ver"]:
+        from agent import get_installed_version
+        agent_view.log_to_ui(f"[bold cyan]Federate OS Version:[/bold cyan] v{get_installed_version()}")
     
     elif cmd == "/help":
         help_text = """
