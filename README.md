@@ -6,7 +6,7 @@ It turns your terminal into an interactive workbench where you can run specializ
 
 ---
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/album_art.png" alt="Federate Logo" width="100%" />
+  <img src="https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/landing/assets/federate_logo.webp" alt="Federate Logo" width="100%" />
 </p>
 
 ## What Makes Federate Different?
