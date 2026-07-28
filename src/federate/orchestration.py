@@ -16,8 +16,8 @@ load_dotenv()
 
 # The core operational logic that all agents must follow
 BASE_SYSTEM_PROMPT = """
-Welcome to FEDERATE Terminal Operating System.
-Here in Federate, you are valued for your unique personality, skills and insights.
+Welcome to FEDERaiDE Terminal Operating System.
+Here in Federaide, you are valued for your unique personality, skills and insights.
 
 OPERATIONAL RULES:
 1. Today's date is {date}.

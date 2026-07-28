@@ -449,7 +449,7 @@ class FilenameModal(ModalScreen[str]):
     def cancel(self):
         self.dismiss(None)
 
-class FEDERATE_IDE(App):
+class FEDERaiDE(App):
     CSS = """
     #main_switcher { height: 1fr; width: 100%; }
     #code_view { height: 100%; width: 100%; }
@@ -1181,7 +1181,7 @@ def main():
 
     args = [arg for arg in sys.argv[1:] if arg != "-record"]
     initial_file = args[0] if args else None
-    app = FEDERATE_IDE(initial_file=initial_file)
+    app = FEDERaiDE(initial_file=initial_file)
     app.run()
 
 if __name__ == "__main__":

@@ -242,13 +242,13 @@ def process_slash_command(command: str, agent_view):
         except:
             base_dir = os.getcwd()
             
-        init_file = os.path.join(base_dir, "Federate.md")
+        init_file = os.path.join(base_dir, "Federaide.md")
         try:
             with open(init_file, "w") as f:
-                f.write("# Federate CLI Context\n\nProvide your project specific instructions here.")
+                f.write("# FEDERaiDE CLI Context\n\nProvide your project specific instructions here.")
             agent_view.log_to_ui(f"Successfully initialized `{init_file}`", is_markdown=True)
         except Exception as e:
-            agent_view.log_to_ui(f"Failed to create Federate.md: {e}")
+            agent_view.log_to_ui(f"Failed to create Federaide.md: {e}")
             
     elif cmd == "/compress":
         agent_view.log_to_ui("Analyzing chat history for technical compression...", is_markdown=False)
@@ -593,7 +593,7 @@ def process_slash_command(command: str, agent_view):
 
     elif cmd in ["/version", "/ver"]:
         from agent import get_installed_version
-        agent_view.log_to_ui(f"[bold cyan]Federate OS Version:[/bold cyan] v{get_installed_version()}")
+        agent_view.log_to_ui(f"[bold cyan]FEDERaiDE OS Version:[/bold cyan] v{get_installed_version()}")
     
     elif cmd == "/help":
         help_text = """

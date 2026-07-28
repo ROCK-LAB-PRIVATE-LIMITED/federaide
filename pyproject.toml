@@ -92,7 +92,7 @@ all = [
 
 [project.scripts]
 federate = "federate.app:main"
-fedide = "federate.textIDE:main"
+federaide = "federate.textIDE:main"
 
 [project.urls]
 Homepage = "https://federaide.rocklab.in"

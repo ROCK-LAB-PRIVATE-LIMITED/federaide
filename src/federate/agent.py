@@ -489,11 +489,11 @@ class UpdateModal(ModalScreen[str]):
             if os.name == "nt" or sys.platform == "win32":
                 # Windows PowerShell execution pointing to federate.ai repository
                 ps_cmd = (
-                    "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.ps1 | iex } "
-                    "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex }; "
+                    "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
+                    "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
                     "Write-Host 'Update process finished. You can safely close this window.'; "
                     "Start-Sleep -Seconds 10"
-                    "federate"
+                    "federaide"
                 )
                 cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
                 subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -501,11 +501,11 @@ class UpdateModal(ModalScreen[str]):
             else:
                 # Unix Bash execution pointing to federate.ai repository
                 sh_cmd = (
-                    "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; "
-                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.sh | bash) || "
-                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash); "
+                    "echo -e '\\n\\033[1;36m[ FEDERaiDE Updater ]\\033[0m Starting system update...\\n'; "
+                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.sh | bash) || "
+                    "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.sh | bash); "
                     "exec bash"
-                    "federate"
+                    "federaide"
                 )
                 os.execvp("bash", ["bash", "-c", sh_cmd])
 
@@ -2014,7 +2014,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
         from rich.table import Table
         from rich.rule import Rule
         
-        title_text = Text.from_markup("[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERATE[/bold #da6057]\n\u00a9 Rock Lab Private Limited", justify="center")
+        title_text = Text.from_markup("[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERaiDE[/bold #da6057]\n\u00a9 Rock Lab Private Limited", justify="center")
         divider = Rule(style="#f2a813")
         
         loading_table = Table(show_header=False, expand=True, box=None, padding=(0, 2))
@@ -2117,7 +2117,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
     from rich.table import Table
     from rich.rule import Rule
 
-    title_text = Text.from_markup(f"[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERATE[/bold #da6057] [dim]v{get_installed_version()}[/dim]\n\u00a9 Rock Lab Private Limited", justify="center")
+    title_text = Text.from_markup(f"[bold #f2a813]\u276f [/bold #f2a813][bold #da6057]FEDERaiDE[/bold #da6057] [dim]v{get_installed_version()}[/dim]\n\u00a9 Rock Lab Private Limited", justify="center")
     divider = Rule(style="#f2a813")
 
     table = Table(
@@ -3972,7 +3972,7 @@ class AIAgentView(Vertical):
         release_notes = ""
         
         try:
-            url = "https://pypi.org/pypi/federate/json"
+            url = "https://pypi.org/pypi/federaide/json"
             req = urllib.request.Request(url, headers={'User-Agent': 'Federate-App'})
             with urllib.request.urlopen(req, timeout=8) as resp:
                 pypi_data = json.loads(resp.read().decode('utf-8'))
@@ -4046,7 +4046,7 @@ class AIAgentView(Vertical):
                     continue
 
         if not release_notes or not release_notes.strip():
-            release_notes = f"## Release v{latest_ver}\n\nA new update for Federate (**v{latest_ver}**) is available with bug fixes and performance improvements."
+            release_notes = f"## Release v{latest_ver}\n\nA new update for FEDERaiDE (**v{latest_ver}**) is available with bug fixes and performance improvements."
 
         def show_modal():
             def handle_update_result(action: str):
