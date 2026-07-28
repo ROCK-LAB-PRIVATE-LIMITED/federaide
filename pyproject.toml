@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federate"
-version = "1.0.28"
+version = "1.0.29"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "Apache Software License"}
