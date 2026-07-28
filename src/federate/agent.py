@@ -491,21 +491,20 @@ class UpdateModal(ModalScreen[str]):
                 ps_cmd = (
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host 'Update process finished. You can safely close this window.'; "
-                    "Start-Sleep -Seconds 10"
+                    "Write-Host 'Update process finished. Restarting...'; "
+                    "Start-Sleep -Seconds 5; "
                     "federaide"
                 )
                 cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
                 subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
                 os._exit(0)
             else:
-                # Unix Bash execution pointing to federate.ai repository
+                # Unix Bash execution pointing to federaide repository
                 sh_cmd = (
                     "echo -e '\\n\\033[1;36m[ FEDERaiDE Updater ]\\033[0m Starting system update...\\n'; "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.sh | bash) || "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.sh | bash); "
-                    "exec bash"
-                    "federaide"
+                    "exec federaide"
                 )
                 os.execvp("bash", ["bash", "-c", sh_cmd])
 
