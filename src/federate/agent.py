@@ -487,23 +487,25 @@ class UpdateModal(ModalScreen[str]):
             print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
             
             if os.name == "nt" or sys.platform == "win32":
-                # Windows PowerShell execution pointing to federate.ai repository
+                # Windows: Run in the same terminal, wait 2s for file lock release, update, and auto-relaunch
                 ps_cmd = (
+                    "$env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + $env:PATH; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex }; "
-                    "Write-Host 'Update process finished. You can safely close this window.'; "
-                    "Start-Sleep -Seconds 10"
+                    "federate"
                 )
                 cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
-                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                subprocess.Popen(cmd)
                 os._exit(0)
             else:
-                # Unix Bash execution pointing to federate.ai repository
+                # Unix: Run update in same terminal and auto-relaunch federate on completion
                 sh_cmd = (
+                    "export PATH=\"$HOME/.local/bin:$HOME/.cargo/bin:$PATH\"; "
                     "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/update.sh | bash) || "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash); "
-                    "exec bash"
+                    "echo -e '\\n\\033[1;32m[ Federate Updater ]\\033[0m Relaunching Federate...\\n'; "
+                    "federate"
                 )
                 os.execvp("bash", ["bash", "-c", sh_cmd])
 

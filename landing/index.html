@@ -615,9 +615,9 @@
                     <!-- Hover State: Command Bar View -->
                     <div class="terminal-block hero-terminal-reveal">
                         <div class="code-content" style="white-space: nowrap; overflow-x: auto;">
-                            <span id="hero-cmd-text" style="color:#d4d4d4; font-size: clamp(0.65rem, 1.35vw, 0.8rem);">curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash</span>
+                            <span id="hero-cmd-text" style="color:#d4d4d4; font-size: clamp(0.65rem, 1.35vw, 0.8rem);">curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash</span>
                         </div>
-                        <button id="hero-copy-btn" class="copy-btn" aria-label="Copy install command" style="padding: 0.6rem; align-self: center;" data-cmd="curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash" onclick="copyCommand(this)">
+                        <button id="hero-copy-btn" class="copy-btn" aria-label="Copy install command" style="padding: 0.6rem; align-self: center;" data-cmd="curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash" onclick="copyCommand(this)">
                             <svg aria-hidden="true" focusable="false" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v40c0 30.9-25.1 56-56 56H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></svg>
                         </button>
                     </div>
@@ -749,9 +749,9 @@
                     <h3 style="color:var(--text-main); margin-bottom: 10px;">Mac / Linux / Android (Termux)</h3>
                     <div class="terminal-block">
                         <div class="code-content">
-                            <span style="color:#d4d4d4;">curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash</span>
+                            <span style="color:#d4d4d4;">curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash</span>
                         </div>
-                        <button class="copy-btn" aria-label="Copy Mac, Linux, and Termux install command" data-cmd="curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash" onclick="copyCommand(this)">
+                        <button class="copy-btn" aria-label="Copy Mac, Linux, and Termux install command" data-cmd="curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash" onclick="copyCommand(this)">
                             <svg aria-hidden="true" focusable="false" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v40c0 30.9-25.1 56-56 56H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></svg>
                             <span>Copy</span>
                         </button>
@@ -760,9 +760,9 @@
                     <h3 style="color:var(--text-main); margin-bottom: 10px;">Windows (PowerShell)</h3>
                     <div class="terminal-block">
                         <div class="code-content">
-                            <span style="color:#d4d4d4;">irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.ps1 | iex</span>
+                            <span style="color:#d4d4d4;">irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex</span>
                         </div>
-                        <button class="copy-btn" aria-label="Copy Windows PowerShell install command" data-cmd="irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.ps1 | iex" onclick="copyCommand(this)">
+                        <button class="copy-btn" aria-label="Copy Windows PowerShell install command" data-cmd="irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex" onclick="copyCommand(this)">
                             <svg aria-hidden="true" focusable="false" viewBox="0 0 448 512"><path d="M208 0H332.1c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9V336c0 26.5-21.5 48-48 48H208c-26.5 0-48-21.5-48-48V48c0-26.5 21.5-48 48-48zM48 128h80v64H64V448H256V416h64v40c0 30.9-25.1 56-56 56H48c-26.5 0-48-21.5-48-48V176c0-26.5 21.5-48 48-48z"/></svg>
                             <span>Copy</span>
                         </button>
@@ -858,8 +858,8 @@
             const platform = window.navigator.platform || '';
             const isWindows = /win/i.test(platform) || /win/i.test(userAgent);
 
-            const winCmd = 'irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.ps1 | iex';
-            const unixCmd = 'curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/install.sh | bash';
+            const winCmd = 'irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.ps1 | iex';
+            const unixCmd = 'curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federate.ai/main/install.sh | bash';
 
             const cmdText = document.getElementById('hero-cmd-text');
             const copyBtn = document.getElementById('hero-copy-btn');
