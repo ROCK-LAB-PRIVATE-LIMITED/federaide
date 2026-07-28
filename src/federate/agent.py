@@ -465,9 +465,6 @@ class UpdateModal(ModalScreen[str]):
             except Exception: self.app.pop_screen()
         elif btn_id == "btn_update_now":
             self.start_update_process()
-        elif btn_id == "btn_restart_now":
-            try: self.dismiss("restart")
-            except Exception: self.app.pop_screen()
 
     def start_update_process(self):
         if self.is_updating:
@@ -475,49 +472,29 @@ class UpdateModal(ModalScreen[str]):
         self.is_updating = True
         
         status_lbl = self.query_one("#update_status", Label)
-        status_lbl.update("[bold yellow]⏳ Updating Federate in background... Please wait.[/bold yellow]")
+        status_lbl.update("[bold yellow]⏳ Exiting application to launch terminal updater...[/bold yellow]")
         
         try:
-            self.query_one("#btn_update_now", Button).disabled = True
-            self.query_one("#btn_skip_ver", Button).disabled = True
-            self.query_one("#btn_defer_update", Button).disabled = True
+            for btn in self.query("#update_btn_container Button"):
+                btn.disabled = True
         except Exception:
             pass
             
-        self.perform_update_worker()
+        import threading
+        def _run_external_update():
+            import time, os, sys, subprocess
+            time.sleep(1.0)
+            print('\033[?25h', end='', flush=True)
+            
+            if os.name == "nt" or sys.platform == "win32":
+                cmd = 'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \\"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.ps1 | iex; Write-Host \\\'Update complete. You can safely close this window.\\\'; Start-Sleep -Seconds 10\\""'
+                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                os._exit(0)
+            else:
+                os.execvp("bash", ["bash", "-c", "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.sh | bash; exec bash"])
 
-    @work(thread=True)
-    def perform_update_worker(self):
-        success, output = execute_system_update()
-        self.app.call_from_thread(self.on_update_finished, success, output)
-
-    def on_update_finished(self, success: bool, output: str):
-        self.is_updating = False
-        status_lbl = self.query_one("#update_status", Label)
-        
-        if success:
-            status_lbl.update("[bold green]🎉 Update installed successfully! Restart required.[/bold green]")
-            try:
-                btn_update = self.query_one("#btn_update_now", Button)
-                btn_update.label = "Restart Now"
-                btn_update.id = "btn_restart_now"
-                btn_update.variant = "success"
-                btn_update.disabled = False
-                btn_update.focus()
-            except Exception:
-                pass
-        else:
-            clean_err = escape(str(output)[:150]) if output else "Unknown error"
-            status_lbl.update(f"[bold red]❌ Update failed:[/bold red] {clean_err}")
-            try:
-                btn_update = self.query_one("#btn_update_now", Button)
-                btn_update.label = "Retry Update"
-                btn_update.disabled = False
-                
-                self.query_one("#btn_close_update", Button).disabled = False
-                self.query_one("#btn_close_update", Button).focus()
-            except Exception:
-                pass
+        threading.Thread(target=_run_external_update, daemon=False).start()
+        self.app.exit()
 
 class GlobalSettingsModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -1275,39 +1252,6 @@ def get_installed_version() -> str:
             return getattr(federate, "__version__", "0.9.27")
         except Exception:
             return "0.9.27"
-
-    def start_update_process(self):
-        if self.is_updating:
-            return
-        self.is_updating = True
-        
-        status_lbl = self.query_one("#update_status", Label)
-        status_lbl.update("[bold yellow]⏳ Exiting application to launch terminal updater...[/bold yellow]")
-        
-        try:
-            for btn in self.query("#update_btn_container Button"):
-                btn.disabled = True
-        except Exception:
-            pass
-            
-        import threading
-        def _run_external_update():
-            import time, os, sys, subprocess
-            time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
-            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
-            
-            if os.name == "nt" or sys.platform == "win32":
-                # Spawn a new detached console so Windows releases the python file lock on the executable
-                cmd = 'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \\"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.ps1 | iex; Write-Host \\\'Update complete. You can safely close this window.\\\'; Start-Sleep -Seconds 10\\""'
-                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                os._exit(0)
-            else:
-                # Replace the shutting-down Python process with bash in the exact same terminal
-                os.execvp("bash", ["bash", "-c", "echo -e '\\n\\033[1;36m[ Federate Updater ]\\033[0m Starting system update...\\n'; curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/update.sh | bash; exec bash"])
-
-        # Run in a non-daemon thread so it survives the main thread exit long enough to trigger execvp/Popen
-        threading.Thread(target=_run_external_update, daemon=False).start()
-        self.app.exit()
 
 SLASH_COMMAND_DESCS = {
     "/tools": "List status of all available AI tools",
