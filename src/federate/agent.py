@@ -448,16 +448,26 @@ class UpdateModal(ModalScreen[str]):
     @on(Button.Pressed)
     def handle_buttons(self, event: Button.Pressed):
         btn_id = event.button.id
-        if btn_id == "btn_close_update":
-            self.dismiss("close")
+        if btn_id in ("btn_close_update", "btn_cancel"):
+            try:
+                self.dismiss("close")
+            except Exception:
+                pass
+            try:
+                self.app.pop_screen()
+            except Exception:
+                pass
         elif btn_id == "btn_defer_update":
-            self.dismiss("defer")
+            try: self.dismiss("defer")
+            except Exception: self.app.pop_screen()
         elif btn_id == "btn_skip_ver":
-            self.dismiss("skip")
+            try: self.dismiss("skip")
+            except Exception: self.app.pop_screen()
         elif btn_id == "btn_update_now":
             self.start_update_process()
         elif btn_id == "btn_restart_now":
-            self.dismiss("restart")
+            try: self.dismiss("restart")
+            except Exception: self.app.pop_screen()
 
     def start_update_process(self):
         if self.is_updating:
@@ -467,8 +477,12 @@ class UpdateModal(ModalScreen[str]):
         status_lbl = self.query_one("#update_status", Label)
         status_lbl.update("[bold yellow]⏳ Updating Federate in background... Please wait.[/bold yellow]")
         
-        for btn in self.query("#update_btn_container Button"):
-            btn.disabled = True
+        try:
+            self.query_one("#btn_update_now", Button).disabled = True
+            self.query_one("#btn_skip_ver", Button).disabled = True
+            self.query_one("#btn_defer_update", Button).disabled = True
+        except Exception:
+            pass
             
         self.perform_update_worker()
 
@@ -478,19 +492,32 @@ class UpdateModal(ModalScreen[str]):
         self.app.call_from_thread(self.on_update_finished, success, output)
 
     def on_update_finished(self, success: bool, output: str):
+        self.is_updating = False
         status_lbl = self.query_one("#update_status", Label)
-        container = self.query_one("#update_btn_container")
-        container.query("*").remove()
         
         if success:
             status_lbl.update("[bold green]🎉 Update installed successfully! Restart required.[/bold green]")
-            container.mount(Button("Restart Now", id="btn_restart_now", variant="success"))
-            container.mount(Button("Later", id="btn_close_update", variant="error"))
-            self.query_one("#btn_restart_now").focus()
+            try:
+                btn_update = self.query_one("#btn_update_now", Button)
+                btn_update.label = "Restart Now"
+                btn_update.id = "btn_restart_now"
+                btn_update.variant = "success"
+                btn_update.disabled = False
+                btn_update.focus()
+            except Exception:
+                pass
         else:
-            status_lbl.update(f"[bold red]❌ Update failed:[/bold red] {escape(str(output)[:150])}")
-            container.mount(Button("Close", id="btn_close_update", variant="error"))
-            self.query_one("#btn_close_update").focus()
+            clean_err = escape(str(output)[:150]) if output else "Unknown error"
+            status_lbl.update(f"[bold red]❌ Update failed:[/bold red] {clean_err}")
+            try:
+                btn_update = self.query_one("#btn_update_now", Button)
+                btn_update.label = "Retry Update"
+                btn_update.disabled = False
+                
+                self.query_one("#btn_close_update", Button).disabled = False
+                self.query_one("#btn_close_update", Button).focus()
+            except Exception:
+                pass
 
 class GlobalSettingsModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -1250,7 +1277,33 @@ def get_installed_version() -> str:
             return "0.9.27"
 
 def execute_system_update() -> tuple[bool, str]:
-    import shutil, subprocess, sys, os
+    import subprocess, sys, os, shutil
+    
+    # 1. WINDOWS: Stream update script directly from GitHub
+    if os.name == "nt" or sys.platform == "win32":
+        for script in ["update.ps1", "install.ps1"]:
+            ps_cmd = f"irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | iex"
+            try:
+                cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if res.returncode == 0:
+                    return True, res.stdout
+            except Exception:
+                pass
+
+    # 2. UNIX (macOS / Linux / Termux): Stream update script directly from GitHub
+    else:
+        for script in ["update.sh", "install.sh"]:
+            sh_cmd = f"curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/Federate/main/{script} | bash"
+            try:
+                cmd = ["bash", "-c", sh_cmd]
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if res.returncode == 0:
+                    return True, res.stdout
+            except Exception:
+                pass
+
+    # 3. Direct uv tool fallback
     uv_path = shutil.which("uv")
     if not uv_path:
         user_bin_uv = os.path.join(os.path.expanduser("~"), ".local", "bin", "uv" + (".exe" if os.name == "nt" else ""))
@@ -1266,6 +1319,7 @@ def execute_system_update() -> tuple[bool, str]:
         except Exception:
             pass
 
+    # 4. Direct pip fallback
     try:
         cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "federate[all]"]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
