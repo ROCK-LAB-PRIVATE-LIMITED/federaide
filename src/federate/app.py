@@ -19,10 +19,6 @@ if package_dir not in sys.path:
 
 import types
 from pathlib import Path
-from dotenv import load_dotenv
-
-log_trace("Loading environment configurations")
-load_dotenv()
 
 log_trace("Setting up TUI TextIDE dependency mockups")
 mock_textIDE = types.ModuleType("textIDE")

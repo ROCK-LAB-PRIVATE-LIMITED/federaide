@@ -5,14 +5,11 @@ import threading
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
-from dotenv import load_dotenv
 from semantic_search import SemanticSearchEngine
 
 from pathlib import Path
 from toolbox import get_storage_path, FEDERATE_DIR
 
-# Load environment variables from .env file
-load_dotenv()
 
 # The core operational logic that all agents must follow
 BASE_SYSTEM_PROMPT = """

@@ -15,8 +15,10 @@ from textual import on
 
 from audio_handler import clean_markdown_for_speech, load_audio_config
 
-TELEGRAM_CONFIG_FILE = "telegram_config.json"
+FEDERATE_DIR = os.path.join(os.path.expanduser("~"), ".federate")
+TELEGRAM_CONFIG_FILE = os.path.join(FEDERATE_DIR, "telegram_config.json")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def load_telegram_config():
     default_config = {
         "bot_token": "",
@@ -26,16 +28,47 @@ def load_telegram_config():
     }
     if os.path.exists(TELEGRAM_CONFIG_FILE):
         try:
-            with open(TELEGRAM_CONFIG_FILE, "r") as f:
+            with open(TELEGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
                 default_config.update(json.load(f))
         except Exception:
             pass
+
+    try:
+        from toolbox import is_keyring_locked
+        if not is_keyring_locked():
+            import keyring
+            token = keyring.get_password("Federate", "telegram_bot_token")
+            if token:
+                default_config["bot_token"] = token
+    except Exception:
+        pass
+
     return default_config
 
 def save_telegram_config(config):
+    bot_token = config.get("bot_token", "").strip()
+
     try:
-        with open(TELEGRAM_CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
+        from toolbox import is_keyring_locked
+        if not is_keyring_locked():
+            import keyring
+            if bot_token:
+                keyring.set_password("Federate", "telegram_bot_token", bot_token)
+            else:
+                try:
+                    keyring.delete_password("Federate", "telegram_bot_token")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    config_to_save = config.copy()
+    config_to_save.pop("bot_token", None)
+
+    try:
+        os.makedirs(os.path.dirname(TELEGRAM_CONFIG_FILE), exist_ok=True)
+        with open(TELEGRAM_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_to_save, f, indent=4)
     except Exception:
         pass
 

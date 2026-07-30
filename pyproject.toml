@@ -48,7 +48,6 @@ dependencies = [
     "keyring>=25.7.0",
     "DDGS>=9.12.0",
     "pycryptodome>=3.23.0",
-    "python-dotenv",
     "pylatexenc==2.10",  # Compulsory LaTeX parser for mathematical unicode rendering
     "pyperclip==1.11.0",   # Compulsory clipboard support for IDE copies/cuts
     "curl-cffi==0.15.0",   # Compulsory HTTP client with impersonation support (Cloudflare bypass)
