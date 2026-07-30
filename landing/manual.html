@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FEDERaiDE User Manual — Universal Multi-Agent Harness & IDE Guide</title>
+    <meta name="description" content="Complete operational guide and documentation for FEDERaiDE — the peer-to-peer multi-agent orchestration harness, terminal IDE, voice system, and automation engine.">
+    <meta name="keywords" content="FEDERaiDE manual, FEDERaiDE documentation, multi-agent harness guide, peer-to-peer AI agents, terminal IDE manual, autonomous agent setup">
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+    <meta name="author" content="Rock Lab Private Limited">
+    <meta name="theme-color" content="#060709">
+    <link rel="canonical" href="https://federaide.rocklab.in/manual.html">
+
+    <!-- Favicon & Icons -->
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="192x192" href="./assets/federaide_logo.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="./assets/federaide_logo.png">
+
+    <!-- Open Graph / Social Media Metadata -->
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="FEDERaiDE Documentation">
+    <meta property="og:title" content="FEDERaiDE User Manual — Multi-Agent Harness & IDE Guide">
+    <meta property="og:description" content="Complete operational guide and documentation for FEDERaiDE. Learn how to configure P2P agent networks, active skills, deep research, voice dictation, and scheduled routines.">
+    <meta property="og:url" content="https://federaide.rocklab.in/manual.html">
+    <meta property="og:image" content="https://federaide.rocklab.in/assets/federaide_logo.png">
+    <meta property="og:locale" content="en_US">
+
+    <!-- Twitter Card Metadata -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="FEDERaiDE User Manual & Technical Guide">
+    <meta name="twitter:description" content="Complete documentation for FEDERaiDE multi-agent harness, terminal IDE, active skills, and automation routines.">
+    <meta name="twitter:image" content="https://federaide.rocklab.in/assets/federaide_logo.png">
+
+    <!-- Structured Data (JSON-LD: TechArticle + FAQPage Schema) -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "TechArticle",
+          "@id": "https://federaide.rocklab.in/manual.html#article",
+          "headline": "FEDERaiDE User Manual — Universal Multi-Agent Harness & IDE Guide",
+          "description": "Complete operational guide for FEDERaiDE multi-agent orchestration harness and universal automation IDE.",
+          "url": "https://federaide.rocklab.in/manual.html",
+          "inLanguage": "en",
+          "author": {
+            "@type": "Organization",
+            "name": "Rock Lab Private Limited",
+            "url": "https://www.rocklab.in"
+          },
+          "publisher": {
+            "@type": "Organization",
+            "name": "Rock Lab Private Limited",
+            "url": "https://www.rocklab.in",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "https://federaide.rocklab.in/assets/federaide_logo.png"
+            }
+          },
+          "mainEntityOfPage": "https://federaide.rocklab.in/manual.html"
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://federaide.rocklab.in/manual.html#faq",
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "name": "My agent says 'Tool is unauthorized' when trying to run a script.",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "FEDERaiDE is currently in SAFE permission mode. Press Ctrl+T to cycle safety modes to SEMI-AUTO or FULL-AUTO, or open the Agent Editor (F4) and check the tool permissions under Agent Abilities."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "How do I stop a runaway agent conversation or loop?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Press Ctrl+A at any time to execute an instant emergency stop. This halts all background agent threads, loops, and terminal scripts immediately."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "Microphone hotwords are not detecting my voice.",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Type /mictest to open the microphone testing sandbox. Check your energy threshold setting in /speech (try lowering it to 0.002 if your room is quiet, or raising it if your background environment is noisy), and verify that your microphone index is correct."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "My API key is asking for a password when saving on Linux or Termux.",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Some encrypted keyrings require a master password. Enter your password when prompted by the unlock modal, or click Set New / Reset to establish a new password for storing your API keys securely."
+              }
+            },
+            {
+              "@type": "Question",
+              "name": "How do I run FEDERaiDE in chat-only mode without the code editor panels?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Launch the application using the federate command instead of federaide."
+              }
+            }
+          ]
+        }
+      ]
+    }
+    </script>
+    
+    <!-- Google Fonts: Michroma, Space Grotesk, Space Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Space+Grotesk:wght@300;400;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-base: #060709;
+            --bg-surface: #0e1015;
+            --bg-boost: #151821;
+            --border-color: #262936;
+            --text-main: #e6e8ec;
+            --text-dim: #8b92a5;
+            --brand-red: #da6057;
+            --brand-orange: #e98435;
+            --brand-yellow: #f2a813;
+            --brand-teal: #3ddbd9;
+            --brand-green: #8cc84b;
+            --brand-blue: #519fef;
+            --brand-purple: #b388ff;
+            --font-display: 'Michroma', sans-serif;
+            --font-sans: 'Space Grotesk', sans-serif;
+            --font-mono: 'Space Mono', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Prevent any side-scrolling across the viewport */
+        html, body {
+            overflow-x: hidden;
+            width: 100%;
+            background-color: var(--bg-base);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        body {
+            display: flex;
+        }
+
+        /* Hamburger Menu Button (Hidden on wide screens) */
+        .menu-toggle {
+            display: none;
+            position: fixed;
+            top: 1rem;
+            left: 1rem;
+            z-index: 1100;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            color: var(--brand-orange);
+            padding: 0.5rem 0.85rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: var(--font-display);
+            font-size: 0.85rem;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Sidebar Navigation */
+        sidebar {
+            width: 300px;
+            background-color: var(--bg-surface);
+            border-right: 1px solid var(--border-color);
+            position: fixed;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            overflow-y: auto;
+            padding: 1.5rem 1rem;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-color) transparent;
+            z-index: 1000;
+        }
+
+        sidebar h2 { font-size: 1.1rem; color: var(--brand-orange); margin-bottom: 0.5rem; text-transform: none; letter-spacing: 0.05em; }
+
+        sidebar p.version {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.75rem;
+        }
+
+        sidebar ul {
+            list-style: none;
+        }
+
+        sidebar li {
+            margin-bottom: 0.4rem;
+        }
+
+        sidebar a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.88rem;
+            display: block;
+            padding: 0.3rem 0.5rem;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+        }
+
+        sidebar a:hover {
+            color: var(--brand-teal);
+            background-color: var(--bg-boost);
+        }
+
+        /* Main Content Container */
+        main {
+            margin-left: 300px;
+            width: calc(100% - 300px);
+            max-width: 1100px;
+            padding: 3rem 4rem;
+            overflow-x: hidden;
+        }
+
+        /* Header Styling - CLEAN SOLID TITLE (No Gradient) */
+        .doc-header {
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        .doc-header h1 {
+            font-family: var(--font-display);
+            font-size: 2.8rem;
+            color: #ffffff;
+            margin-bottom: 0.5rem;
+        }
+
+        .doc-header h1 span {
+            color: var(--brand-orange);
+        }
+
+        .doc-header p.subtitle {
+            font-size: 1.2rem;
+            color: var(--brand-teal);
+            font-weight: 300;
+        }
+
+        /* Content Headings */
+        h1, h2, h3, h4, sidebar h2 {
+            font-family: var(--font-display);
+            font-weight: normal;
+            letter-spacing: -0.02em;
+        }
+
+        h2 {
+            font-size: 1.6rem;
+            color: var(--brand-orange);
+            margin-top: 3.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h3 {
+            font-size: 1.15rem;
+            color: var(--brand-yellow);
+            margin-top: 2rem;
+            margin-bottom: 0.75rem;
+        }
+
+        h4 {
+            font-size: 1.05rem;
+            color: var(--brand-teal);
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        p, li {
+            margin-bottom: 1.2rem;
+            color: var(--text-main);
+            font-size: 1rem;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+
+        ul, ol {
+            margin-bottom: 1.2rem;
+            padding-left: 1.5rem;
+        }
+
+        /* Badges & Keybindings */
+        kbd {
+            background-color: var(--bg-boost);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            box-shadow: 0 2px 0 rgba(0,0,0,0.5);
+            color: var(--brand-yellow);
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            padding: 0.15rem 0.45rem;
+            white-space: nowrap;
+        }
+
+        code {
+            font-family: var(--font-mono);
+            background-color: var(--bg-surface);
+            color: var(--brand-teal);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            border: 1px solid rgba(255,255,255,0.05);
+            word-break: break-word;
+        }
+
+        pre {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--brand-orange);
+            border-radius: 6px;
+            padding: 1.25rem;
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 1.5rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        pre code {
+            background: none;
+            border: none;
+            padding: 0;
+            color: var(--text-main);
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+        }
+
+        /* Callout Boxes */
+        .callout {
+            padding: 1.25rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            border-left: 4px solid;
+            background-color: var(--bg-surface);
+        }
+
+        .callout-info { border-color: var(--brand-blue); background-color: rgba(81, 159, 239, 0.05); }
+        .callout-tip { border-color: var(--brand-green); background-color: rgba(140, 200, 75, 0.05); }
+        .callout-warning { border-color: var(--brand-yellow); background-color: rgba(242, 168, 19, 0.05); }
+        .callout-alert { border-color: var(--brand-red); background-color: rgba(218, 96, 87, 0.05); }
+
+        .callout h5 {
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .callout-info h5 { color: var(--brand-blue); }
+        .callout-tip h5 { color: var(--brand-green); }
+        .callout-warning h5 { color: var(--brand-yellow); }
+        .callout-alert h5 { color: var(--brand-red); }
+
+        /* Tables - Responsive Scroll Wrapper */
+        table {
+            width: 100%;
+            max-width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2rem;
+            background-color: var(--bg-surface);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+            display: block;
+            overflow-x: auto;
+        }
+
+        th, td {
+            padding: 0.8rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.92rem;
+            word-break: break-word;
+        }
+
+        th {
+            background-color: var(--bg-boost);
+            color: var(--brand-orange);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.82rem;
+            letter-spacing: 0.05em;
+            font-family: var(--font-mono);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: rgba(255,255,255,0.02);
+        }
+
+        /* Footer */
+        footer {
+            margin-top: 5rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-color);
+            color: var(--text-dim);
+            font-size: 0.88rem;
+            text-align: center;
+        }
+
+        /* RESPONSIVE DRAWER: Triggered if height > width OR width <= 900px */
+        @media (max-aspect-ratio: 1/1), (max-width: 900px) {
+            .menu-toggle {
+                display: flex;
+            }
+
+            sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                width: 280px;
+                box-shadow: 10px 0 30px rgba(0,0,0,0.8);
+            }
+
+            sidebar.open {
+                transform: translateX(0);
+            }
+
+            main {
+                margin-left: 0;
+                width: 100%;
+                padding: 4.5rem 1.25rem 2rem 1.25rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- HAMMER / HAMBURGER TOGGLE BUTTON -->
+    <button id="menu-toggle" class="menu-toggle" aria-label="Toggle Navigation Menu">
+        <span>☰</span>
+        <span>Contents</span>
+    </button>
+
+    <!-- SIDEBAR TABLE OF CONTENTS -->
+    <sidebar>
+        <h2>FEDERaiDE</h2>
+        <p class="version">Official User Manual & Guide</p>
+
+        <ul>
+            <li><a href="#welcome">1. Welcome & Overview</a></li>
+            <li><a href="#installation">2. Installation & Getting Started</a></li>
+            <li><a href="#navigation">3. Interface Navigation & Safety</a></li>
+            <li><a href="#chatting">4. Chatting & Workspace Controls</a></li>
+            <li><a href="#multi-agent">5. Multi-Agent Orchestration</a></li>
+            <li><a href="#ide">6. Built-in Code Editor & Runner</a></li>
+            <li><a href="#skills">7. Teaching Agents New Skills</a></li>
+            <li><a href="#research">8. Deep Research & PDF Reports</a></li>
+            <li><a href="#voice">9. Voice & Speech Features</a></li>
+            <li><a href="#telegram">10. Telegram Mobile Integration</a></li>
+            <li><a href="#scheduler">11. Scheduled Task Routines</a></li>
+            <li><a href="#memory">12. Memory & Context Management</a></li>
+            <li><a href="#slash-commands">13. Slash Command Reference</a></li>
+            <li><a href="#troubleshooting">14. Troubleshooting & FAQ</a></li>
+        </ul>
+    </sidebar>
+
+    <!-- MAIN DOCUMENTATION CONTENT -->
+    <main>
+
+        <div class="doc-header">
+            <h1><span>FEDERaiDE</span> User Manual</h1>
+            <p class="subtitle">Complete Operational Guide for the Peer-to-Peer Multi-Agent Harness & Universal Automation IDE</p>
+        </div>
+
+        <!-- SECTION 1 -->
+        <section id="welcome">
+            <h2>1. Welcome & Overview</h2>
+
+            <h3>1.1. What is FEDERaiDE?</h3>
+            <p>
+                <strong>FEDERaiDE</strong> is a cross-platform, terminal-based multi-agent orchestration harness and universal automation system. It transforms your terminal into an interactive, multi-panel workbench where custom teams of AI agents can collaborate with one another, manage your files, edit and execute code, run deep research, listen to your voice commands, speak back to you, and execute desktop automation routines.
+            </p>
+
+            <h3>1.2. Core Concepts</h3>
+            <ul>
+                <li><strong>Autonomous Agents:</strong> Instead of talking to a single assistant, you can assemble a team of agents (e.g., a junior programmer, a security reviewer, and a project manager). Each agent has its own backstory, API model, voice, color code, and tool permissions.</li>
+                <li><strong>Peer-to-Peer Networks:</strong> FEDERaiDE supports true peer-to-peer agent networks. Agents can mention and delegate work to each other dynamically using simple text commands like <code>@AgentName</code> or <code>@@AgentName</code> without requiring fixed hardcoded pipelines.</li>
+                <li><strong>Local Workspace Isolation:</strong> Everything operates inside your designated local workspace directory. Agents inspect your code, run local tests, and build reports directly on your computer or Android smartphone.</li>
+            </ul>
+
+            <h3>1.3. Understanding Launcher Options</h3>
+            <p>FEDERaiDE provides two distinct executable launch commands depending on how you wish to work:</p>
+            <ul>
+                <li><code>federaide</code>: Launches the <strong>Full TUI Workspace</strong> containing the complete multi-panel interface (Multi-Agent Chat ↔ Tabbed Code Editor ↔ Live Program Execution Dashboard ↔ Workspace Explorer ↔ Code Structure Outline).</li>
+                <li><code>federate</code>: Launches the streamlined <strong>Chat-Only View</strong>, focused entirely on multi-agent conversation, voice interactions, and background skill execution without the multi-panel code editor layout.</li>
+            </ul>
+
+            <div class="callout callout-info">
+                <h5>Pro-Tip</h5>
+                <p>Both launch commands share the exact same underlying agents, settings, memory, and project sessions. You can switch between them anytime without losing your work.</p>
+            </div>
+        </section>
+
+        <!-- SECTION 2 -->
+        <section id="installation">
+            <h2>2. Installation & Getting Started</h2>
+
+            <h3>2.1. System Requirements & Platform Support</h3>
+            <p>FEDERaiDE runs natively across all major operating systems without requiring Docker or containerization:</p>
+            <ul>
+                <li><strong>macOS:</strong> Intel (x86_64) and Apple Silicon (ARM64 / M-series).</li>
+                <li><strong>Linux:</strong> x86_64, ARM64 (Raspberry Pi 3/4/5), and standard server distributions.</li>
+                <li><strong>Windows:</strong> Native Windows 10/11 via PowerShell (no WSL required) as well as WSL/Git Bash.</li>
+                <li><strong>Android:</strong> Native smartphone operation via the <strong>Termux</strong> terminal environment.</li>
+            </ul>
+
+            <h3>2.2. Installation Commands</h3>
+            <h4>Mac / Linux / Android (Termux)</h4>
+            <p>Open your terminal and run the single-line installer script:</p>
+            <pre><code>curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.sh | bash</code></pre>
+
+            <h4>Windows (PowerShell)</h4>
+            <p>Open Windows PowerShell (no administrator privileges required) and run:</p>
+            <pre><code>irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex</code></pre>
+
+            <h4>Alternative Package Managers (`uv` or `pip`)</h4>
+            <pre><code># Via uv (Recommended)
+uv tool install "federaide[all]"
+
+# Via pip
+pip install "federaide[all]"</code></pre>
+
+            <h3>2.3. First Launch & The Onboarding Wizard</h3>
+            <p>To start the application, type <code>federaide</code> (or <code>federate</code> for chat-only mode) in your terminal:</p>
+            <pre><code>federaide</code></pre>
+
+            <p>
+                On your very first launch, FEDERaiDE automatically opens the <strong>Onboarding Popup Wizard</strong>. This modal guides you through configuring your initial active AI agent:
+            </p>
+            <ol>
+                <li><strong>API Key:</strong> Input your API key (e.g., from OpenRouter, Google Gemini, OpenAI, or Anthropic).</li>
+                <li><strong>Base URL Preset:</strong> Select a provider preset from the dropdown menu (Google Gemini, OpenRouter, OpenAI, Anthropic, or Custom). Choosing a preset populates the base URL automatically.</li>
+                <li><strong>Model Identifier:</strong> Specify your desired LLM model (e.g., <code>gemini-2.5-flash</code>, <code>openai/gpt-4o</code>, or <code>anthropic/claude-3.5-sonnet</code>).</li>
+                <li><strong>Base URL:</strong> Enter or adjust the API endpoint URL (for local models, you can enter <code>http://localhost:11434/v1</code> for Ollama or <code>http://localhost:1234/v1</code> for LM Studio).</li>
+                <li><strong>Agent Name & Backstory:</strong> Name your agent (default: <em>Rita</em>) and define a short backstory describing its role (e.g., <em>"You are Rita, a general-purpose senior software engineer."</em>).</li>
+            </ol>
+            <p>
+                Click <strong>Get Started</strong>. FEDERaiDE securely encrypts and stores your API credentials inside your native OS Keychain (macOS Keychain, Windows Credential Manager, or Linux/Termux Encrypted Keyring).
+            </p>
+
+            <h3>2.4. Phase 1: Operating in Single-Agent Mode</h3>
+            <p>
+                Immediately after onboarding, FEDERaiDE boots into a single-agent environment with your initial assistant (e.g., <em>Rita</em>). In this state, you can use the harness just like any standard AI chat program—ask questions, request code edits, run searches, or manage files.
+            </p>
+
+            <h3>2.5. Phase 2: Unlocking Multi-Agent Swarms & Backstory Tuning</h3>
+            <p>
+                The full capability of FEDERaiDE is unlocked when you create specialized teams of agents using the Agent Editor (<kbd>F4</kbd>):
+            </p>
+            <ul>
+                <li><strong>Tuning Backstories:</strong> Describe domain expertise and delegation rules in the backstory (e.g., <em>"You are a database specialist. Whenever you write SQL, tag @Elena to audit it."</em>).</li>
+                <li><strong>Reasoning Effort & Temperature:</strong> Adjust temperature and reasoning effort (<code>Low</code>, <code>Medium</code>, or <code>High</code>) for thinking models (o1, o3, Gemini 2.5) in the Agent Editor (<kbd>F4</kbd>).</li>
+                <li><strong>Backup Provider (Auto-Failover):</strong> Configure a secondary Backup Model, Base URL, and API Key for an agent in <kbd>F4</kbd>. If the primary provider hits rate limits or server errors, FEDERaiDE automatically switches to the backup model (indicated by a <code>[B]</code> badge in the status bar).</li>
+            </ul>
+        </section>
+
+        <!-- SECTION 3 -->
+        <section id="navigation">
+            <h2>3. Interface Navigation & Safety Controls</h2>
+
+            <h3>3.1. Understanding the Display</h3>
+            <p>The main FEDERaiDE workspace interface consists of five primary panels:</p>
+            <ul>
+                <li><strong>Multi-Agent Chat Panel:</strong> The main conversation hub where user prompts, agent replies, tool outputs, and status updates appear.</li>
+                <li><strong>Workspace File Explorer:</strong> Left-hand sidebar displaying files and folders in your active working directory.</li>
+                <li><strong>Tabbed Code Editor:</strong> Central code editor supporting multiple open document tabs with syntax highlighting.</li>
+                <li><strong>Structure Outline Tree:</strong> Right-hand sidebar displaying a structural breakdown (classes, functions, methods) of the active code file.</li>
+                <li><strong>Executions Dashboard:</strong> Live terminal dashboard showing printouts and output from running scripts.</li>
+            </ul>
+
+            <div class="callout callout-warning">
+                <h5>Encrypted Keyring Unlock on Launch</h5>
+                <p>
+                    If your system uses an encrypted credential store (e.g. on Linux or Termux), FEDERaiDE displays a <strong>Keyring Locked</strong> modal on startup. Enter your Master Password and click <strong>Unlock</strong> to load your saved API keys. If you forget your password, click <strong>Set New / Reset</strong> to establish a new password (note: resetting clears previously saved keys).
+                </p>
+            </div>
+
+            <h3>3.2. Essential Keyboard Shortcuts & Hotkeys</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Shortcut Key</th>
+                        <th>Action / Function</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><kbd>F2</kbd></td><td>Session Manager (Create new chat or load historical multi-agent sessions)</td></tr>
+                    <tr><td><kbd>F3</kbd></td><td>Global Harness Settings (Search pacing, API retries, research limits)</td></tr>
+                    <tr><td><kbd>F4</kbd></td><td>Agent Editor (Configure active agent's backstory, model, voice, and tools)</td></tr>
+                    <tr><td><kbd>F5</kbd></td><td>Switch Active Agent (Cycle active host agent or set a new default)</td></tr>
+                    <tr><td><kbd>F6</kbd></td><td>Cycle Interface Panels (Chat View ↔ Code Editor ↔ Executions Dashboard)</td></tr>
+                    <tr><td><kbd>F7</kbd></td><td>Create New Folder in workspace</td></tr>
+                    <tr><td><kbd>F8</kbd></td><td>Change Active Workspace Directory</td></tr>
+                    <tr><td><kbd>F9</kbd></td><td>Configure Program Language Executables & Flags</td></tr>
+                    <tr><td><kbd>F10</kbd></td><td>Open Virtual Environment (Venv) Manager</td></tr>
+                    <tr><td><kbd>Ctrl + T</kbd></td><td>Cycle Safety Permission Modes (SAFE ↔ SEMI-AUTO ↔ FULL-AUTO)</td></tr>
+                    <tr><td><kbd>Ctrl + G</kbd></td><td>Cycle Active Host Agent sequentially through all registered agent personas.</td></tr>
+                    <tr><td><kbd>Ctrl + K</kbd></td><td>Clear All Contexts / Start Fresh Conversation</td></tr>
+                    <tr><td><kbd>Ctrl + A</kbd></td><td><strong>EMERGENCY ABORT:</strong> Instantly stop all running AI tasks and terminal commands</td></tr>
+                    <tr><td><kbd>Ctrl + Q</kbd></td><td>Quit FEDERaiDE safely</td></tr>
+                    <tr><td><kbd>Ctrl + R</kbd></td><td>Run Active Code File in Execution Dashboard</td></tr>
+                    <tr><td><kbd>Ctrl + E</kbd></td><td>Terminate Active Running Script</td></tr>
+                    <tr><td><kbd>Ctrl + S</kbd></td><td>Save Active Code File</td></tr>
+                    <tr><td><kbd>Ctrl + Shift + S</kbd></td><td>Save Active Code File As...</td></tr>
+                    <tr><td><kbd>Ctrl + F</kbd></td><td>Find & Replace in active code file</td></tr>
+                    <tr><td><kbd>Ctrl + L</kbd> / <kbd>Ctrl + O</kbd></td><td>Cycle Next Tab / Previous Tab in Editor or Execution Dashboard</td></tr>
+                    <tr><td><kbd>Ctrl + W</kbd></td><td>Close Active Editor or Execution Tab</td></tr>
+                    <tr><td><kbd>Ctrl + N</kbd></td><td>Create New File in active workspace root.</td></tr>
+                </tbody>
+            </table>
+
+            <h3>3.3. Safety Permission Modes</h3>
+            <p>To protect your files and workspace, FEDERaiDE operates under three safety permission levels. You can press <kbd>Ctrl + T</kbd> at any time to cycle permissions:</p>
+            <ul>
+                <li><strong>SAFE (Plan Mode - Default):</strong> Agents can only run safe, read-only tools (web search, reading files, listing directory trees, deep research). Destructive file edits or code execution require explicit confirmation popups.</li>
+                <li><strong>SEMI-AUTO (Semi-Armed Mode):</strong> Agents can edit files and execute terminal commands, but FEDERaiDE presents an authorization popup asking you to approve or reject every single action before it runs.</li>
+                <li><strong>FULL-AUTO (Full-Armed Mode):</strong> Agents have unrestricted permission to create files, edit code, run terminal scripts, and execute active skills automatically without asking for confirmation.</li>
+            </ul>
+
+            <div class="callout callout-warning">
+                <h5>Safety Advisory</h5>
+                <p>FEDERaiDE boots into <strong>SAFE</strong> mode by default on launch to prevent accidental file modifications. Switch to <code>FULL-AUTO</code> only when working in trusted project directories.</p>
+            </div>
+            
+            <h3>3.4. Per-Agent Tool Configurations & Permissions Override</h3>
+            <p>
+                FEDERaiDE allows you to customize tool access on a per-agent basis inside the Agent Editor (<kbd>F4</kbd>):
+            </p>
+
+            <h4>1. Enabling Specific Tools in SAFE Mode</h4>
+            <p>
+                Click <strong>Manage Agent Abilities...</strong> to open the Agent Abilities modal. Here you can check <em>Enable (Safe)</em> next to individual tools (e.g., <code>read_file</code>, <code>run_terminal_command</code>, <code>edit_file</code>). Enabling a tool allows that specific agent to request its execution in SAFE mode, subject to user confirmation popups.
+            </p>
+
+            <h4>2. Selective Tool Disabling</h4>
+            <p>
+                Check <em>Force Disable</em> next to any tool (e.g., <code>run_terminal_command</code> or <code>visual_computer_operation</code>) to completely revoke that tool from the agent's capabilities.
+            </p>
+
+            <h4>3. Disable All Tools Override</h4>
+            <p>
+                Check the <strong>Disable All Tools</strong> checkbox in the Agent Editor to instantly revoke all executable, file-editing, terminal, and computer-automation tools from the agent. An agent with all tools disabled functions as a pure text/reasoning persona while retaining access to passive playbooks, memory retrieval, and user clarification.
+            </p>
+
+            <div class="callout callout-warning">
+                <h5>Permission Priority</h5>
+                <p>Per-agent tool restrictions override global system permission modes. If a tool is force-disabled or all tools are disabled on an agent, switching the global system mode to <code>FULL-AUTO</code> will still NOT grant that agent access to disabled tools.</p>
+            </div>
+
+            <h3>3.5. Changing Workspace Directories</h3>
+            <p>
+                Press <kbd>F8</kbd> or type <code>/dir</code> to open the interactive directory modal. Navigate using <kbd>UP</kbd>/<kbd>DOWN</kbd> arrow keys, press <kbd>Enter</kbd> to expand a folder, or press <kbd>Ctrl + B</kbd> to select the highlighted folder as your new root workspace.
+            </p>
+        </section>
+
+        <!-- SECTION 4 -->
+        <section id="chatting">
+            <h2>4. Chatting & Everyday Workspace Controls</h2>
+
+            <h3>4.1. Sending Messages & Multiline Prompt Input</h3>
+            <p>
+                Type your message into the prompt bar at the bottom of the screen and press <kbd>Enter</kbd> to submit.
+            </p>
+            <ul>
+                <li><strong>Multiline Prompts:</strong> Press <kbd>Shift + Enter</kbd>, <kbd>Alt + Enter</kbd>, or <kbd>Ctrl + J</kbd> to insert line breaks without submitting your message.</li>
+                <li><strong>Dynamic Input Resizing:</strong> The prompt input bar automatically grows vertically (up to 5 lines) to accommodate multiline text and long prompts before scrolling internally.</li>
+            </ul>
+
+            <h3>4.2. Attaching Files, Images, and Folders (`&` Shortcut)</h3>
+            <p>
+                You can attach local workspace files, images, PDFs, or entire directory trees directly into your prompt by typing <code>&amp;</code> followed by the relative or absolute path:
+            </p>
+            <ul>
+                <li><code>&amp;src/main.py</code> — Reads <code>main.py</code>, prepends line numbers to every line, and injects its contents directly into the prompt context.</li>
+                <li><code>&amp;diagram.png</code> or <code>&amp;report.pdf</code> — Attaches local images or PDF documents. If the active agent is vision-capable, FEDERaiDE automatically converts PDF pages and image files into visual payloads for the agent to inspect.</li>
+                <li><code>&amp;src/</code> — Recursively scans the entire <code>src/</code> folder tree, reading all code files, documents, images, and PDFs into context.</li>
+            </ul>
+
+            <h4>Folder Attachments & Ignored Files</h4>
+            <p>
+                Attaching a folder (e.g., <code>&amp;src/</code>) recursively reads all code, documents, images, and PDFs in that directory. FEDERaiDE automatically parses your project's <code>.gitignore</code> and <code>.listignore</code> files, automatically excluding build artifacts, virtual environments (<code>venv/</code>, <code>.venv/</code>), dependency folders (<code>node_modules/</code>), and binary executables to prevent context token bloating.
+            </p>
+
+            <h3>4.3. Interactive Autocompletion Suggestions Overlay</h3>
+            <p>
+                Typing trigger characters in the chat input displays an interactive completion table directly below the input bar:
+            </p>
+            <ul>
+                <li><code>/</code> — Shows slash commands with brief descriptions.</li>
+                <li><code>&amp;</code> — Lists workspace files and subfolders with size indicators.</li>
+                <li><code>@</code> — Lists available agents, <code>@team</code>, and <code>@room</code> with role summaries.</li>
+                <li><strong>Navigation:</strong> Use <kbd>UP</kbd> / <kbd>DOWN</kbd> arrow keys to cycle through choices, and press <kbd>RIGHT ARROW</kbd> to accept the highlighted completion.</li>
+            </ul>
+
+            <h4>LaTeX & Mathematical Unicode Rendering</h4>
+            <p>
+                Mathematical expressions in agent responses (both inline <code>$...$</code> and block <code>$$...$$</code>) are automatically parsed and converted into clean, human-readable Unicode text in the terminal chat view.
+            </p>
+
+            <h3>4.4. Direct Terminal Passthrough & Persistent Shell Mode (`!` Shortcut)</h3>
+            <p>
+                You can execute terminal commands on your host computer directly from the chat prompt bar without leaving FEDERaiDE:
+            </p>
+            <ul>
+                <li><strong>One-off Command Execution:</strong> Type <code>!</code> followed by any shell command (e.g. <code>!git status</code>, <code>!pytest</code>, or <code>!npm test</code>). FEDERaiDE executes the command in your active workspace directory and prints the output directly in the chat window.</li>
+                <li><strong>Persistent Shell Mode Toggle:</strong> Type <code>!</code> by itself and press <kbd>Enter</kbd> to toggle your prompt bar into persistent <strong>Shell Mode</strong>. The prompt label turns red (e.g. <code>shell@project %</code>). All subsequent inputs will run as direct terminal commands until you type <code>!</code> again to exit back to AI chat.</li>
+                <li><strong>Stateful Directory Navigation (`cd`):</strong> Running <code>cd &lt;path&gt;</code> inside Shell Mode changes the process working directory, updates the active workspace root, and automatically reloads the File Explorer tree live.</li>
+            </ul>
+
+            <h3>4.5. Emergency Abort (<kbd>Ctrl + A</kbd>)</h3>
+            <p>
+                If an agent starts a long-running calculation, loop, deep research run, or terminal command that you wish to stop immediately, press <kbd>Ctrl + A</kbd>. This forcefully terminates all background agent threads, loops, sub-agent workers, and terminal subprocesses across all active agents, returning control to your prompt bar.
+            </p>
+        </section>
+
+        <!-- SECTION 5 -->
+        <section id="multi-agent">
+            <h2>5. Multi-Agent Orchestration</h2>
+
+            <h3>5.1. Invocation Syntax & Routing (`@` vs `@@`)</h3>
+            <p>
+                FEDERaiDE features a peer-to-peer communication network that allows you (and agents themselves) to route messages and delegate tasks dynamically using simple mention shortcuts:
+            </p>
+            <ul>
+                <li><strong>Sequential Invocation (<code>@AgentName</code>):</strong> Invokes a specific agent sequentially (e.g. <code>@Rita please review this pull request</code>). The tagged agent processes the prompt and executes its tools. If multiple sequential agents are tagged (e.g. <code>@Leo @Bob</code>), they execute one after another in order.</li>
+                <li><strong>Parallel Invocation (<code>@@AgentName</code>):</strong> Invokes multiple agents in <strong>parallel</strong> simultaneously (e.g. <code>@@Leo build the backend API, @@Bob construct the frontend UI</code>). Both agents are dispatched at the exact same time on separate background workers to complete their work concurrently.</li>
+                <li><strong>Hybrid Parallel & Sequential Chains:</strong> You can combine parallel (<code>@@</code>) and sequential (<code>@</code>) mentions in a single prompt (e.g. <code>@@Leo implement feature X, @@Bob write unit tests, and @Rita summarize when done</code>). All parallel workers launch immediately; sequential agents wait in a queue and are only dispatched once all parallel workers have finished.</li>
+                <li><strong>Team Broadcast (<code>@team</code>):</strong> Broadcasts your message to every registered agent in your system (e.g. <code>@team good morning, let's review today's roadmap</code>).</li>
+                <li><strong>Room Broadcast (<code>@room</code>):</strong> Broadcasts your message to all agents currently participating in the active chat session.</li>
+            </ul>
+
+            <h3>5.2. Autonomous Agent-to-Agent Delegation</h3>
+            <p>
+                Agents do not rely on fixed, hardcoded pipelines. Instead, agents autonomously delegate tasks to each other during conversation:
+            </p>
+            <ul>
+                <li><strong>Proactive Delegation:</strong> When an agent encounters a task outside its core backstory (e.g., a frontend developer agent needing SQL database optimization), it can mention the appropriate specialist (e.g. <code>@Marcus please optimize this SQL query</code>) directly in its response.</li>
+                <li><strong>Peer Collaboration:</strong> Tagged agents receive the full conversation history and context, allowing them to pick up where their colleague left off, critique code, or execute specialized tools seamlessly.</li>
+            </ul>
+
+            <h3>5.3. Controlling Conversation Queues (`@askuser` & `@resume`)</h3>
+            <p>
+                To prevent runaway debates, infinite loops, or unneeded token consumption during complex multi-agent discussions, FEDERaiDE provides queue control keywords:
+            </p>
+            <ul>
+                <li><code>@askuser</code> — If an agent includes <code>@askuser</code> in its response (e.g. <em>"I have prepared two database migration options. @askuser which approach do you prefer?"</em>), FEDERaiDE immediately pauses the agent execution queue and waits for your response.</li>
+                <li><code>@resume</code> — Type <code>@resume</code> in the chat input bar to unpause an agent queue that was halted by <code>@askuser</code> and allow the remaining agents to continue their turns.</li>
+            </ul>
+
+            <h3>5.4. Multi-Model Ecosystems & Cost Optimization</h3>
+            <p>
+                Because FEDERaiDE abstracts model providers at the agent level, you can construct teams combining different LLM models and providers in a single session:
+            </p>
+            <ul>
+                <li><strong>Token Cost Optimization:</strong> Assign inexpensive, fast models to junior coder agents handling repetitive file edits and test runs, while assigning high-reasoning frontier models to architect and reviewer agents who only step in for final code reviews or complex problem-solving.</li>
+            </ul>
+        </section>
+
+        <!-- SECTION 6 -->
+        <section id="ide">
+            <h2>6. Built-in Code Editor & Program Runner (IDE View)</h2>
+
+            <h3>6.1. Switching Panels</h3>
+            <p>
+                Press <kbd>F6</kbd> to cycle between the three primary views: <strong>Chat View ↔ Code Editor Workspace ↔ Executions Dashboard</strong>.
+            </p>
+
+            <h3>6.2. Navigating the File Explorer & File Creation</h3>
+            <ul>
+                <li>Use the left-hand Explorer tree to browse files and folders in your project.</li>
+                <li>Press <kbd>Ctrl + N</kbd> to create a new file in the current folder.</li>
+                <li>Press <kbd>F7</kbd> to create a new subfolder in the current directory.</li>
+            </ul>
+
+            <h3>6.3. Find & Replace (<kbd>Ctrl + F</kbd>)</h3>
+            <p>
+                Press <kbd>Ctrl + F</kbd> inside the code editor to open the Find & Replace modal. Search forward (<em>Next</em>) or backward (<em>Prev</em>), replace individual matches (<em>Replace</em>), or replace all occurrences (<em>All</em>). Uncheck the <em>Match Case</em> checkbox for case-insensitive searching.
+            </p>
+
+            <h3>6.4. Language Executables & Custom Flags (<kbd>F9</kbd>)</h3>
+            <p>
+                Press <kbd>F9</kbd> to configure executable binaries and parameters for 12+ supported programming languages (Python, Go, C, C++, Rust, Node.js, Julia, Fortran, Nim, Zig, Bash, PowerShell). You can use variables like <code>{file}</code> and <code>{file_no_ext}</code> in custom flag strings.
+            </p>
+
+            <h3>6.5. Virtual Environment (Venv) Manager (<kbd>F10</kbd>)</h3>
+            <p>
+                Press <kbd>F10</kbd> to open the Venv Manager. FEDERaiDE automatically scans your workspace directory for existing <code>.venv</code> or <code>venv/</code> folders. You can activate local project virtual environments, switch between global environments, or create a fresh environment on demand using <code>uv</code>.
+            </p>
+        </section>
+
+        <!-- SECTION 7 -->
+        <section id="skills">
+            <h2>7. Teaching Agents New Skills</h2>
+
+            <h3>7.1. Passive Skills vs. Active Skills</h3>
+            <ul>
+                <li><strong>Passive Skills (Playbooks):</strong> Markdown documents containing step-by-step instructions, guidelines, or rules for agents to follow when performing specific tasks.</li>
+                <li><strong>Active Skills (Executable Tools):</strong> Actual standalone programs (Python scripts, shell scripts, binaries) stored in your skills library that agents can run as custom tools on demand.</li>
+            </ul>
+
+            <h3>7.2. Creating Passive Playbooks</h3>
+            <p>
+                Agents can automatically save playbooks when they complete complex workflows using the <code>distill_journey</code> tool. You can also ask an agent to save a playbook manually, or read existing playbooks using the <code>read_skill</code> tool.
+            </p>
+
+            <h3>7.3. Creating Active Executable Skills</h3>
+            <p>FEDERaiDE allows agents to write, test, and register their own active executable tools in a 2-stage process:</p>
+            <ol>
+                <li>
+                    <strong>Write Logic:</strong> The agent creates the script files in your workspace (e.g., a Python script that resizes images or queries a custom API).
+                </li>
+                <li>
+                    <strong>Stage &amp; Test (<code>prepare_active_skill</code>):</strong> The agent stages the tool in an isolated environment, automatically creates a dedicated virtual environment, installs any required PyPI or custom dependencies, and runs a test validation execution with test inputs.
+                </li>
+                <li>
+                    <strong>Finalize &amp; Register (<code>finalize_active_skill</code>):</strong> Once the test run succeeds, the agent provides a tool description and usage manual. FEDERaiDE registers the tool into the agent's permanent capabilities library.
+                </li>
+            </ol>
+
+            <h4>Headless Execution Rule for Active Skills</h4>
+            <p>
+                Active skills run as background subprocesses without a GUI display. Plotting scripts (e.g. using <code>matplotlib</code>) must set a non-interactive backend (such as <code>import matplotlib; matplotlib.use('Agg')</code> BEFORE importing <code>pyplot</code>) and save plots to a file or output Base64 image tags to STDOUT. Never call interactive window functions like <code>plt.show()</code>, as they will cause execution to freeze.
+            </p>
+
+            <h4>Positional vs. Keyword Argument Modes</h4>
+            <ul>
+                <li><strong>Positional Mode:</strong> Specify an <code>arg_order</code> list (e.g. <code>['param1', 'param2']</code>) when staging the skill if your script reads positional CLI arguments (like <code>sys.argv[1]</code>).</li>
+                <li><strong>Keyword Mode (Default):</strong> Omit <code>arg_order</code> if your script accepts command-line flags (e.g. <code>--param1 value</code>).</li>
+            </ul>
+
+            <h4>Skill Version Control & Maintenance</h4>
+            <p>
+                Every finalized skill folder is initialized as an independent Git repository. Use the <code>fix_active_skill</code> tool to inspect files, edit logic, or install additional pip packages into the skill's virtual environment. Changes are automatically committed with timestamped git logs. Use <code>manage_active_skill</code> to rename or delete skills.
+            </p>
+
+            <div class="callout callout-info">
+                <h5>Activating New Tools</h5>
+                <p>Newly finalized active skills become available in the active session after resetting the session context (by cycling safety modes with <kbd>Ctrl + T</kbd> or pressing <kbd>Ctrl + K</kbd>).</p>
+            </div>
+        </section>
+
+        <!-- SECTION 8 -->
+        <section id="research">
+            <h2>8. Deep Research & Automated PDF Reports</h2>
+
+            <h3>8.1. How Deep Research Works</h3>
+            <p>
+                When assigned a complex research topic, FEDERaiDE spawns a team of parallel sub-agents in the background. Each sub-agent explores a different angle of the research topic simultaneously, gathering web sources, evaluating images, and synthesizing findings.
+            </p>
+
+            <h3>8.2. Triggering Deep Research</h3>
+            <p>
+                Ask your agent to perform deep research on any topic (e.g., <em>"Perform a deep research report on quantum dot cellular automata"</em>) or call the <code>perform_research</code> tool.
+            </p>
+
+            <h3>8.3. Live Progress Dashboard</h3>
+            <p>
+                During deep research, a split-pane dashboard appears in the chat view:
+            </p>
+            <ul>
+                <li><strong>Left Pane:</strong> Shows live progress bars for each parallel sub-agent research module.</li>
+                <li><strong>Right Pane:</strong> Streams real-time research logs, search queries, and web page fetches as they occur.</li>
+            </ul>
+
+            <h3>8.4. Enabling the Deep Research Image Companion (Illustrator)</h3>
+            <p>
+                The Deep Research Image Companion gathers, verifies, and embeds visual diagrams into final research reports. This feature is <strong>disabled by default</strong>.
+            </p>
+
+            <h4>How to Enable</h4>
+            <ol>
+                <li>Press <kbd>F3</kbd> or type <code>/settings</code> to open the Global Harness Settings modal.</li>
+                <li>Scroll down to <strong>Deep Research Image Companion</strong>.</li>
+                <li>Check the <strong>Enable Deep Research Image Companion</strong> checkbox.</li>
+            </ol>
+
+            <div class="callout callout-alert">
+                <h5>Copyright Warning Modal</h5>
+                <p>
+                    When enabling the Image Companion, FEDERaiDE presents a mandatory legal disclaimer modal. Users must accept terms acknowledging full responsibility for copyright compliance when using fetched images before the image search subsystem will engage.
+                </p>
+            </div>
+
+            <div class="callout callout-warning">
+                <h5>Mobile Platform Constraint</h5>
+                <p>
+                    The Deep Research Image Companion is <strong>automatically disabled on Android (Termux)</strong> for performance, memory stability, and mobile network constraints, even if enabled in global settings.
+                </p>
+            </div>
+
+            <h3>8.5. Global Settings & PDF Styling Customization (<kbd>F3</kbd> / `/settings`)</h3>
+            <p>Press <kbd>F3</kbd> or type <code>/settings</code> to customize research limits and PDF styling:</p>
+            <ul>
+                <li><strong>Search Pacing Delay:</strong> Set global search pacing delay (default: 65 seconds with random jitter) to prevent DuckDuckGo rate-limiting.</li>
+                <li><strong>Research Limits:</strong> Configure maximum parallel sub-agents (1–10), target context token limit (default: 28,000 tokens), and minimum report token length.</li>
+                <li><strong>PDF Customization:</strong> Adjust rendering DPI (or use <code>/dpi &lt;number&gt;</code>), change footer text, and select custom body, heading, or code font families and sizes.</li>
+            </ul>
+        </section>
+
+        <!-- SECTION 9 -->
+        <section id="voice">
+            <h2>9. Voice & Speech Features</h2>
+
+            <h3>9.1. Text-to-Speech (TTS) Output</h3>
+            <p>
+                Type <code>/tts</code> to toggle voice output on or off. When enabled, agents will speak their responses out loud using natural-sounding offline neural voices. Type <code>/readback</code> to re-read the last agent response out loud.
+            </p>
+
+            <h3>9.2. Setting Up Individual Agent Voices</h3>
+            <p>
+                Every agent can be assigned its own distinct voice in the Agent Editor (<kbd>F4</kbd>). This allows you to hear which agent is responding without looking at your screen. Over 50 male and female voices across American, British, Japanese, Mandarin, Spanish, French, Italian, and Hindi accents are supported.
+            </p>
+
+            <h3>9.3. Hands-Free Voice Dictation (Speech-to-Text / STT)</h3>
+            <p>
+                Type <code>/stt</code> to activate offline background hotword listening. Once active, FEDERaiDE listens to your microphone continuously without sending any audio to external cloud servers.
+            </p>
+
+            <h3>9.4. Dictation Triggers & Control Hotwords</h3>
+            <p>While Speech-to-Text is active, you can control dictation entirely with your voice:</p>
+            <ul>
+                <li><strong>Start Dictation:</strong> Say any start trigger (e.g. <code>AGENT</code>, <code>ASSISTANT</code>, or <code>COMPUTER</code>) to begin dictating text into your prompt bar.</li>
+                <li><strong>Pause Dictation:</strong> Say <code>STOP LISTENING</code> or <code>END DICTATION</code> to stop recording and leave your transcribed text in the prompt bar so you can review or edit it.</li>
+                <li><strong>Send Prompt:</strong> Say <code>EXECUTE</code>, <code>FINISH</code>, or <code>SEND IT</code> to immediately submit your transcribed prompt to the AI.</li>
+                <li><strong>Delete Last Sentence:</strong> Say <code>DELETE LAST</code> or <code>SCRAP THAT</code> to erase the last transcribed statement from the prompt bar.</li>
+                <li><strong>Agent Invocation Hotword:</strong> Say <code>ATTENTION &lt;AgentName&gt;</code> (e.g. <em>"ATTENTION RITA"</em> or <em>"ATTENTION TEAM"</em>) to target and route your spoken prompt to a specific agent persona.</li>
+            </ul>
+
+            <h3>9.5. Testing Your Microphone & Triggers (`/mictest`)</h3>
+            <p>
+                Type <code>/mictest</code> to open an isolated microphone and hotword testing sandbox. You can speak out loud, monitor live transcription logs, verify trigger word detection, and test noise energy thresholds before using dictation in active conversations.
+            </p>
+        </section>
+
+        <!-- SECTION 10 -->
+        <section id="telegram">
+            <h2>10. Telegram Mobile Integration</h2>
+
+            <h3>10.1. Connecting FEDERaiDE to Telegram</h3>
+            <p>You can connect your FEDERaiDE agent team directly to your smartphone via Telegram:</p>
+            <ol>
+                <li>Type <code>/telegram</code> to open the Telegram Bot Configuration modal.</li>
+                <li>Check <em>Enable Telegram Bot</em>.</li>
+                <li>Enter your Bot Token obtained from <code>@BotFather</code> on Telegram.</li>
+                <li>Enter your Telegram username or ID in <em>Allowed Users</em>.</li>
+                <li>Click <em>Save &amp; Connect</em>.</li>
+            </ol>
+
+            <div class="callout callout-alert">
+                <h5>Single-Operator Security Model</h5>
+                <p>
+                    To protect your machine, Telegram integration strictly enforces a single-operator security model:
+                </p>
+                <ul>
+                    <li>The <em>Allowed Users</em> field is <strong>mandatory</strong>. Leaving it blank strictly disables the bot.</li>
+                    <li>Only a single authorized username or ID is allowed.</li>
+                    <li>Group chats are automatically detected and blocked.</li>
+                </ul>
+            </div>
+
+            <h3>10.2. Messaging Your AI Team From Your Phone</h3>
+            <p>
+                Once connected, you can message your bot on Telegram while away from your computer. You can use standard prompts, mentions (e.g., <code>@Rita</code>), and commands. Your agents will process the request on your computer and text the response back to your phone.
+            </p>
+
+            <h3>10.3. Mobile Voice Notes & Automatic PDF Deliveries</h3>
+            <p>
+                When <em>Enable Telegram TTS</em> is checked in <code>/telegram</code>, agents send audio voice notes back to your phone using their assigned voice persona. When a Deep Research run finishes on your computer, the finished PDF report is automatically uploaded directly to your Telegram chat.
+            </p>
+        </section>
+
+        <!-- SECTION 11 -->
+        <section id="scheduler">
+            <h2>11. Scheduled Task Routines</h2>
+
+            <h3>11.1. Setting Up Automated Tasks</h3>
+            <p>
+                Type <code>/schedule</code> to open the Scheduled Tasks manager. From this modal, you can instruct agents to run automated workflows at specific times of the day.
+            </p>
+
+            <h3>11.2. Repeat Cycles</h3>
+            <p>When creating a scheduled task, choose from four repeat cycles:</p>
+            <ul>
+                <li><strong>Daily:</strong> Executes every day at the designated 24-hour time (<code>HH:MM</code>).</li>
+                <li><strong>Weekly:</strong> Executes once a week on the specified start day.</li>
+                <li><strong>Monthly:</strong> Executes once a month on the specified calendar date.</li>
+                <li><strong>Annually:</strong> Executes once a year on the specified date.</li>
+            </ul>
+
+            <h3>11.3. Task Due Alert & Offline Catch-Up Logic</h3>
+            <p>
+                When a task becomes due, FEDERaiDE presents a 60-second countdown alert modal offering three choices: <strong>Run Now</strong>, <strong>Defer 15 Min</strong>, or <strong>Skip</strong>. If no action is taken before the countdown expires, the task executes automatically.
+            </p>
+            <p>
+                If your computer or phone was off or asleep when a task was scheduled to run, FEDERaiDE detects the missed run and prompts you to execute or defer it upon the next application launch.
+            </p>
+        </section>
+
+        <!-- SECTION 12 -->
+        <section id="memory">
+            <h2>12. Memory & Context Management</h2>
+
+            <h3>12.1. How Agent Core Memory Works</h3>
+            <p>
+                Agents maintain persistent core memories stored in two categories:
+            </p>
+            <ul>
+                <li><strong>USER Memory (<code>USER.json</code>):</strong> Remembers details about you, your role, preferences, working habits, and background.</li>
+                <li><strong>MEMORY Store (<code>MEMORY.json</code>):</strong> Remembers technical facts about your projects, codebases, rules, and environment.</li>
+            </ul>
+            <p>
+                Agents automatically create, edit, or delete memory entries when learning new facts during conversation.
+            </p>
+
+            <h3>12.2. Searching Past Conversations (Episodic Memory)</h3>
+            <p>
+                Agents can search through historical chat sessions semantically using the <code>search_episodic_memory</code> tool. They can recall past decisions, architectural choices, and previous discussions even if exact keywords don't match, and retrieve full verbatim chat histories using <code>retrieve_episodic_memory</code>.
+            </p>
+
+            <h3>12.3. Context Compression Details (`/compress`)</h3>
+            <p>
+                Typing <code>/compress</code> condenses older conversation turns into a first-person technical Markdown summary (<code>[SYSTEM HISTORICAL RECALL SUMMARY]</code>), freeing token context while retaining exact file paths, code structures, and project decisions.
+            </p>
+            <ul>
+                <li><strong>Verbatim Message Retention:</strong> You can configure how many recent messages remain untouched at the end of the history via <strong>Verbatim Messages to Keep</strong> in Global Settings (<kbd>F3</kbd> / `/settings`, default: 2).</li>
+                <li><strong>Multimodal Preservation:</strong> Generated or attached images in the compressed history are automatically saved as persistent file references, ensuring visual context survives compression.</li>
+            </ul>
+        </section>
+
+        <!-- SECTION 13 -->
+        <section id="slash-commands">
+            <h2>13. Complete Slash Command Reference</h2>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Description &amp; Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>/help</code></td><td>Displays the interactive command help menu and keyboard guide.</td></tr>
+                    <tr><td><code>/arm</code></td><td>Cycles safety permission modes (<code>SAFE</code> ↔ <code>SEMI-AUTO</code> ↔ <code>FULL-AUTO</code>).</td></tr>
+                    <tr><td><code>/safe</code></td><td>Instantly locks the system into <code>SAFE</code> (read-only) mode.</td></tr>
+                    <tr><td><code>/tools</code></td><td>Lists all available tools and their current permission status.</td></tr>
+                    <tr><td><code>/dir</code> or <code>/directory</code></td><td>Opens the interactive workspace directory picker (<kbd>F8</kbd>).</td></tr>
+                    <tr><td><code>/config</code></td><td>Opens the Session Manager menu (<kbd>F2</kbd>).</td></tr>
+                    <tr><td><code>/select_agent &lt;name&gt;</code></td><td>Switches the active host agent to the specified agent name.</td></tr>
+                    <tr><td><code>/clear_all</code></td><td>Wipes chat context and memory for all agents to start completely fresh.</td></tr>
+                    <tr><td><code>/compress</code></td><td>Compresses current chat context to save memory tokens.</td></tr>
+                    <tr><td><code>/copy</code></td><td>Copies the last AI agent response directly to your clipboard.</td></tr>
+                    <tr><td><code>/init</code></td><td>Creates a baseline <code>Federaide.md</code> context instructions file in your workspace.</td></tr>
+                    <tr><td><code>/skills</code></td><td>Lists all passive playbooks and active executable tools registered to your agent.</td></tr>
+                    <tr><td><code>/tts</code></td><td>Toggles Text-to-Speech voice output on or off.</td></tr>
+                    <tr><td><code>/stt</code></td><td>Toggles Speech-to-Text background hotword listening on or off.</td></tr>
+                    <tr><td><code>/readback</code></td><td>Re-reads the last AI agent response out loud using TTS.</td></tr>
+                    <tr><td><code>/mictest</code></td><td>Opens the sandboxed microphone and trigger word testing window.</td></tr>
+                    <tr><td><code>/speech</code></td><td>Opens the Speech &amp; Audio configuration settings modal.</td></tr>
+                    <tr><td><code>/telegram</code></td><td>Opens the Telegram Bot connection setup modal.</td></tr>
+                    <tr><td><code>/schedule</code></td><td>Opens the Scheduled Task Routines manager.</td></tr>
+                    <tr><td><code>/dpi &lt;number&gt;</code></td><td>Sets the image DPI resolution for generated research PDF documents.</td></tr>
+                    <tr><td><code>/settings</code></td><td>Opens global harness settings (search pacing, retries, research token limits).</td></tr>
+                    <tr><td><code>/update</code></td><td>Checks PyPI for software updates and displays release notes.</td></tr>
+                    <tr><td><code>/version</code></td><td>Displays the currently installed version of FEDERaiDE.</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- SECTION 14 -->
+        <section id="troubleshooting">
+            <h2>14. Troubleshooting & Frequently Asked Questions</h2>
+
+            <h3>14.1. Common Issues & Solutions</h3>
+
+            <h4>Q: My agent says "Tool is unauthorized" when trying to run a script.</h4>
+            <p>
+                <strong>Solution:</strong> FEDERaiDE is currently in <code>SAFE</code> permission mode. Press <kbd>Ctrl + T</kbd> to cycle safety modes to <code>SEMI-AUTO</code> or <code>FULL-AUTO</code>, or open the Agent Editor (<kbd>F4</kbd>) and check the tool permissions under <em>Agent Abilities</em>.
+            </p>
+
+            <h4>Q: How do I stop a runaway agent conversation or loop?</h4>
+            <p>
+                <strong>Solution:</strong> Press <kbd>Ctrl + A</kbd> at any time to execute an instant emergency stop. This halts all background agent threads, loops, and terminal scripts immediately.
+            </p>
+
+            <h4>Q: Microphone hotwords are not detecting my voice.</h4>
+            <p>
+                <strong>Solution:</strong> Type <code>/mictest</code> to open the microphone testing sandbox. Check your energy threshold setting in <code>/speech</code> (try lowering it to <code>0.002</code> if your room is quiet, or raising it if your background environment is noisy), and verify that your microphone index is correct.
+            </p>
+
+            <h4>Q: I am being asked for a password when starting on Linux or Termux.</h4>
+            <p>
+                <strong>Solution:</strong> Some encrypted keyrings require a master password. Enter your password when prompted by the unlock modal, or click <em>Set New / Reset</em> to establish a new password for storing your API keys securely. If you forget your password you can simply reset it from there. Your existing keys will be erased but everything else (your agents, their backstories and memories, will stay completely unharmed).
+            </p>
+
+            <h4>Q: How do I run FEDERaiDE in chat-only mode without the code editor panels?</h4>
+            <p>
+                <strong>Solution:</strong> Launch the application using the <code>federate</code> command instead of <code>federaide</code>.
+            </p>
+
+            <h3>14.2. Software Updates (`/update`)</h3>
+            <p>
+                Type <code>/update</code> or <code>/version</code> to check for new releases. FEDERaiDE queries PyPI and displays cumulative release notes for new versions. Click <strong>Update Now</strong> to launch the automated updater script, exit the app, update dependencies, and restart FEDERaiDE automatically. You can also select <em>Skip Version</em> or <em>Remind Later</em>.
+            </p>
+        </section>
+
+        <footer>
+            <div style="font-family: var(--font-display); font-size: 1.5rem; color: var(--brand-red); display: flex; justify-content: center; align-items: center; gap: 10px; margin-bottom: 1.5rem;">
+                <span style="color: var(--brand-yellow); font-weight: bold;">&gt;</span>FEDERaiDE
+            </div>
+            <p>&copy; 2026 <a href="https://www.rocklab.in" target="_blank" rel="noopener" style="color: var(--text-dim); text-decoration: underline; text-underline-offset: 4px; transition: color 0.3s ease;" onmouseover="this.style.color='var(--brand-teal)'" onmouseout="this.style.color='var(--text-dim)'">Rock Lab Private Limited</a>. All rights reserved.</p>
+        </footer>
+
+    </main>
+
+    <!-- HAMBURGER DRAWER SCRIPT -->
+    <script>
+        const menuToggle = document.getElementById('menu-toggle');
+        const sidebar = document.querySelector('sidebar');
+
+        menuToggle.addEventListener('click', () => {
+            sidebar.classList.toggle('open');
+        });
+
+        // Close sidebar drawer after clicking a Table of Contents link on vertical/mobile screens
+        document.querySelectorAll('sidebar a').forEach(link => {
+            link.addEventListener('click', () => {
+                sidebar.classList.remove('open');
+            });
+        });
+    </script>
+</body>
+</html>
