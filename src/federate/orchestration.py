@@ -243,7 +243,7 @@ class AgentConfig:
             prompt += "\n     - Absolute Paths Mandatory: Every path in `source_paths`, `entry_point`, and `test_input` MUST be a full absolute path."
             prompt += "\n  3. EVALUATE: Review tool outputs (`[Executed Command]`, `STDOUT`, `STDERR`). Note the perfectly formed tool call examples returned in execution reports."
             prompt += "\n  4. COMMIT: Use `finalize_active_skill(tool_name, tool_description, usage_guide, arg_order)` to register. No JSON schema parameter required!"
-            prompt += "\n  5. MAINTENANCE: Use `fix_active_skill` to read/edit code, install dependencies, or update `arg_order`."
+            prompt += "\n  5. MAINTENANCE: Use fix_active_skill to read/edit code (supports partial line 'edit' with start_line/end_line or full 'replace'), install dependencies, or update arg_order."
             prompt += "\n  6. MANAGEMENT: Use `manage_active_skill` to rename or remove tools."
             prompt += "\n  7. ACTIVATION: New tools appear after a session reset (Mode Toggle or Clear Context)."
 

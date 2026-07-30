@@ -2664,25 +2664,28 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
         return f"Error finalizing skill: {e}"
 
 @tool
-def fix_active_skill(tool_name: str, action: str, documentation: str = None, tool_description: str = None, file_path: str = None, source_path: str = None, content: str = None, commit_message: str = None, dependencies: List[str] = None, arg_order: List[str] = None, config: RunnableConfig = None) -> str:
+def fix_active_skill(tool_name: str, action: str, documentation: str = None, tool_description: str = None, file_path: str = None, source_path: str = None, content: str = None, commit_message: str = None, dependencies: List[str] = None, arg_order: List[str] = None, start_line: int = None, end_line: int = None, config: RunnableConfig = None) -> str:
     """
     Allows editing and maintaining an existing Active Skill with automatic version control.
     
     Actions:
     - 'list': List all files in the tool's directory.
-    - 'read': Read a specific file (relative to tool root).
-    - 'edit': Replace a file's content or modify settings (arg_order, description).
+    - 'read': Read a specific file with line numbers (relative to tool root).
+    - 'edit': Replace a range of lines (start_line to end_line) in a file and return a 20-line surrounding snippet.
+    - 'replace': Replace an entire file's content or copy from source_path.
     - 'install': Add/Update pip dependencies in the tool's venv.
     - 'commit': Manually commit changes.
     
     Args:
         tool_name: The tool to maintain.
-        action: The action to perform (list, read, edit, install, commit).
+        action: The action to perform (list, read, edit, replace, install, commit).
         documentation: Optional manual markdown content to update.
         tool_description: Optional updated description summary.
         file_path: Target file inside tool library (e.g. 'script.py').
-        source_path: For 'edit' action: Workspace path to copy code from.
-        content: For 'edit' action: Code string to write directly.
+        source_path: For 'replace' action: Workspace path to copy code from.
+        content: For 'edit' or 'replace' action: Code string to write or replace with.
+        start_line: For 'edit' action: 1-indexed starting line number.
+        end_line: For 'edit' action: 1-indexed ending line number.
         dependencies: For 'install' action: List of pip packages.
         arg_order: Optional sequence list for positional CLI arguments.
     """
@@ -2699,6 +2702,8 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
         and not source_path 
         and not dependencies 
         and not commit_message
+        and start_line is None
+        and end_line is None
     )
 
     # --- MODE RESTRICTIONS ---
@@ -2717,7 +2722,9 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                 "content": content,
                 "commit_message": commit_message,
                 "dependencies": dependencies,
-                "arg_order": arg_order
+                "arg_order": arg_order,
+                "start_line": start_line,
+                "end_line": end_line
             }
             if not CURRENT_AGENT_VIEW.confirm_tool_execution("fix_active_skill", kwargs, agent_name=agent_name):
                 return "Error: Tool execution of 'fix_active_skill' was rejected by the user."
@@ -2766,26 +2773,24 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             return f"Error updating schema.json: {e}"
         
     try:
-        if action == "list":
+        if action_clean == "list":
             files = []
             for root, _, filenames in os.walk(active_dir):
                 if "venv" in root or ".git" in root: continue
                 for f in filenames:
                     rel_path = os.path.relpath(get_storage_path(root, f), active_dir)
-                    # Clean up 'logic/' prefix for the agent
                     if rel_path.startswith("logic/"):
                         rel_path = rel_path[6:]
                     files.append(rel_path)
             return "Files in tool directory:\n" + "\n".join(files)
             
-        elif action == "read":
+        elif action_clean == "read":
             if not file_path: return "Error: 'file_path' required."
             if file_path in ["manual", "documentation"]:
                 safe_name = "".join([c if c.isalnum() or c == '_' else "_" for c in tool_name])
                 path = get_storage_path(os.path.dirname(os.path.dirname(active_dir)), f"{safe_name}_manual.md")
             else:
                 path = get_storage_path(active_dir, file_path)
-                # Seamless logic-folder check
                 if not os.path.exists(path):
                     logic_path = get_storage_path(active_dir, "logic", file_path)
                     if os.path.exists(logic_path):
@@ -2794,19 +2799,70 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                         return f"Error: File '{file_path}' not found."
             
             with open(path, "r", encoding="utf-8") as f:
-                return f.read()
-                
-        elif action == "edit":
+                lines = f.readlines()
+            return format_numbered_lines(lines, start_line_num=1)
+
+        elif action_clean == "edit" and start_line is not None and end_line is not None:
             if not file_path: return "Error: 'file_path' required."
-            if not source_path and content is None: return "Error: Either 'source_path' or 'content' required for edit action."
+            if content is None: return "Error: 'content' required for partial edit action."
             
             if file_path in ["manual", "documentation"]:
                 safe_name = "".join([c if c.isalnum() or c == '_' else "_" for c in tool_name])
                 target_path = get_storage_path(os.path.dirname(os.path.dirname(active_dir)), f"{safe_name}_manual.md")
             else:
                 target_path = get_storage_path(active_dir, file_path)
-                
-                # If the file is a code file and we have a logic folder, prioritize it
+                if not os.path.exists(target_path) and os.path.isdir(get_storage_path(active_dir, "logic")):
+                    target_path = get_storage_path(active_dir, "logic", file_path)
+            
+            if not os.path.exists(target_path):
+                return f"Error: File '{file_path}' not found."
+
+            with open(target_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+            start_idx = max(0, start_line - 1)
+            end_idx = max(0, end_line)
+
+            edit_pos = min(start_idx, len(lines))
+            replacement = [line + "\n" for line in content.splitlines()]
+            lines = lines[:start_idx] + replacement + lines[end_idx:]
+
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+
+            # Auto-stage and Auto-commit
+            git_rel_path = os.path.relpath(target_path, active_dir)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            subprocess.run(["git", "add", git_rel_path], cwd=active_dir, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-update: {file_path} (lines {start_line}-{end_line}) @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
+
+            total_lines = len(lines)
+            if total_lines == 0:
+                return f"File '{file_path}' edited and committed automatically (file is now empty)."
+
+            snippet_start_idx = max(0, edit_pos - 20)
+            last_edited_idx = edit_pos + max(0, len(replacement) - 1)
+            snippet_end_idx = min(total_lines, last_edited_idx + 1 + 20)
+
+            snippet_lines = lines[snippet_start_idx:snippet_end_idx]
+            snippet = format_numbered_lines(
+                snippet_lines,
+                start_line_num=snippet_start_idx + 1,
+                total_lines=total_lines
+            )
+
+            return f"File '{file_path}' edited (lines {start_line}-{end_line}) and committed automatically.\n\nSnippet around edit:\n{snippet}"
+
+        elif action_clean in ["replace", "edit"]:
+            if not file_path: return f"Error: 'file_path' required for {action_clean} action."
+            if not source_path and content is None: return f"Error: Either 'source_path' or 'content' required for {action_clean} action."
+            
+            if file_path in ["manual", "documentation"]:
+                safe_name = "".join([c if c.isalnum() or c == '_' else "_" for c in tool_name])
+                target_path = get_storage_path(os.path.dirname(os.path.dirname(active_dir)), f"{safe_name}_manual.md")
+            else:
+                target_path = get_storage_path(active_dir, file_path)
                 if not os.path.exists(target_path) and os.path.isdir(get_storage_path(active_dir, "logic")):
                     target_path = get_storage_path(active_dir, "logic", file_path)
             
@@ -2824,11 +2880,11 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             git_rel_path = os.path.relpath(target_path, active_dir)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             subprocess.run(["git", "add", git_rel_path], cwd=active_dir, check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", f"Auto-update: {file_path} @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
+            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-update: {file_path} @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
             
             return f"File '{file_path}' has been replaced (from {'workspace' if source_path else 'string'}) and committed automatically."
 
-        elif action == "install":
+        elif action_clean == "install":
             if not dependencies: return "Error: 'dependencies' (list of strings) required for 'install' action."
             
             venv_dir = get_storage_path(active_dir, "venv")
@@ -2840,7 +2896,6 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                 log_tool(f"Installing dependencies for {tool_name}: {', '.join(dependencies)}")
                 subprocess.run([python_exe, "-m", "pip", "install"] + dependencies, check=True, capture_output=True)
                 
-                # Update metadata.json to keep it in sync
                 meta_path = get_storage_path(active_dir, "metadata.json")
                 if os.path.exists(meta_path):
                     with open(meta_path, "r") as f:
@@ -2855,7 +2910,6 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                     with open(meta_path, "w") as f:
                         json.dump(meta, f, indent=4)
                     
-                    # Auto-commit dependency change
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     subprocess.run(["git", "add", "metadata.json"], cwd=active_dir, check=True, capture_output=True)
                     subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-dependency update @ {timestamp}"], cwd=active_dir, check=True, capture_output=True)
@@ -2865,7 +2919,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                 err = pe.stderr.decode() if pe.stderr else str(pe)
                 return f"Pip install failed: {err}"
             
-        elif action == "commit":
+        elif action_clean == "commit":
             if not commit_message: return "Error: 'commit_message' required."
             res = subprocess.run(["git", "commit", "-m", commit_message], cwd=active_dir, text=True, capture_output=True)
             if res.returncode == 0:
