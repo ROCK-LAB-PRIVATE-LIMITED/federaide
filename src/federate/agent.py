@@ -912,24 +912,27 @@ class OnboardingModal(ModalScreen[dict]):
     #onboard_actions { height: 4; align: center middle; border-top: solid $primary; margin-top: 1; }
     """
 
+    def on_mount(self):
+        self.query_one("#onboard_api_key", Input).focus()
+
     def compose(self) -> ComposeResult:
         with Vertical(id="onboard_dialog"):
             yield Label(" Welcome to Federate Multiagent Harness", classes="pane_title")
             with VerticalScroll(id="onboard_scroll"):
                 with Vertical(classes="details_box"):
                     yield Label("Please configure your first agent to get started:", classes="section_label")
+                    yield Label("API Key:")
+                    yield Input(placeholder="Enter your API Key...", id="onboard_api_key", password=True)
+                    yield Label("Base URL Preset:")
+                    yield Select(BASE_URL_PRESETS, value="https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url_preset", allow_blank=False)
+                    yield Label("Model:")
+                    yield Input("gemini-3.1-flash-lite", id="onboard_model")
+                    yield Label("Base URL:")
+                    yield Input("https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url")
                     yield Label("Agent Name:")
                     yield Input("Rita", id="onboard_name")
                     yield Label("Agent Backstory:")
                     yield Input("You are Rita, a general purpose senior developer.", id="onboard_backstory")
-                    yield Label("Model:")
-                    yield Input("gemini-3.1-flash-lite", id="onboard_model")
-                    yield Label("Base URL Preset:")
-                    yield Select(BASE_URL_PRESETS, value="https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url_preset", allow_blank=False)
-                    yield Label("Base URL:")
-                    yield Input("https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url")
-                    yield Label("API Key:")
-                    yield Input(placeholder="Enter your API Key...", id="onboard_api_key", password=True)
             with Horizontal(id="onboard_actions"):
                 yield Button("Get Started", id="onboard_submit_btn", variant="success")
 
@@ -950,19 +953,79 @@ class OnboardingModal(ModalScreen[dict]):
         if select_widget.value != matched:
             select_widget.value = matched
 
+    @on(Input.Submitted, "#onboard_api_key")
+    @on(Input.Submitted, "#onboard_name")
     @on(Button.Pressed, "#onboard_submit_btn")
     def submit(self):
+        api_key = self.query_one("#onboard_api_key", Input).value.strip()
+        if not api_key:
+            self.notify("API Key cannot be empty. Please enter your API key to proceed.", severity="error")
+            self.query_one("#onboard_api_key", Input).focus()
+            return
+
         name = self.query_one("#onboard_name", Input).value.strip()
         if not name:
             self.notify("Agent name cannot be empty.", severity="error")
+            self.query_one("#onboard_name", Input).focus()
             return
+
         self.dismiss({
             "name": name,
             "backstory": self.query_one("#onboard_backstory", Input).value.strip(),
             "model": self.query_one("#onboard_model", Input).value.strip(),
             "base_url": self.query_one("#onboard_base_url", Input).value.strip(),
-            "api_key": self.query_one("#onboard_api_key", Input).value.strip(),
+            "api_key": api_key,
         })
+
+class AbilitiesModal(ModalScreen[dict]):
+    DEFAULT_CSS = """
+    AbilitiesModal { align: center middle; background: $background 60%; }
+    #abilities_dialog { width: 70; height: 80%; border: thick $primary; background: $surface; padding: 0 0; }
+    #abilities_scroll { padding: 1 2; }
+    .section_label { background: $primary; color: $text; padding: 0 1; margin-top: 1; text-style: bold; }
+    .ability_row { layout: horizontal; height: auto; align: left middle; margin-bottom: 0; }
+    .enable_cb { width: 65%; }
+    .disable_cb { width: 35%; color: $error; }
+    #abilities_actions { height: 4; align: center middle; border-top: solid $primary; margin-top: 1; }
+    #abilities_actions Button { margin-left: 1; }
+    """
+
+    def __init__(self, enabled_tools: list, disabled_tools: list, all_manageable_tools: list):
+        super().__init__()
+        self.enabled_tools = list(enabled_tools)
+        self.disabled_tools = list(disabled_tools)
+        self.all_manageable_tools = all_manageable_tools
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="abilities_dialog"):
+            yield Label(" Agent Abilities", classes="pane_title")
+            with VerticalScroll(id="abilities_scroll"):
+                yield Label("Enable in SAFE mode / Disable tool", classes="section_label")
+                for tool_name in self.all_manageable_tools:
+                    is_enabled = tool_name in self.enabled_tools
+                    is_disabled = tool_name in self.disabled_tools
+                    label = "Autonomous Visual Computer Operation" if tool_name == "visual_computer_operation" else tool_name.replace("_", " ").title()
+                    with Horizontal(classes="ability_row"):
+                        yield Checkbox(f"Enable (Safe): {label}", id=f"ability_{tool_name}", value=is_enabled, classes="enable_cb")
+                        yield Checkbox("Force Disable", id=f"disable_{tool_name}", value=is_disabled, classes="disable_cb")
+            with Horizontal(id="abilities_actions"):
+                yield Button("Save", id="abilities_save_btn", variant="success")
+                yield Button("Cancel", id="abilities_cancel_btn", variant="error")
+
+    @on(Button.Pressed, "#abilities_save_btn")
+    def save_btn(self):
+        enabled = []
+        disabled = []
+        for tool_name in self.all_manageable_tools:
+            if self.query_one(f"#ability_{tool_name}", Checkbox).value:
+                enabled.append(tool_name)
+            if self.query_one(f"#disable_{tool_name}", Checkbox).value:
+                disabled.append(tool_name)
+        self.dismiss({"enabled_tools": enabled, "disabled_tools": disabled})
+
+    @on(Button.Pressed, "#abilities_cancel_btn")
+    def cancel_btn(self):
+        self.dismiss(None)
 
 class ConfigModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -979,6 +1042,7 @@ class ConfigModal(ModalScreen[str]):
     .config_row { layout: horizontal; height: auto; margin-top: 1; }
     .config_row Checkbox { width: 45%; }
     .section_label { background: $primary; color: $text; padding: 0 1; margin-top: 1; text-style: bold; }
+    #ai_abilities_btn { margin-top: 1; margin-bottom: 1; width: 100%; }
     #abilities_container {
         border: round $primary;
         height: auto;
@@ -995,6 +1059,8 @@ class ConfigModal(ModalScreen[str]):
         super().__init__()
         self.agent_config = agent_config
         self.agent_manager = agent_manager
+        self.enabled_tools = list(agent_config.enabled_tools)
+        self.disabled_tools = list(getattr(agent_config, "disabled_tools", ["visual_computer_operation"]))
         self.all_manageable_tools = [
             "list_files", "search_web", "perform_research", "manage_agenda",
             "read_file", "curl_url", "save_file", "edit_file", 
@@ -1047,16 +1113,8 @@ class ConfigModal(ModalScreen[str]):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
                         yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools) # <-- NEW
 
-                    yield Label("Agent Abilities (Enable in SAFE mode / Disable tool)", classes="section_label")
-                    with VerticalScroll(id="abilities_container"):
-                        disabled_list = getattr(self.agent_config, "disabled_tools", ["visual_computer_operation"])
-                        for tool_name in self.all_manageable_tools:
-                            is_enabled = tool_name in self.agent_config.enabled_tools
-                            is_disabled = tool_name in disabled_list
-                            label = "Autonomous Visual Computer Operation" if tool_name == "visual_computer_operation" else tool_name.replace("_", " ").title()
-                            with Horizontal(classes="ability_row"):
-                                yield Checkbox(f"Enable (Safe): {label}", id=f"ability_{tool_name}", value=is_enabled, classes="enable_cb")
-                                yield Checkbox("Force Disable", id=f"disable_{tool_name}", value=is_disabled, classes="disable_cb")
+                    yield Label("Agent Abilities", classes="section_label")
+                    yield Button("Manage Agent Abilities...", id="ai_abilities_btn", variant="primary")
 
 
                     yield Label("Backup Inference", classes="section_label")
@@ -1110,14 +1168,17 @@ class ConfigModal(ModalScreen[str]):
         if select_widget.value != matched:
             select_widget.value = matched
     
+    @on(Button.Pressed, "#ai_abilities_btn")
+    def open_abilities_btn(self):
+        def handle_abilities(result):
+            if result:
+                self.enabled_tools = result["enabled_tools"]
+                self.disabled_tools = result["disabled_tools"]
+        self.app.push_screen(AbilitiesModal(self.enabled_tools, self.disabled_tools, self.all_manageable_tools), handle_abilities)
+    
     def _get_current_fields(self):
-        enabled_tools = []
-        disabled_tools = []
-        for tool_name in self.all_manageable_tools:
-            if self.query_one(f"#ability_{tool_name}", Checkbox).value:
-                enabled_tools.append(tool_name)
-            if self.query_one(f"#disable_{tool_name}", Checkbox).value:
-                disabled_tools.append(tool_name)
+        enabled_tools = self.enabled_tools
+        disabled_tools = self.disabled_tools
 
         try:
             temp = float(self.query_one("#ai_temperature", Input).value.strip())
