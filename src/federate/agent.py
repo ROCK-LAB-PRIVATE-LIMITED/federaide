@@ -1489,7 +1489,7 @@ class ChatInput(TextArea):
     """Custom Multiline TextArea that supports cycling suggestions and Enter-to-submit."""
     
     BINDINGS = [
-        Binding("ctrl+a", "abort", "Abort", show=True),
+        Binding("ctrl+a", "abort", "Abort", show=True, priority=True),
     ]
 
     class AbortRequest(Message):
@@ -2204,14 +2204,14 @@ class AIAgentView(Vertical):
     """Full-screen Chat Agent interface with Multi-Agent support."""
     
     BINDINGS =[
-        Binding("f2", "open_chat_manager", "Sessions"),
+        Binding("f2", "open_chat_manager", "Sessions", priority=True),
         Binding("ctrl+k", "clear_all_contexts", "New Chat", priority=True),
-        Binding("f4", "open_active_config", "Manage Agents"),
-        Binding("f5", "switch_agent", "Switch Agent"),
-        Binding("ctrl+t", "cycle_arm_mode", "Cycle Mode"),
-        Binding("ctrl+g", "cycle_agents", "Cycle Agents"),
-        Binding("ctrl+a", "abort", "Abort"),
-        Binding("f3", "open_global_settings", "Settings"),
+        Binding("f4", "open_active_config", "Manage Agents", priority=True),
+        Binding("f5", "switch_agent", "Switch Agent", priority=True),
+        Binding("ctrl+t", "cycle_arm_mode", "Cycle Mode", priority=True),
+        Binding("ctrl+g", "cycle_agents", "Cycle Agents", priority=True),
+        Binding("ctrl+a", "abort", "Abort", priority=True),
+        Binding("f3", "open_global_settings", "Settings", priority=True),
     ]
 
     DEFAULT_CSS = """

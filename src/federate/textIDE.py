@@ -476,31 +476,33 @@ class FEDERaiDE(App):
     """
 
     BINDINGS = [
-        Binding("f6", "cycle_view", "Switch View", priority=True),
-        Binding("ctrl+w", "close_tab", "Close Tab", priority=True),
+        # Bubble up agent bindings so they are accessible directly from the Editor
+        Binding("ctrl+k", "new_chat", "New Chat", priority=True),
+        Binding("f2", "open_chat_manager", "Sessions", priority=True),
+        Binding("f4", "open_active_config", "Manage Agents", priority=True),
+        Binding("f5", "switch_agent", "Switch Agent", priority=True),
+
+        Binding("f6", "cycle_view", "Cycle View", priority=True),
+       
         Binding("ctrl+q", "quit", "Quit", priority=True),
         
-        Binding("ctrl+l", "cycle_tab_forward", "Next Tab", show=False),
-        Binding("ctrl+o", "cycle_tab_backward", "Prev Tab", show=False),
-        Binding("ctrl+c", "copy_selected", "Copy", show=True),
+        Binding("ctrl+l", "cycle_tab_forward", "Next Tab", show=True),
+        Binding("ctrl+o", "cycle_tab_backward", "Prev Tab", show=True),
+        Binding("ctrl+w", "close_tab", "Close Tab", show=False, priority=True),
+        Binding("ctrl+c", "copy_selected", "Copy", show=False, priority=True),
         
-        Binding("ctrl+r", "run_file", "Run File", priority=True),
-        Binding("ctrl+e", "terminate_execution", "Terminate Run", priority=True),
-        Binding("f9", "open_settings", "Run Configs", priority=True),
-        Binding("f7", "new_folder", "New Folder", priority=True),
-        Binding("f8", "change_directory", "Change Dir", priority=True),
-        Binding("f10", "open_venv_manager", "Venv Mgr", priority=True),
+        Binding("ctrl+r", "run_file", "Run File"),
+        Binding("ctrl+e", "terminate_execution", "Terminate Run"),
+        Binding("f9", "open_settings", "Run Configs"),
+        Binding("f7", "new_folder", "New Folder"),
+        Binding("f8", "change_directory", "Change Dir"),
+        Binding("f10", "open_venv_manager", "Venv Mgr"),
         
-        Binding("ctrl+s", "save_file", "Save", priority=True),
+        Binding("ctrl+s", "save_file", "Save"),
         Binding("ctrl+shift+s", "save_as", "Save As", priority=True),
-        Binding("ctrl+n", "new_file", "New File", priority=True),
-        Binding("ctrl+f", "find_replace", "Find/Replace", priority=True),
-        Binding("ctrl+k", "new_chat", "New Chat", priority=True),
+        Binding("ctrl+n", "new_file", "New File"),
+        Binding("ctrl+f", "find_replace", "Find/Replace", show=False, priority=True),
 
-        # Bubble up agent bindings so they are accessible directly from the Editor
-        Binding("f2", "open_chat_manager", "Sessions", show=False),
-        Binding("f4", "open_active_config", "Manage Agents", show=False),
-        Binding("f5", "switch_agent", "Switch Agent", show=False),
     ]
     
     def notify(self, message, *args, **kwargs):
