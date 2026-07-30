@@ -28,6 +28,11 @@ AGENT INTERCOM RULES:
 - You can collaborate with other agents. To summon another agent, simply include in your response @AgentName followed by your instructions/request for them. The system will not work without the @.
 - You will see messages wrapped in <AGENT_INTERCOM> tags; these are responses from your colleagues. Use them to maintain continuity.
 - You can summon more than one agent, if you use @AgentA and @AgentB in the same response, first AgentA will be invoked followed immediately by AgentB.
+- You can also summon multiple agents in parallel. Use double @ to summon agents in parallel. @@ AgentA and @@AgentB will cause both AgentA and AgentB to be immediately dispatched. You can use this to split up work and have it done in parallel.
+- You can use parallel (@@) and sequential (@) summons at the same time. All parallel agents (@@) will launch immediately. Any sequential agents (@) will be placed in a waiting queue and will only begin AFTER all parallel workers have completely finished. You can even put yourself in the sequential queue this way.
+- If you use @@ to dispatch tasks in parallel, your turn will end. If you want to review their work afterwards, invoke yourself sequentially at the end of the prompt (e.g., "@@Gordon do X, @@Danny do Y, and @YourName (I) will summarize the results when you both are done"). You will be safely queued until all parallel agents have finished.
+- IMPORTANT CONCURRENCY RULE: If you and other agents were just summoned together in parallel (@@), they are ALREADY working on their tasks at this exact moment. Do NOT tag them again sequentially. Just complete your own assigned part and wait, they are also completing their tasks though this may not be apparent to you until the next turn.
+- To stop a runaway debate or ask the human a question, include @askuser in your message. This will safely pause the agent queue and wait for the user to respond or type @resume.
 - Do NOT use raw <AGENT_INTERCOM> tags directly. It won't work and you will look like a fool. If you use it the UI will clearly show the user that you pretended to be someone else. If the user invokes a non-existent agent tell them so instead of pretending to be this non-existent agent.
 - DELEGATION:
     - You MUST delegate the task if another agent is more suitable for the given task, based on their backstory. 
@@ -310,19 +315,30 @@ class AgentManager:
         return None
 
     def get_mentions(self, text: str) -> List[str]:
-        """Extracts all valid agent names mentioned with @ in the text."""
+        """Extracts all valid agent names mentioned sequentially with @ in the text."""
         import re
-        # Matches @Word but not @Word/ (to avoid paths)
-        potential_mentions = re.findall(r'@([^\s/]+)', text)
+        # Matches single @ but not @@, nor paths
+        potential_mentions = re.findall(r'(?<!@)@([^\s/]+)', text)
         valid_names = []
         for m in potential_mentions:
             # Strip trailing punctuation
             name = m.rstrip(",.:!?()[]{}")
-            if self.get_agent(name):
-                # We need to find the EXACT name as stored in the manager
-                agent = self.get_agent(name)
-                if agent and agent.name not in valid_names:
-                    valid_names.append(agent.name)
+            agent = self.get_agent(name)
+            if agent and agent.name not in valid_names:
+                valid_names.append(agent.name)
+        return valid_names
+
+    def get_parallel_mentions(self, text: str) -> List[str]:
+        """Extracts all valid agent names mentioned in parallel with @@ in the text."""
+        import re
+        potential_mentions = re.findall(r'@@([^\s/]+)', text)
+        valid_names = []
+        for m in potential_mentions:
+            # Strip trailing punctuation
+            name = m.rstrip(",.:!?()[]{}")
+            agent = self.get_agent(name)
+            if agent and agent.name not in valid_names:
+                valid_names.append(agent.name)
         return valid_names
 
     def save_agent(self, agent: AgentConfig):

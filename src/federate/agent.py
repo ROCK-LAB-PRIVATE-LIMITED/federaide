@@ -2463,6 +2463,7 @@ class AIAgentView(Vertical):
         )
 
         self.turn_queue = []
+        self.paused_queue = []
         self.turn_lock = threading.Lock()
 
         self._write_log(get_welcome_banner(self))
@@ -3268,8 +3269,24 @@ class AIAgentView(Vertical):
         batch_id = self.current_batch_id
         # ------------------------
 
-        # Handle @team or @room command
-        if prompt.strip().lower().startswith("@team") or prompt.strip().lower().startswith("@room"):
+        if prompt.strip().lower() != "@resume" and hasattr(self, "paused_queue") and self.paused_queue:
+            self.paused_queue = []
+
+        # Handle @resume command
+        if prompt.strip().lower() == "@resume":
+            if hasattr(self, "paused_queue") and self.paused_queue:
+                self.log_to_ui("[bold green]Resuming paused agent queue...[/bold green]")
+                with self.turn_lock:
+                    self.turn_queue = self.paused_queue
+                    self.paused_queue = []
+                    first_resumed = self.turn_queue.pop(0)
+                acting_agents = [first_resumed]
+                self.session_manager.join_conversation(self.active_agent.name, first_resumed, list(self.agent_manager.agents.values()))
+                clean_prompt = "[Queue Resumed by User]"
+            else:
+                self.log_to_ui("[bold red]No paused queue to resume.[/bold red]")
+                return
+        elif prompt.strip().lower().startswith("@team") or prompt.strip().lower().startswith("@room"):
             is_team = prompt.strip().lower().startswith("@team")
             is_room = not is_team
             prefix_len = 5 if is_team else 5
@@ -3306,37 +3323,50 @@ class AIAgentView(Vertical):
                 self.turn_queue = []
 
         else:
-            # Handle sequential @ mentions
-            mentions = self.agent_manager.get_mentions(prompt)
+            # Handle sequential @ mentions and parallel @@ mentions
+            seq_mentions = self.agent_manager.get_mentions(prompt)
+            par_mentions = self.agent_manager.get_parallel_mentions(prompt)
             clean_prompt = prompt
             if is_interrupt:
                 clean_prompt = f"the User interrupted to say this: {clean_prompt}"
 
-            if mentions:
+            acting_agents = []
+
+            if seq_mentions:
                 target_agents = []
-                for name in mentions:
+                for name in seq_mentions:
                     agent = self.agent_manager.get_agent(name)
                     if agent:
                         target_agents.append(agent)
                 
                 if target_agents:
-                    first_agent = target_agents[0]
-                    with self.turn_lock:
-                        self.turn_queue = target_agents[1:]
-                    
-                    acting_agents = [first_agent]
-                    # Ensure first agent session is ready
-                    self.session_manager.join_conversation(self.active_agent.name, first_agent, list(self.agent_manager.agents.values()))
-                else:
-                    # Fallback to active agent if mentions failed
-                    acting_agents = [self.active_agent]
+                    if par_mentions:
+                        # Parallel agents are running, so ALL sequential agents wait in the queue
+                        with self.turn_lock:
+                            self.turn_queue = target_agents
+                    else:
+                        # Standard sequential behavior
+                        first_agent = target_agents[0]
+                        with self.turn_lock:
+                            self.turn_queue = target_agents[1:]
+                        acting_agents.append(first_agent)
+                        self.session_manager.join_conversation(self.active_agent.name, first_agent, list(self.agent_manager.agents.values()))
+                elif not par_mentions:
+                    acting_agents.append(self.active_agent)
                     self.session_manager.init_agent_session(self.active_agent, list(self.agent_manager.agents.values()))
-            else:
-                # Default active agent
-                acting_agents = [self.active_agent]
+                    with self.turn_lock:
+                        self.turn_queue = []
+            elif not par_mentions:
+                acting_agents.append(self.active_agent)
                 self.session_manager.init_agent_session(self.active_agent, list(self.agent_manager.agents.values()))
                 with self.turn_lock:
                     self.turn_queue = []
+
+            for name in par_mentions:
+                p_agent = self.agent_manager.get_agent(name)
+                if p_agent and p_agent not in acting_agents:
+                    acting_agents.append(p_agent)
+                    self.session_manager.join_conversation(self.active_agent.name, p_agent, list(self.agent_manager.agents.values()))
 
         self._write_log(Rule(style="dim"))
         if is_team:
@@ -3674,10 +3704,12 @@ class AIAgentView(Vertical):
 
                                             # Telegram integration
                                             if getattr(self, "current_telegram_chat_id", None) and current_ai_text.strip():
+                                                # Add loud prefix for Telegram to distinguish agents
+                                                tele_msg = f"Agent {agent.name.upper()}:\n\n{current_ai_text.strip()}"
                                                 # --- NEW: Pass agent.tts_voice ---
                                                 self.telegram_manager.send_message(
                                                     self.current_telegram_chat_id, 
-                                                    current_ai_text.strip(), 
+                                                    tele_msg, 
                                                     title=agent.name, 
                                                     voice=agent.tts_voice
                                                 )
@@ -3775,10 +3807,20 @@ class AIAgentView(Vertical):
                     # Silent Background Session Naming
                     self.trigger_background_naming(prompt, ai_response)
                     
-                    # 2. Check for new mentions in AI response and add to queue
-                    new_mentions = self.agent_manager.get_mentions(ai_response)
+                    # 2. Check for new mentions in AI response and add to queue/parallel
+                    new_seq_mentions = self.agent_manager.get_mentions(ai_response)
+                    new_par_mentions = self.agent_manager.get_parallel_mentions(ai_response)
+                    
+                    # Fire parallel agents immediately
+                    for m_name in new_par_mentions:
+                        m_agent = self.agent_manager.get_agent(m_name)
+                        if m_agent and m_agent.name != agent.name:
+                            self.log_to_ui(f"[bold cyan]>> Parallel hand-off to {m_agent.name}...[/bold cyan]")
+                            self.session_manager.join_conversation(agent.name, m_agent, list(self.agent_manager.agents.values()))
+                            self.run_agent_task(m_agent, prompt, batch_id=batch_id)
+
                     with self.turn_lock:
-                        for m_name in new_mentions:
+                        for m_name in new_seq_mentions:
                             m_agent = self.agent_manager.get_agent(m_name)
                             # Avoid duplicates in queue and don't re-queue self immediately
                             if m_agent and m_agent.name != agent.name and m_agent not in self.turn_queue:
@@ -3787,7 +3829,13 @@ class AIAgentView(Vertical):
                 # 3. Check queue for the next agent to respond
                 next_agent = None
                 with self.turn_lock:
-                    if self.turn_queue:
+                    if "@askuser" in ai_response.lower() and self.turn_queue:
+                        self.paused_queue = list(self.turn_queue)
+                        self.turn_queue = []
+                        self.log_to_ui("[bold yellow]Queue paused by agent. Waiting for user input. Type @resume to continue.[/bold yellow]")
+
+                    # Barrier Synchronization: Wait for all parallel peers to finish before popping the sequential queue
+                    if self.turn_queue and len(self._running_agents) <= 1:
                         next_agent = self.turn_queue.pop(0)
 
                 if next_agent:
@@ -4158,6 +4206,9 @@ class AIAgentView(Vertical):
                 self.current_batch_id += 1
                 batch_id = self.current_batch_id
                 # ------------------------
+                
+                if text.strip().lower() != "@resume" and hasattr(self, "paused_queue") and self.paused_queue:
+                    self.paused_queue = []
 
                 # Determine routing and clean prompt
                 acting_agent = self.active_agent
@@ -4166,7 +4217,20 @@ class AIAgentView(Vertical):
                 is_team = False
                 is_room = False
 
-                if text.strip().lower().startswith("@team") or text.strip().lower().startswith("@room"):
+                if text.strip().lower() == "@resume":
+                    if hasattr(self, "paused_queue") and self.paused_queue:
+                        self.log_to_ui("[bold green]Resuming paused agent queue...[/bold green]")
+                        with self.turn_lock:
+                            self.turn_queue = self.paused_queue
+                            self.paused_queue = []
+                            first_resumed = self.turn_queue.pop(0)
+                        acting_agents = [first_resumed]
+                        self.session_manager.join_conversation(self.active_agent.name, first_resumed, list(self.agent_manager.agents.values()))
+                        clean_prompt = "[Queue Resumed by User]"
+                    else:
+                        self.log_to_ui("[bold red]No paused queue to resume.[/bold red]")
+                        return
+                elif text.strip().lower().startswith("@team") or text.strip().lower().startswith("@room"):
                     is_team = text.strip().lower().startswith("@team")
                     is_room = not is_team
                     prefix_len = 5
@@ -4190,26 +4254,50 @@ class AIAgentView(Vertical):
                                 self.session_manager.join_conversation(self.active_agent.name, agent, all_agents_list)
                                 acting_agents.append(agent)
                 else:
-                    match = re.match(r'^@([^\s/]+)\s+(.*)', text)
-                    if match:
-                        # Strip trailing punctuation so Telegram users can type '@Ron,'
-                        target_name = match.group(1).rstrip(",.:!?()[]{}")
-                        target_agent = self.agent_manager.get_agent(target_name)
-                        if target_agent:
-                            acting_agent = target_agent
-                            clean_prompt = match.group(2)
-                            if is_interrupt:
-                                clean_prompt = f"the User interrupted to say this: {clean_prompt}"
-                            self.session_manager.join_conversation(self.active_agent.name, acting_agent, list(self.agent_manager.agents.values()))
-                        else:
-                            if is_interrupt:
-                                clean_prompt = f"the User interrupted to say this: {clean_prompt}"
-                    else:
-                        if is_interrupt:
-                            clean_prompt = f"the User interrupted to say this: {clean_prompt}"
-                        self.session_manager.init_agent_session(acting_agent, list(self.agent_manager.agents.values()))
-                    
-                    acting_agents = [acting_agent]
+                    # Handle sequential @ mentions and parallel @@ mentions
+                    seq_mentions = self.agent_manager.get_mentions(text)
+                    par_mentions = self.agent_manager.get_parallel_mentions(text)
+                    clean_prompt = text
+                    if is_interrupt:
+                        clean_prompt = f"the User interrupted to say this: {clean_prompt}"
+
+                    acting_agents = []
+
+                    if seq_mentions:
+                        target_agents = []
+                        for name in seq_mentions:
+                            agent = self.agent_manager.get_agent(name)
+                            if agent:
+                                target_agents.append(agent)
+                        
+                        if target_agents:
+                            if par_mentions:
+                                # Parallel agents are running, so ALL sequential agents wait in the queue
+                                with self.turn_lock:
+                                    self.turn_queue = target_agents
+                            else:
+                                # Standard sequential behavior
+                                first_agent = target_agents[0]
+                                with self.turn_lock:
+                                    self.turn_queue = target_agents[1:]
+                                acting_agents.append(first_agent)
+                                self.session_manager.join_conversation(self.active_agent.name, first_agent, list(self.agent_manager.agents.values()))
+                        elif not par_mentions:
+                            acting_agents.append(self.active_agent)
+                            self.session_manager.init_agent_session(self.active_agent, list(self.agent_manager.agents.values()))
+                            with self.turn_lock:
+                                self.turn_queue = []
+                    elif not par_mentions:
+                        acting_agents.append(self.active_agent)
+                        self.session_manager.init_agent_session(self.active_agent, list(self.agent_manager.agents.values()))
+                        with self.turn_lock:
+                            self.turn_queue = []
+
+                    for name in par_mentions:
+                        p_agent = self.agent_manager.get_agent(name)
+                        if p_agent and p_agent not in acting_agents:
+                            acting_agents.append(p_agent)
+                            self.session_manager.join_conversation(self.active_agent.name, p_agent, list(self.agent_manager.agents.values()))
 
                 if not clean_prompt and (is_team or is_room):
                     return
