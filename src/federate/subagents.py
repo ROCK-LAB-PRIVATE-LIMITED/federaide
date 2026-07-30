@@ -126,6 +126,9 @@ def dispatch_subagent(task_description: str) -> str:
         - If you list files, point the tool to: {worktree_path}
         - If you run terminal commands (like tests or scripts), ALWAYS prepend 'cd {worktree_path} && ' to your command to ensure it runs inside your isolated worktree.
         
+        FILE EDITING INSTRUCTION:
+        After using the edit file tool, check the response to see the concerned section of the edited file, including your edit. Ensure the edit was placed as you intended. Check to see if the edit is syntactically correct. If you notice any issues, immediately use the edit tool again to fix it. Continue this loop until the edit you intended (and ONLY the edit you intended) has been correctly placed.
+        
         1. Break down the task.
         2. Read, save, or edit code inside your worktree.
         3. Use the terminal tool to run tests and verify your changes.
