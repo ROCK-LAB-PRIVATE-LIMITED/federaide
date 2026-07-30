@@ -139,7 +139,7 @@ fi
 if [ "$IS_TERMUX" = true ]; then
     echo "[*] Android (Termux) environment detected."
     echo "[*] Ensuring required system packages are installed..."
-    pkg install -y pango gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash
+    pkg install -y pango gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash libjpeg-turbo libtiff libpng openjpeg
 
     # Define a safe working directory in Termux home space for dummy builds
     BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
