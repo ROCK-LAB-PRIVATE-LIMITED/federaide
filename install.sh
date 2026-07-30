@@ -92,7 +92,7 @@ ensure_uv_unix() {
     if [ "$IS_TERMUX" = true ]; then
         echo "[*] Installing native Termux packages for uv and weasyprint dependencies..."
         pkg update -y
-        pkg install -y uv pango gobject-introspection libffi pkg-config
+        pkg install -y uv pango gobject-introspection libffi pkg-config openjpeg
     else
         echo "[*] Running official Astral standalone uv installer..."
         curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -131,7 +131,7 @@ install_federaide_unix() {
 
         # Ensure weasyprint system dependencies are present even if uv was already installed
         echo "[*] Ensuring required system packages are installed..."
-        pkg install -y pango gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash libjpeg-turbo libtiff libpng
+        pkg install -y pango gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash libjpeg-turbo libtiff libpng openjpeg
 
         # 1. Define a safe working directory in Termux home space for dummy builds
         BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
