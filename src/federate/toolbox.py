@@ -730,6 +730,22 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
 
 # --- SWE AGENT TOOLS ---
 
+def format_numbered_lines(lines: List[str], start_line_num: int = 1, total_lines: Optional[int] = None) -> str:
+    """Formats lines with right-aligned, space-padded line numbers so colons and code indentation align."""
+    if not lines:
+        return ""
+    if total_lines is None:
+        max_line_num = start_line_num + len(lines) - 1
+    else:
+        max_line_num = max(total_lines, start_line_num + len(lines) - 1)
+        
+    width = len(str(max_line_num))
+    
+    return "\n".join(
+        f"{str(start_line_num + i).rjust(width)}: {line.rstrip('\n')}"
+        for i, line in enumerate(lines)
+    )
+
 @tool
 def read_file(filepath: str) -> str:
     """Reads a file and returns its content. Natively supports plain text, PDFs, PNGs, JPGs, and other images."""
@@ -745,8 +761,7 @@ def read_file(filepath: str) -> str:
         log_tool(f"Reading file: [cyan]{display_path}[/cyan]")
         with open(safe_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-        # FIX: rstrip('\n') removes the newline character correctly
-        return "\n".join(f"{i+1}: {line.rstrip('\n')}" for i, line in enumerate(lines))
+        return format_numbered_lines(lines, start_line_num=1)
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -778,12 +793,29 @@ def edit_file(filepath: str, start_line: int, end_line: int, new_content: str) -
         start_idx = max(0, start_line - 1)
         end_idx = max(0, end_line)
         
-        replacement =[line + "\n" for line in new_content.splitlines()]
+        edit_pos = min(start_idx, len(lines))
+        replacement = [line + "\n" for line in new_content.splitlines()]
         lines = lines[:start_idx] + replacement + lines[end_idx:]
         
         with open(safe_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
-        return f"Successfully edited {display_path}"
+
+        total_lines = len(lines)
+        if total_lines == 0:
+            return f"Successfully edited {display_path} (file is now empty)."
+
+        snippet_start_idx = max(0, edit_pos - 20)
+        last_edited_idx = edit_pos + max(0, len(replacement) - 1)
+        snippet_end_idx = min(total_lines, last_edited_idx + 1 + 20)
+
+        snippet_lines = lines[snippet_start_idx:snippet_end_idx]
+        snippet = format_numbered_lines(
+            snippet_lines,
+            start_line_num=snippet_start_idx + 1,
+            total_lines=total_lines
+        )
+
+        return f"Successfully edited {display_path}\n\nSnippet around edit:\n{snippet}"
     except Exception as e:
         return f"Error editing file: {e}"
 
