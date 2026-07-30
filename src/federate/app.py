@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+import json
 
 # --- MILLISECOND-ACCURATE TELEMETRY PROFILER ---
 _START_TIME = time.time()
@@ -216,16 +217,39 @@ class Federate(App):
         safe_msg = escape(str(message)) if isinstance(message, str) else message
         super().notify(safe_msg, *args, **kwargs)
     
-    def __init__(self):
+    def __init__(self, initial_path: str = None):
         super().__init__()
+        self.initial_path = initial_path
         # Satisfy agent.py's execute_code configuration dependencies
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
     
     def on_mount(self):
         self.theme = "tokyo-night"
+        if self.initial_path:
+            path = Path(self.initial_path).resolve()
+            if path.exists() and path.is_dir():
+                target_dir = str(path)
+            else:
+                target_dir = str(path.parent)
+        else:
+            target_dir = get_safe_starting_dir()
+
         try:
-            import os
-            os.chdir(self.query_one("#dir_tree").path)
+            os.chdir(target_dir)
+        except Exception:
+            pass
+
+        try:
+            tree = self.query_one("#dir_tree", DirectoryTree)
+            tree.path = target_dir
+            tree.reload()
+        except Exception:
+            pass
+
+        try:
+            agent_view = self.query_one("#ai_agent_view", AIAgentView)
+            if hasattr(agent_view, "update_status_bar"):
+                agent_view.update_status_bar()
         except Exception:
             pass
         
@@ -260,8 +284,7 @@ class Federate(App):
         
     def compose(self) -> ComposeResult:
         yield Header()
-        # Initializing with the OS-specific SAFE_START_DIR
-        yield DirectoryTree(SAFE_START_DIR, id="dir_tree") 
+        yield DirectoryTree(get_safe_starting_dir(), id="dir_tree") 
         yield AIAgentView(id="ai_agent_view")
         yield Footer()
         
@@ -307,8 +330,11 @@ def main():
         res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, "footage.cast"])
         sys.exit(res.returncode)
 
+    positional_args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    initial_path = positional_args[0] if positional_args else None
+
     log_trace("Spawning standard Textual Application loop")
-    app = Federate()
+    app = Federate(initial_path=initial_path)
     app.run()
 
 if __name__ == "__main__":

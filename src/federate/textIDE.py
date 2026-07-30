@@ -1,10 +1,41 @@
 import os
 import sys
+import time
+import threading
 
 # Ensure package directory is in sys.path to resolve absolute imports of submodules
 package_dir = os.path.dirname(os.path.abspath(__file__))
 if package_dir not in sys.path:
     sys.path.insert(0, package_dir)
+
+# --- TERMINAL LOADING SPINNER ---
+_spinner_stop = threading.Event()
+
+def _run_loading_spinner():
+    if not sys.stdout.isatty():
+        return
+    if os.name == 'nt':
+        try: os.system('')
+        except Exception: pass
+    frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    idx = 0
+    message = "Launching FEDERaiDE..."
+    while not _spinner_stop.is_set():
+        frame = frames[idx % len(frames)]
+        sys.stdout.write(f"\r\033[1;36m{frame}\033[0m \033[1m{message}\033[0m")
+        sys.stdout.flush()
+        idx += 1
+        time.sleep(0.08)
+
+def stop_loading_spinner():
+    _spinner_stop.set()
+    if sys.stdout.isatty():
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+
+if sys.stdout.isatty() and "-record" not in sys.argv:
+    _spinner_thread = threading.Thread(target=_run_loading_spinner, daemon=True)
+    _spinner_thread.start()
 
 import inspect
 import importlib
@@ -220,25 +251,6 @@ def get_safe_starting_dir() -> str:
     return str(path.absolute())
 
 SAFE_START_DIR = get_safe_starting_dir()
-PERSIST_FILE = "last_dir.json"
-
-def save_last_dir(path: str):
-    """Saves the path to a JSON file."""
-    try:
-        with open(PERSIST_FILE, "w") as f:
-            json.dump({"last_dir": str(path)}, f)
-    except Exception:
-        pass
-
-def load_last_dir() -> str:
-    """Loads the path from JSON, or returns a safe default."""
-    try:
-        if os.path.exists(PERSIST_FILE):
-            with open(PERSIST_FILE, "r") as f:
-                return json.load(f).get("last_dir", get_safe_starting_dir())
-    except:
-        pass
-    return get_safe_starting_dir()
 
 class ExplorerTree(DirectoryTree):
     """A directory tree with bindings for modal navigation."""
@@ -568,7 +580,7 @@ class FEDERaiDE(App):
             with Horizontal(id="code_view"):
                 with Vertical(id="explorer_pane"):
                     yield Static(" EXPLORER", classes="pane_title")
-                    yield ExplorerTree(load_last_dir(), id="dir_tree")
+                    yield ExplorerTree(get_safe_starting_dir(), id="dir_tree")
                 with Vertical(id="editor_pane"):
                     yield TabbedContent(id="editor_tabs")
                 with Vertical(id="outline_pane"):
@@ -586,11 +598,6 @@ class FEDERaiDE(App):
 
     def on_mount(self) -> None:
         self.theme = "monokai"
-        try:
-            import os
-            os.chdir(self.query_one("#dir_tree").path)
-        except Exception:
-            pass
         tabs_widget = self.query_one("#editor_tabs", TabbedContent).query_one(Tabs)
         tabs_widget.can_focus = False
         
@@ -598,26 +605,42 @@ class FEDERaiDE(App):
         self.activate_venv(self.active_venv_name, self.active_venv_path)
 
         if self.initial_file:
-            path = Path(self.initial_file).absolute()
+            path = Path(self.initial_file).resolve()
             if path.exists() and path.is_dir():
-                self.query_one("#dir_tree", DirectoryTree).path = str(path)
+                target_dir = str(path)
             else:
-                # File doesn't exist or is a file: open it
-                # Set dir tree to parent
-                self.query_one("#dir_tree", DirectoryTree).path = str(path.parent)
-                # Open the file (open_file now handles non-existent paths)
+                target_dir = str(path.parent)
+
+            try:
+                os.chdir(target_dir)
+            except Exception:
+                pass
+
+            tree = self.query_one("#dir_tree", DirectoryTree)
+            tree.path = target_dir
+            tree.reload()
+
+            if not path.is_dir():
                 self.open_file(path)
-                # Switch to code view
                 self.query_one("#main_switcher").current = "code_view"
                 self.current_view_index = self.views.index("code_view")
-                return 
-        
-        # --- FIX: Change focus from dir_tree to chat input ---
+        else:
+            current_dir = get_safe_starting_dir()
+            try:
+                os.chdir(current_dir)
+            except Exception:
+                pass
+
         try:
-            # We look for the AI input inside the AIAgentView component
+            agent_view = self.query_one("#ai_agent_view", AIAgentView)
+            if hasattr(agent_view, "update_status_bar"):
+                agent_view.update_status_bar()
+        except Exception:
+            pass
+
+        try:
             self.query_one("#ai_chat_input").focus()
         except Exception:
-            # Fallback if AI agent isn't loaded/visible
             self.query_one("#dir_tree").focus()
     
     def action_open_chat_manager(self):
@@ -1052,14 +1075,10 @@ class FEDERaiDE(App):
         tree.root.expand_all()
     
     def action_change_directory(self):
-        # Load the last saved directory
-        current_path = load_last_dir()
+        current_path = str(self.query_one("#dir_tree", DirectoryTree).path)
             
         def handle_dir_selection(new_path):
             if new_path:
-                # Save the new selection
-                save_last_dir(new_path)
-                
                 # Update the tree
                 tree = self.query_one("#dir_tree", DirectoryTree)
                 tree.path = new_path
@@ -1172,6 +1191,7 @@ def main():
     import shlex
 
     if "-record" in sys.argv and shutil.which("asciinema"):
+        stop_loading_spinner()
         args_without_record = [arg for arg in sys.argv[1:] if arg != "-record"]
         if sys.argv[0].endswith(".py"):
             cmd_list = [sys.executable, sys.argv[0]] + args_without_record
@@ -1181,8 +1201,9 @@ def main():
         res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, "footage.cast"])
         sys.exit(res.returncode)
 
-    args = [arg for arg in sys.argv[1:] if arg != "-record"]
-    initial_file = args[0] if args else None
+    positional_args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    initial_file = positional_args[0] if positional_args else None
+    stop_loading_spinner()
     app = FEDERaiDE(initial_file=initial_file)
     app.run()
 

@@ -2468,7 +2468,7 @@ class AIAgentView(Vertical):
 
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
-        if "-r" in sys.argv:
+        if "-r" in sys.argv or "--resume" in sys.argv:
             # We delay the call until the UI is fully painted and stable
             self.call_after_refresh(self.action_resume_last)
         self.query_one("#ai_chat_input").focus()
@@ -2687,6 +2687,9 @@ class AIAgentView(Vertical):
                     # Genuine user message
                     label = "User"
                     color = "blue"
+                
+                # Clean injected timestamp/date prefixes for UI rendering
+                content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
 
                 self._write_log(Rule(style="dim"))
                 self._write_log(f"[bold {color}]{label}:[/bold {color}]", is_markdown=False)
