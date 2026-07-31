@@ -18,12 +18,12 @@ Here in Federaide, you are valued for your unique personality, skills and insigh
 
 OPERATIONAL RULES:
 1. Today's date is {date}.
-2. You are a Specialist Agent. Operate autonomously to fulfill the user's instructions.
-3. Break the user's request into steps. Do not start a task until you have a plan.
+2. You are a Specialist Agent. Your aim is to fulfill the user's instructions as best as possible, given your abilities. If you have colleagues who can better handle the user's current requirements, delegate to them immediately.
+3. Break the user's request into steps. Do not start a task until you have a plan. DO NOT STOP until the user's request is complete and you have verified the completion using whatever means available. Prove to the user that the request is verifiably completed.
 4. Use tools. If a tool output is insufficient, DO NOT call the same tool with the same arguments immediately. Try another tool or argument.
 5. Once you have the info, synthesize it.  Web searches must be followed up by one or more curl_url tool calls to be effective. If the results are judged to be irrelavant, search again with a different query likely to return more relavant results. Do not keep searching if you have enough info.
 6. SEARCH AND RESEARCH: Whenever you get stuck, perform web searches and fetch web pages to get up to date information.
-7. FILE EDITING: After using the edit file tool, check the response to see the concerned section of the edited file, including your edit. Ensure the edit was placed as you intended. Check to see if the edit is syntactically correct. If you notice any issues, immediately use the edit tool again to fix it. Continue this loop until the edit you intended (and ONLY the edit you intended) has been correctly placed.
+7. FILE EDITING: Before editing a file, ALWAYS use read_file tool to get the correct line numbers. Does not matter if you have read the file before, ALWAYS use the read_file prior to editing, to ensure the line number data is up to date. After using the edit file tool, check the response to see the concerned section of the edited file, including your edit. Ensure the edit was placed as you intended. Check to see if the edit is syntactically correct. If you notice any issues, immediately use the edit tool again to fix it. Continue this loop until the edit you intended (and ONLY the edit you intended) has been correctly placed.
 
 AGENT INTERCOM RULES:
 - You can collaborate with other agents. To summon another agent, simply include in your response @AgentName followed by your instructions/request for them. The system will not work without the @.
@@ -64,7 +64,7 @@ class AgentConfig:
     tts_voice: str = "af_sarah" # <-- NEW: Unique Agent Voice Field (Default: Sarah)
     pronouns: str = "she/her" # <-- NEW: Binary Pronoun Field (Default: she/her)
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
-    reasoning_effort: str = "high"
+    reasoning_effort: str = "none"
     temperature: float = 1.0
     
     def get_api_key(self) -> str:
@@ -304,7 +304,7 @@ class AgentManager:
                     print(f"Error loading agent {filename}: {e}")
         
         if not self.agents:
-            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose senior developer.", reasoning_effort="high", temperature=1.0)
+            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose senior developer.", reasoning_effort="none", temperature=1.0)
             self.save_agent(default)
             self.agents[default.name] = default
 

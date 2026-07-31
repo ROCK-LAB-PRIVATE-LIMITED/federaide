@@ -1098,8 +1098,8 @@ class ConfigModal(ModalScreen[str]):
                     yield Input(value=self.agent_config.backstory, id="ai_backstory")
                     yield Label("Model:")
                     yield Input(value=self.agent_config.model, id="ai_model")
-                    yield Label("Reasoning Effort (o1, o3, gemini-thinking models):")
-                    yield Select([("Low", "low"), ("Medium", "medium"), ("High", "high")], value=getattr(self.agent_config, "reasoning_effort", "high"), id="ai_reasoning_effort", allow_blank=False)
+                    yield Label("Reasoning Effort (Thinking models):")
+                    yield Select([("Default", "none"), ("Low", "low"), ("Medium", "medium"), ("High", "high")], value=getattr(self.agent_config, "reasoning_effort", "none"), id="ai_reasoning_effort", allow_blank=False)
                     yield Label("Temperature:")
                     yield Input(value=str(getattr(self.agent_config, "temperature", 1.0)), id="ai_temperature")
                     yield Label("Base URL Preset:")
@@ -1221,7 +1221,7 @@ class ConfigModal(ModalScreen[str]):
             "disabled_tools": disabled_tools,
             "tts_voice": (self.query_one("#ai_tts_voice", Select).value if self.query_one("#ai_tts_voice", Select).value != Select.BLANK else None) or "af_sarah",
             "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her",
-            "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "high",
+            "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "none",
             "temperature": temp
         }
 
@@ -2999,6 +2999,8 @@ class AIAgentView(Vertical):
         if not api_key:
             return None
             
+        effort = getattr(agent_config, "reasoning_effort", "none")
+        extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
         llm = ChatOpenAI(
             model=model, 
             temperature=getattr(agent_config, "temperature", 1.0),
@@ -3006,7 +3008,7 @@ class AIAgentView(Vertical):
             base_url=base_url,
             max_retries=5,
             timeout=120,
-            model_kwargs={"reasoning_effort": getattr(agent_config, "reasoning_effort", "high")}
+            **extra_args
         )
 
         # Unified message pre-processor to intercept tool outputs and extract image payloads.
@@ -3259,8 +3261,7 @@ class AIAgentView(Vertical):
                             api_key=api_key,
                             base_url=host_agent.base_url,
                             temperature=0,
-                            max_retries=1,
-                            model_kwargs={"reasoning_effort": getattr(host_agent, "reasoning_effort", "high")}
+                            max_retries=5,
                         )
                         
                         pronoun_val = getattr(a, "pronouns", "neither")
@@ -4393,13 +4394,15 @@ class AIAgentView(Vertical):
         try:
             from langchain_openai import ChatOpenAI
             from langchain_core.messages import SystemMessage
+            effort = getattr(agent, "reasoning_effort", "none")
+            extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
             llm = ChatOpenAI(
                 model=agent.model,
                 api_key=api_key,
                 base_url=agent.base_url,
                 temperature=0,
                 max_retries=1,
-                model_kwargs={"reasoning_effort": getattr(agent, "reasoning_effort", "high")}
+                **extra_args
             )
             naming_prompt = (
                 "Based on the following first user query and agent response of a session, "
@@ -4555,7 +4558,7 @@ class AIAgentView(Vertical):
                     base_url=result["base_url"],
                     color="#00FFFF",
                     enabled_tools=["read_file", "curl_url", "save_file", "edit_file", "dispatch_subagent", "run_terminal_command"],
-                    reasoning_effort="high",
+                    reasoning_effort="none",
                     temperature=1.0
                 )
                 
