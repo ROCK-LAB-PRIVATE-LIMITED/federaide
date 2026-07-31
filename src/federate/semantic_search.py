@@ -47,7 +47,7 @@ class SemanticSearchEngine:
         try:
             # We use absolute path for the binary if it's in the current dir
             cmd = [self.binary_path, text]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
             return json.loads(result.stdout)
         except Exception as e:
             print(f"Error calling embed binary: {e}")
