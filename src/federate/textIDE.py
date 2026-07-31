@@ -1190,15 +1190,29 @@ def main():
     import subprocess
     import shlex
 
-    if "-record" in sys.argv and shutil.which("asciinema"):
+    if any(flag in sys.argv for flag in ("-record", "-rec")) and shutil.which("asciinema"):
         stop_loading_spinner()
-        args_without_record = [arg for arg in sys.argv[1:] if arg != "-record"]
+        args_without_record = [arg for arg in sys.argv[1:] if arg not in ("-record", "-rec")]
+        positional_args = [arg for arg in args_without_record if not arg.startswith("-")]
+        if positional_args:
+            p = Path(positional_args[0]).resolve()
+            target_dir = str(p) if p.is_dir() else str(p.parent)
+        else:
+            target_dir = get_safe_starting_dir()
+
+        cast_path = os.path.join(target_dir, "footage.cast")
+        if os.path.exists(cast_path):
+            idx = 1
+            while os.path.exists(os.path.join(target_dir, f"footage{idx}.cast")):
+                idx += 1
+            cast_path = os.path.join(target_dir, f"footage{idx}.cast")
+
         if sys.argv[0].endswith(".py"):
             cmd_list = [sys.executable, sys.argv[0]] + args_without_record
         else:
             cmd_list = [sys.argv[0]] + args_without_record
         quoted_cmd = " ".join(shlex.quote(arg) for arg in cmd_list)
-        res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, "footage.cast"])
+        res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, cast_path])
         sys.exit(res.returncode)
 
     positional_args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
