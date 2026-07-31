@@ -314,6 +314,34 @@ class Federate(App):
                     
         self.push_screen(DirectoryModal(current_path), handle_dir_selection)
 
+def get_positional_args(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    pos_args = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-r", "--resume"):
+            if i + 1 < len(argv) and argv[i + 1].isdigit():
+                i += 2
+                continue
+            i += 1
+            continue
+        elif arg.startswith("-r=") or arg.startswith("--resume="):
+            i += 1
+            continue
+        elif arg in ("-record", "-rec"):
+            i += 1
+            continue
+        elif arg.startswith("-"):
+            i += 1
+            continue
+        else:
+            pos_args.append(arg)
+            i += 1
+    return pos_args
+
+
 def main():
     import sys
     import shutil
@@ -322,7 +350,7 @@ def main():
 
     if any(flag in sys.argv for flag in ("-record", "-rec")) and shutil.which("asciinema"):
         args_without_record = [arg for arg in sys.argv[1:] if arg not in ("-record", "-rec")]
-        positional_args = [arg for arg in args_without_record if not arg.startswith("-")]
+        positional_args = get_positional_args(args_without_record)
         if positional_args:
             p = Path(positional_args[0]).resolve()
             target_dir = str(p) if p.is_dir() else str(p.parent)
@@ -344,7 +372,7 @@ def main():
         res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, cast_path])
         sys.exit(res.returncode)
 
-    positional_args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]
+    positional_args = get_positional_args(sys.argv[1:])
     initial_path = positional_args[0] if positional_args else None
 
     log_trace("Spawning standard Textual Application loop")

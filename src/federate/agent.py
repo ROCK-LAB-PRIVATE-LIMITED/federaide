@@ -128,6 +128,25 @@ _BACKSTORY_LOCK = threading.Lock()
 from telegram_handler import TelegramManager
 from orchestration import AgentManager, SessionManager, AgentConfig, HistoryMessage, ScheduleManager
 
+def parse_resume_index(argv=None) -> Optional[int]:
+    if argv is None:
+        argv = sys.argv[1:]
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-r", "--resume"):
+            if i + 1 < len(argv) and argv[i + 1].isdigit():
+                return int(argv[i + 1])
+            return 1
+        elif arg.startswith("-r=") or arg.startswith("--resume="):
+            val = arg.split("=", 1)[1]
+            if val.isdigit():
+                return int(val)
+            return 1
+        i += 1
+    return None
+
+
 def get_session_name_map() -> dict:
     path = os.path.join(toolbox.FEDERATE_DIR, "session_names.json")
     if os.path.exists(path):
@@ -2468,9 +2487,10 @@ class AIAgentView(Vertical):
 
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
-        if "-r" in sys.argv or "--resume" in sys.argv:
+        resume_offset = parse_resume_index()
+        if resume_offset is not None:
             # We delay the call until the UI is fully painted and stable
-            self.call_after_refresh(self.action_resume_last)
+            self.call_after_refresh(lambda: self.action_resume_last(offset=resume_offset))
         self.query_one("#ai_chat_input").focus()
         
         self.spinner_chars =["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -2539,11 +2559,47 @@ class AIAgentView(Vertical):
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
     
-    def action_resume_last(self):
-        """Finds the last modified session and uses the existing load logic."""
-        files = sorted(glob.glob(get_storage_path("sessions", "*.json")), key=os.path.getmtime)
-        if len(files) > 1:
-            self.load_chat_file(files[-2])
+    def action_resume_last(self, offset: int = 1):
+        """Finds the session modified `offset` steps ago and loads it (1-based: -r or -r 1 = last session)."""
+        if offset <= 0:
+            return  # 0 refers to the current new conversation, so do nothing
+
+        all_files = glob.glob(get_storage_path("sessions", "*.json"))
+        curr_sess_id = getattr(self.session_manager, "current_session_id", "")
+        
+        sessions_map = {}
+        for f in all_files:
+            base = os.path.basename(f).replace(".json", "")
+            parts = base.split("_")
+            if len(parts) >= 2:
+                sess_id = f"{parts[0]}_{parts[1]}"
+                if sess_id == curr_sess_id:
+                    continue
+                if sess_id not in sessions_map:
+                    sessions_map[sess_id] = []
+                sessions_map[sess_id].append(f)
+                
+        if not sessions_map:
+            self.log_to_ui("[bold red]No past chat sessions found to resume.[/bold red]")
+            return
+
+        sorted_sessions = sorted(
+            sessions_map.items(),
+            key=lambda item: max(os.path.getmtime(f) for f in item[1]),
+            reverse=True
+        )
+
+        idx = offset - 1  # Map 1-based offset to 0-based array index
+        if 0 <= idx < len(sorted_sessions):
+            target_files = sorted_sessions[idx][1]
+            target_file = target_files[0]
+            for f in target_files:
+                if self.active_agent and self.active_agent.name.lower() in os.path.basename(f).lower():
+                    target_file = f
+                    break
+            self.load_chat_file(target_file)
+        else:
+            self.log_to_ui(f"[bold red]Cannot resume session -r {offset}: only {len(sorted_sessions)} past session(s) found.[/bold red]")
         
     def action_abort(self):
         """Interrupts current agent tasks, stops the spinner, and returns focus to input."""
