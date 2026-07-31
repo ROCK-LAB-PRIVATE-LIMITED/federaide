@@ -212,7 +212,7 @@ class AgentConfig:
             prompt = f"{self.backstory}\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
         else:
             gender_desc = "male" if self.pronouns == "he/him" else "female"
-            prompt = f"{self.backstory}\n\nIDENTITY RULES:\n- You are a {gender_desc} character.\n- You must always refer to yourself and write in a manner consistent with '{self.pronouns}' pronouns.\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
+            prompt = f"{self.backstory}\n\nIDENTITY RULES:\n- You are a {gender_desc} character.\n- Express yourself in a manner consistent with a {gender_desc} persona.\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
         
         # Inject Architecture
         prompt += f"\n\n--- CORE MEMORY (Facts) ---\n{memory_content}"
