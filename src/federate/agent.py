@@ -589,6 +589,9 @@ class GlobalSettingsModal(ModalScreen[str]):
                 yield Label("API Connection & Error Recovery", classes="section_label")
                 
                 with Vertical(classes="field_container"):
+                    yield Checkbox("Check for updates automatically on launch", id="autoupdate_on_launch")
+
+                with Vertical(classes="field_container"):
                     yield Label("Max Connection Retries", classes="field_label")
                     yield Label("Maximum retry attempts for dropped, uncompleted, or rate-limited LLM API calls.", classes="field_help")
                     yield Input(id="max_api_retries", placeholder="e.g. 20")
@@ -725,6 +728,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         with self.prevent(Checkbox.Changed):
             self.query_one("#research_image_system_enabled", Checkbox).value = config.get("research_image_system_enabled", False)
             self.query_one("#research_images_as_links", Checkbox).value = not config.get("research_images_as_links", False)
+            self.query_one("#autoupdate_on_launch", Checkbox).value = config.get("autoupdate_on_launch", False)
 
     @on(Checkbox.Changed, "#research_images_as_links")
     def on_as_links_changed(self, event: Checkbox.Changed):
@@ -814,9 +818,11 @@ class GlobalSettingsModal(ModalScreen[str]):
         
         img_system_enabled = self.query_one("#research_image_system_enabled", Checkbox).value
         images_as_links = not self.query_one("#research_images_as_links", Checkbox).value
+        autoupdate_on_launch = self.query_one("#autoupdate_on_launch", Checkbox).value
 
         config = {
             "user_name": user_name,
+            "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
             "search_pacing_delay": pacing,
             "max_search_results": max_results,
@@ -2521,7 +2527,8 @@ class AIAgentView(Vertical):
         self.spinner_idx = 0
         self.set_interval(0.1, self.tick_spinners)
         self.set_interval(60.0, self.tick_scheduler)
-        self.check_for_updates_bg(manual=False)
+        if load_global_settings().get("autoupdate_on_launch", False):
+            self.check_for_updates_bg(manual=False)
 
     def select_agent(self, name: str) -> bool:
         agent = self.agent_manager.get_agent(name)

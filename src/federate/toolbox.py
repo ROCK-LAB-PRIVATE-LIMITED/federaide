@@ -87,6 +87,7 @@ DEFAULT_GLOBAL_SETTINGS = {
     "research_images_max": 10,
     "research_image_retries": 1,
     "research_images_as_links": False,
+    "autoupdate_on_launch": False,
 }
 
 
