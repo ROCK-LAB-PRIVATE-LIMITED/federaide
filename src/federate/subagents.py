@@ -8,7 +8,7 @@ from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
 import time
 # Import the shared tools from toolbox.py 
-# (dispatch_subagent is explicitly NOT imported by the subagent to prevent inception/looping)
+# (dispatch_coding_subagent is explicitly NOT imported by the subagent to prevent inception/looping)
 from toolbox import (
     shared_memory,
     read_file, 
@@ -20,7 +20,7 @@ from toolbox import (
 )
 
 @tool
-def dispatch_subagent(task_description: str) -> str:
+def dispatch_coding_subagent(task_description: str) -> str:
     """
     Dispatches an autonomous subagent to work on a coding task in an isolated, local git worktree.
     The subagent will create a new local branch, write/edit code, run tests, and commit its changes locally.
@@ -92,9 +92,14 @@ def dispatch_subagent(task_description: str) -> str:
                 agent_view = CURRENT_APP.query_one("AIAgentView")
                 # Pull from the currently active agent persona
                 agent = agent_view.active_agent
-                api_key = agent.get_api_key()
-                base_url = agent.base_url
-                model = agent.model
+                if agent.use_backup and agent.backup_model:
+                    model = agent.backup_model
+                    base_url = agent.backup_base_url or agent.base_url
+                    api_key = agent.get_backup_api_key() or agent.get_api_key()
+                else:
+                    model = agent.model
+                    base_url = agent.base_url
+                    api_key = agent.get_api_key()
         except Exception as e:
             log_tool(f"[dim red]Subagent config fetch error: {e}[/dim red]")
 

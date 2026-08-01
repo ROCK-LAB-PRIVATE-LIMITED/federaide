@@ -93,12 +93,14 @@ except ImportError:
 
 from toolbox import (
     get_storage_path,
-    read_file, 
+    load_global_settings,
+    save_global_settings,
+    read_file,
     save_file, 
     edit_file, 
     list_files, 
     run_terminal_command, 
-    curl_url, 
+    fetch_url, 
     search_web,
     perform_research,
     manage_agenda,
@@ -120,7 +122,7 @@ from toolbox import (
 from toolbox import shared_memory, update_core_memory, save_skill, read_skill, distill_journey, mark_quagmire, delete_passive_skill, list_skills, is_keyring_locked, unlock_keyring, get_locked_keyring
 import time
 import toolbox
-from subagents import dispatch_subagent
+from subagents import dispatch_coding_subagent
 
 from audio_handler import TTSManager, STTManager, AudioConfigModal
 
@@ -550,6 +552,18 @@ class GlobalSettingsModal(ModalScreen[str]):
             yield Label(" Global Harness Settings", classes="pane_title")
             
             with VerticalScroll(id="global_scroll"):
+                yield Label("User Identity", classes="section_label")
+                
+                with Vertical(classes="field_container"):
+                    yield Label("User Name", classes="field_label")
+                    yield Label("Display name for user messages in the chat panel.", classes="field_help")
+                    yield Input(id="user_name", placeholder="User")
+                    
+                with Vertical(classes="field_container"):
+                    yield Label("User Color", classes="field_label")
+                    yield Label("Color formatting for user label in the chat panel (e.g. #dda0dd, purple).", classes="field_help")
+                    yield Input(id="user_color", placeholder="#dda0dd")
+
                 yield Label("Search & Scraping Parameters", classes="section_label")
                 
                 with Vertical(classes="field_container"):
@@ -682,8 +696,9 @@ class GlobalSettingsModal(ModalScreen[str]):
                 yield Button("Cancel", id="cancel_global_btn", variant="error")
 
     def on_mount(self):
-        from toolbox import load_global_settings
         config = load_global_settings()
+        self.query_one("#user_name", Input).value = str(config.get("user_name", "User"))
+        self.query_one("#user_color", Input).value = str(config.get("user_color", "#dda0dd"))
         self.query_one("#search_pacing_delay", Input).value = str(config.get("search_pacing_delay", 65.0))
         self.query_one("#max_search_results", Input).value = str(config.get("max_search_results", 10))
         self.query_one("#scraper_max_bytes", Input).value = str(config.get("scraper_max_bytes", 1000000))
@@ -734,7 +749,9 @@ class GlobalSettingsModal(ModalScreen[str]):
 
     @on(Button.Pressed, "#save_global_btn")
     def save_btn(self):
-        from toolbox import save_global_settings
+        user_name = self.query_one("#user_name", Input).value.strip() or "User"
+        user_color = self.query_one("#user_color", Input).value.strip() or "#dda0dd"
+        
         try: pacing = float(self.query_one("#search_pacing_delay", Input).value.strip())
         except ValueError: pacing = 65.0
         
@@ -799,6 +816,8 @@ class GlobalSettingsModal(ModalScreen[str]):
         images_as_links = not self.query_one("#research_images_as_links", Checkbox).value
 
         config = {
+            "user_name": user_name,
+            "user_color": user_color,
             "search_pacing_delay": pacing,
             "max_search_results": max_results,
             "scraper_max_bytes": max_bytes,
@@ -1082,8 +1101,8 @@ class ConfigModal(ModalScreen[str]):
         self.disabled_tools = list(getattr(agent_config, "disabled_tools", ["visual_computer_operation"]))
         self.all_manageable_tools = [
             "list_files", "search_web", "perform_research", "manage_agenda",
-            "read_file", "curl_url", "save_file", "edit_file", 
-            "dispatch_subagent", "run_terminal_command", "visual_computer_operation"
+            "read_file", "fetch_url", "save_file", "edit_file", 
+            "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation"
         ]
 
     def compose(self) -> ComposeResult:
@@ -2366,6 +2385,11 @@ class AIAgentView(Vertical):
         text-align: center;
     }
     .status_right { color: #dda0dd; text-align: right; }
+    .message_block {
+        height: auto;
+        width: 100%;
+        margin-bottom: 0;
+    }
     .tool_result_box {
         border: round $accent;
         background: $boost;
@@ -2701,16 +2725,14 @@ class AIAgentView(Vertical):
                 color = agent.color if agent else "magenta"
 
                 if content and content.strip():
-                    self._write_log(Rule(style="dim"))
-                    self._write_log(f"[bold {color}]{owner_name}:[/bold {color}]", is_markdown=False)
-                    self._write_log(content, is_markdown=True)
+                    self._write_message_block(f"[bold {color}]{owner_name}:[/bold {color}]", content, color, is_markdown=True)
 
                 if hm.tool_calls:
                     for tc in hm.tool_calls:
                         tc_name = tc.get("name", "tool")
                         tc_args = str(tc.get("args", {}))
-                        self._write_log(Rule(style="dim"))
-                        self._write_log(f"[#808080]Calling Tool: {escape(tc_name)} with args: {escape(tc_args)}[/#808080]")
+                        call_text = f"[#808080]Calling Tool: {escape(tc_name)} with args: {escape(tc_args)}[/#808080]"
+                        self._write_message_block(f"[bold {color}]{owner_name} (Tool Call):[/bold {color}]", call_text, color, is_markdown=False)
 
                 if hm.tool_outputs:
                     for out in hm.tool_outputs:
@@ -2733,23 +2755,23 @@ class AIAgentView(Vertical):
 
                 if intercom_match:
                     label = intercom_match.group(1) # The synced agent's name
+                    synced_agent = self.agent_manager.get_agent(label)
+                    color = synced_agent.color if synced_agent else "cyan"
                     content = intercom_match.group(2).strip()
-                    color = "cyan"
                 elif tool_match:
                     label = f"{tool_match.group(1)} (Tool: {tool_match.group(2)})"
+                    synced_agent = self.agent_manager.get_agent(tool_match.group(1))
+                    color = synced_agent.color if synced_agent else "bright_black"
                     content = tool_match.group(3).strip()
-                    color = "bright_black" # Dim/Gray for tool output
                 else:
                     # Genuine user message
-                    label = "User"
-                    color = "blue"
+                    user_cfg = load_global_settings()
+                    label = user_cfg.get("user_name", "User")
+                    color = user_cfg.get("user_color", "#dda0dd")
                 
                 # Clean injected timestamp/date prefixes for UI rendering
                 content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
-
-                self._write_log(Rule(style="dim"))
-                self._write_log(f"[bold {color}]{label}:[/bold {color}]", is_markdown=False)
-                self._write_log(content, is_markdown=True)
+                self._write_message_block(f"[bold {color}]{label}:[/bold {color}]", content, color, is_markdown=True)
     
     def action_open_active_config(self):
         """F4: Opens the editor. Distinguishes between Renaming and Cloning."""
@@ -2844,6 +2866,40 @@ class AIAgentView(Vertical):
                 self.app.push_screen(ChatLoadModal(), handle_load)
 
         self.app.push_screen(ChatManagerModal(), handle_chat_mgr)
+
+    def write_message_block(self, header_markup: str, content: str, color: str, is_markdown: bool = True):
+        try:
+            self.app.call_from_thread(self._write_message_block, header_markup, content, color, is_markdown)
+        except RuntimeError:
+            self._write_message_block(header_markup, content, color, is_markdown)
+
+    def _write_message_block(self, header_markup: str, content: str, color: str, is_markdown: bool = True):
+        try:
+            chat_body = self.query_one("#chat_messages")
+            top_rule = Static(Rule(style=color))
+            header_widget = Static(Text.from_markup(header_markup), classes="chat_msg", markup=False)
+            
+            if is_markdown:
+                msg_to_render = render_latex_to_unicode(content)
+                content_widget = Static(Markdown(msg_to_render), classes="chat_msg")
+            else:
+                content_widget = Static(Text.from_markup(content), classes="chat_msg", markup=False)
+                
+            bottom_rule = Static(Rule(style=color))
+            
+            box = Vertical(
+                top_rule,
+                header_widget,
+                content_widget,
+                bottom_rule,
+                classes="message_block"
+            )
+            chat_body.mount(box)
+            self.app.call_after_refresh(lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False))
+            self.query_one("#ai_chat_scroll").scroll_end(animate=False)
+            self.update_status_bar()
+        except Exception:
+            pass
 
     def log_to_ui(self, msg: Any, is_markdown: bool = False):
         try:
@@ -3095,8 +3151,8 @@ class AIAgentView(Vertical):
             # Map out all executable, terminal, research, active skill development, and high-privilege tools
             other_tool_names = [
                 "list_files", "search_web", "perform_research", "manage_agenda",
-                "read_file", "curl_url", "save_file", "edit_file", 
-                "dispatch_subagent", "run_terminal_command", "take_screenshot",        
+                "read_file", "fetch_url", "save_file", "edit_file", 
+                "dispatch_coding_subagent", "run_terminal_command", "take_screenshot",        
                 "click_at_current_location", "move_cursor_absolute", 
                 "move_cursor_relative", "send_scroll", "inject_keyboard_input",
                 "prepare_active_skill", "finalize_active_skill", "manage_active_skill", "fix_active_skill"
@@ -3150,10 +3206,10 @@ class AIAgentView(Vertical):
 
             high_priv_map = {
                 "read_file": read_file,
-                "curl_url": curl_url,
+                "fetch_url": fetch_url,
                 "save_file": save_file,
                 "edit_file": edit_file,
-                "dispatch_subagent": dispatch_subagent,
+                "dispatch_coding_subagent": dispatch_coding_subagent,
                 "run_terminal_command": run_terminal_command,
                 "take_screenshot": take_screenshot,        
                 "click_at_current_location": click_at_current_location,
@@ -3253,13 +3309,21 @@ class AIAgentView(Vertical):
                     from langchain_core.messages import HumanMessage
                     from toolbox import resilient_invoke
                     
-                    api_key = host_agent.get_api_key()
+                    if host_agent.use_backup and host_agent.backup_model:
+                        model = host_agent.backup_model
+                        base_url = host_agent.backup_base_url or host_agent.base_url
+                        api_key = host_agent.get_backup_api_key() or host_agent.get_api_key()
+                    else:
+                        model = host_agent.model
+                        base_url = host_agent.base_url
+                        api_key = host_agent.get_api_key()
+
                     if api_key:
                         self.log_to_ui(f"[dim]Translating backstory for {a.name} to 3rd person...[/dim]")
                         llm = ChatOpenAI(
-                            model=host_agent.model,
+                            model=model,
                             api_key=api_key,
-                            base_url=host_agent.base_url,
+                            base_url=base_url,
                             temperature=0,
                             max_retries=5,
                         )
@@ -3428,24 +3492,27 @@ class AIAgentView(Vertical):
                     acting_agents.append(p_agent)
                     self.session_manager.join_conversation(self.active_agent.name, p_agent, list(self.agent_manager.agents.values()))
 
-        self._write_log(Rule(style="dim"))
+        user_cfg = load_global_settings()
+        u_name = user_cfg.get("user_name", "User")
+        u_color = user_cfg.get("user_color", "#dda0dd")
+
         if is_team:
-            self._write_log("[bold blue]User (to Team):[/bold blue]", is_markdown=False)
+            hdr = f"[bold {u_color}]{u_name} (to Team):[/bold {u_color}]"
         elif 'is_room' in locals() and is_room:
-            self._write_log("[bold blue]User (to Room):[/bold blue]", is_markdown=False)
+            hdr = f"[bold {u_color}]{u_name} (to Room):[/bold {u_color}]"
         elif len(acting_agents) == 1:
-            self._write_log(f"[bold blue]User (to {acting_agents[0].name}):[/bold blue]", is_markdown=False)
+            hdr = f"[bold {u_color}]{u_name} (to {acting_agents[0].name}):[/bold {u_color}]"
         else:
-            self._write_log("[bold blue]User:[/bold blue]", is_markdown=False)
-        
-        self._write_log(clean_prompt, is_markdown=True)
+            hdr = f"[bold {u_color}]{u_name}:[/bold {u_color}]"
+
+        self._write_message_block(hdr, clean_prompt, u_color, is_markdown=True)
         
         # Process & context injection
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
         processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
         
         # Broadcast user message to all active agents (now they all definitely have sessions)
-        self.session_manager.broadcast_message("User", processed_prompt, is_ai=False)
+        self.session_manager.broadcast_message(u_name, processed_prompt, is_ai=False)
         self.update_tokens()
         # Reset the global abort flag before starting tasks
         toolbox.ABORT_EVENT.clear()
@@ -3739,10 +3806,19 @@ class AIAgentView(Vertical):
                                     if getattr(self, "tts_enabled", False):
                                         self.tts_manager.stream_text(text_chunk, agent_name=agent.name, voice=agent.tts_voice)
                                     if not current_ai_widget:
-                                        self.log_to_ui(Rule(style="dim"))
-                                        self.log_to_ui(f"[bold {agent.color}]{agent.name}:[/bold {agent.color}]", is_markdown=False)
+                                        top_rule = Static(Rule(style=agent.color))
+                                        header_widget = Static(Text.from_markup(f"[bold {agent.color}]{agent.name}:[/bold {agent.color}]"), classes="chat_msg", markup=False)
                                         current_ai_widget = Static(Markdown(""), classes="chat_msg")
-                                        self.app.call_from_thread(self.query_one("#chat_messages").mount, current_ai_widget)
+                                        bottom_rule = Static(Rule(style=agent.color))
+                                        
+                                        ai_box = Vertical(
+                                            top_rule,
+                                            header_widget,
+                                            current_ai_widget,
+                                            bottom_rule,
+                                            classes="message_block"
+                                        )
+                                        self.app.call_from_thread(self.query_one("#chat_messages").mount, ai_box)
                                         
                                     display_text = render_latex_to_unicode(current_ai_text)
                                     self.app.call_from_thread(current_ai_widget.update, Markdown(display_text))
@@ -3776,10 +3852,10 @@ class AIAgentView(Vertical):
 
                                             # Print outgoing tool calls
                                             if hasattr(msg, "tool_calls") and msg.tool_calls:
-                                                self.log_to_ui(Rule(style="dim"))
                                                 for tc in msg.tool_calls:
                                                     tool_calls.append(tc)
-                                                    self.log_to_ui(f"[#808080]Calling Tool: {escape(tc['name'])} with args: {escape(str(tc['args']))}[/#808080]")
+                                                    call_text = f"[#808080]Calling Tool: {escape(tc['name'])} with args: {escape(str(tc['args']))}[/#808080]"
+                                                    self.write_message_block(f"[bold {agent.color}]{agent.name} (Tool Call):[/bold {agent.color}]", call_text, agent.color, is_markdown=False)
 
                                             # Clean up streaming variables for the next turn
                                             if getattr(self, "tts_enabled", False):
@@ -3827,11 +3903,11 @@ class AIAgentView(Vertical):
                                             self.log_to_ui(box_widget)
                         
                         # Detect completely empty responses and inject a retry prompt natively
-                        if not full_ai_response.strip() and not tool_outputs and not tool_calls:
+                        if not full_ai_response.strip():
                             consecutive_fail_count += 1
                             if consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
-                                self.log_to_ui(f"[bold yellow] Agent returned an empty response. Prompting LLM to retry ({consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS})...[/bold yellow]")
-                                stream_input = {"messages": [HumanMessage(content="System Guardrail: Your previous response was completely empty. You must provide a text response or call a tool.")]}
+                                self.log_to_ui(f"[bold yellow] Hmmmm. Lets see now... ({consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS})...[/bold yellow]")
+                                stream_input = {"messages": [HumanMessage(content="System Guardrail: You have not provided a text response to the user. Please continue your turn and provide a response.")]}
                                 current_ai_text = ""
                                 full_ai_response = ""
                                 current_ai_widget = None
@@ -3882,9 +3958,11 @@ class AIAgentView(Vertical):
                     with self.turn_lock:
                         for m_name in new_seq_mentions:
                             m_agent = self.agent_manager.get_agent(m_name)
-                            # Avoid duplicates in queue and don't re-queue self immediately
-                            if m_agent and m_agent.name != agent.name and m_agent not in self.turn_queue:
-                                self.turn_queue.append(m_agent)
+                            # Allow self-callback ONLY if parallel agents (@@) were dispatched in this turn;
+                            # Otherwise allow for all other distinct agents.
+                            if m_agent and m_agent not in self.turn_queue:
+                                if m_agent.name != agent.name or len(new_par_mentions) > 0:
+                                    self.turn_queue.append(m_agent)
 
                 # 3. Check queue for the next agent to respond
                 next_agent = None
@@ -4133,7 +4211,6 @@ class AIAgentView(Vertical):
     @work(thread=True)
     def check_for_updates_bg(self, manual: bool = False):
         import urllib.request, json
-        from toolbox import load_global_settings, save_global_settings
         
         installed_ver = get_installed_version()
         latest_ver = None
@@ -4253,9 +4330,11 @@ class AIAgentView(Vertical):
             try:
                 self.current_telegram_chat_id = chat_id
                 
-                self._write_log(Rule(style="dim"))
-                self._write_log(f"[bold blue]Telegram User ({chat_id}):[/bold blue]", is_markdown=False)
-                self._write_log(text, is_markdown=True)
+                user_cfg = load_global_settings()
+                u_name = user_cfg.get("user_name", "User")
+                u_color = user_cfg.get("user_color", "#dda0dd")
+
+                self._write_message_block(f"[bold {u_color}]Telegram {u_name} ({chat_id}):[/bold {u_color}]", text, u_color, is_markdown=True)
                 
                 # --- INTERRUPT SYSTEM ---
                 is_interrupt = False
@@ -4366,7 +4445,7 @@ class AIAgentView(Vertical):
                 processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
                 
                 # Broadcast user message
-                self.session_manager.broadcast_message(f"Telegram User ({chat_id})", processed_prompt, is_ai=False)
+                self.session_manager.broadcast_message(f"Telegram {u_name} ({chat_id})", processed_prompt, is_ai=False)
                 self.update_tokens()
                 # --- START THE TYPING LOOP ---
                 self.telegram_manager.start_chat_action(chat_id, "typing")
@@ -4387,7 +4466,15 @@ class AIAgentView(Vertical):
             return
             
         agent = self.active_agent
-        api_key = agent.get_api_key()
+        if agent.use_backup and agent.backup_model:
+            model = agent.backup_model
+            base_url = agent.backup_base_url or agent.base_url
+            api_key = agent.get_backup_api_key() or agent.get_api_key()
+        else:
+            model = agent.model
+            base_url = agent.base_url
+            api_key = agent.get_api_key()
+
         if not api_key:
             return
             
@@ -4397,9 +4484,9 @@ class AIAgentView(Vertical):
             effort = getattr(agent, "reasoning_effort", "none")
             extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
             llm = ChatOpenAI(
-                model=agent.model,
+                model=model,
                 api_key=api_key,
-                base_url=agent.base_url,
+                base_url=base_url,
                 temperature=0,
                 max_retries=1,
                 **extra_args
@@ -4417,8 +4504,7 @@ class AIAgentView(Vertical):
                 name_map[session_id] = name
                 save_session_name_map(name_map)
                 self.log_to_ui(f"[bold green]Session Named: {name}[/]")
-        except Exception as e:
-            self.log_to_ui(f"[bold red]Session Naming Failed: {e}[/]")
+        except Exception:
             pass
 
     def handle_stt_input(self, text: str, action: str = "append"):
@@ -4557,7 +4643,7 @@ class AIAgentView(Vertical):
                     model=result["model"],
                     base_url=result["base_url"],
                     color="#00FFFF",
-                    enabled_tools=["read_file", "curl_url", "save_file", "edit_file", "dispatch_subagent", "run_terminal_command"],
+                    enabled_tools=["read_file", "fetch_url", "save_file", "edit_file", "dispatch_coding_subagent", "run_terminal_command"],
                     reasoning_effort="none",
                     temperature=1.0
                 )

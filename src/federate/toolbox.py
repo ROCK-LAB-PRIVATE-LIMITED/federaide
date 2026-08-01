@@ -60,6 +60,8 @@ def nuke_all_threads():
 GLOBAL_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".federate", "global_settings.json")
 
 DEFAULT_GLOBAL_SETTINGS = {
+    "user_name": "User",
+    "user_color": "#dda0dd",
     "skipped_version": "",
     "search_pacing_delay": 65.0,
     "max_search_results": 10,
@@ -136,6 +138,7 @@ def _get_search_delay() -> float:
     global _LAST_SEARCH_TIME
     with _SEARCH_LOCK:
         now = time.time()
+        _LAST_SEARCH_TIME = max(_LAST_SEARCH_TIME, _load_last_search_time())
         pacing_base = load_global_settings().get("search_pacing_delay", 65.0)
         jitter = random.uniform(-9.0, 9.0) if pacing_base > 9.0 else 0.0
         pacing_target = pacing_base + jitter
@@ -742,10 +745,10 @@ def format_numbered_lines(lines: List[str], start_line_num: int = 1, total_lines
     width = len(str(max_line_num))
     
     return "\n".join(
-        f"{str(start_line_num + i).rjust(width)}: {line.rstrip('\n')}"
+        f"{str(start_line_num + i).rjust(width)}: {line.rstrip('\r\n')}"
         for i, line in enumerate(lines)
     )
-
+    
 @tool
 def read_file(filepath: str) -> str:
     """Reads a file and returns its content. Natively supports plain text, PDFs, PNGs, JPGs, and other images."""
@@ -787,16 +790,24 @@ def edit_file(filepath: str, start_line: int, end_line: int, new_content: str) -
     try:
         safe_path, display_path = get_safe_path(filepath)
         log_tool(f"Editing file:[cyan] {display_path} (lines {start_line}-{end_line})[/cyan]")
+        
         with open(safe_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-        
+
+        # Sanitize boundary inputs
         start_idx = max(0, start_line - 1)
-        end_idx = max(0, end_line)
-        
+        end_idx = max(start_idx, end_line) # Ensure end_idx >= start_idx
+
+        # Calculate edit position in updated list
         edit_pos = min(start_idx, len(lines))
+        
+        # Prepare replacement lines
         replacement = [line + "\n" for line in new_content.splitlines()]
+        
+        # Apply edit
         lines = lines[:start_idx] + replacement + lines[end_idx:]
         
+        # Write back to disk
         with open(safe_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
 
@@ -804,11 +815,14 @@ def edit_file(filepath: str, start_line: int, end_line: int, new_content: str) -
         if total_lines == 0:
             return f"Successfully edited {display_path} (file is now empty)."
 
+        # Calculate snippet range in the POST-EDIT file
         snippet_start_idx = max(0, edit_pos - 20)
         last_edited_idx = edit_pos + max(0, len(replacement) - 1)
         snippet_end_idx = min(total_lines, last_edited_idx + 1 + 20)
 
         snippet_lines = lines[snippet_start_idx:snippet_end_idx]
+        
+        # Format snippet with rstrip('\r\n') to prevent terminal rendering bugs
         snippet = format_numbered_lines(
             snippet_lines,
             start_line_num=snippet_start_idx + 1,
@@ -1048,7 +1062,7 @@ def run_terminal_command(command: str) -> str:
         return f"Error: {e}"
 
 @tool
-def curl_url(url: str) -> str:
+def fetch_url(url: str) -> str:
     """Fetches text/HTML content from a URL."""
     try:
         from bs4 import BeautifulSoup
@@ -2049,9 +2063,14 @@ def perform_research(topic: str, specific_instructions: str = "") -> str:
                 agent_view = CURRENT_APP.query_one("AIAgentView")
                 if hasattr(agent_view, "active_agent"):
                     agent = agent_view.active_agent
-                    api_key = agent.get_api_key()
-                    base_url = agent.base_url
-                    model = agent.model
+                    if agent.use_backup and agent.backup_model:
+                        model = agent.backup_model
+                        base_url = agent.backup_base_url or agent.base_url
+                        api_key = agent.get_backup_api_key() or agent.get_api_key()
+                    else:
+                        model = agent.model
+                        base_url = agent.base_url
+                        api_key = agent.get_api_key()
                     vision_enabled = agent.is_capable_vision
                     vision_model = model if vision_enabled else vision_model
             except Exception as e:

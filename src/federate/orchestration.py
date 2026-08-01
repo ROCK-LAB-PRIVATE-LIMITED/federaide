@@ -22,7 +22,7 @@ OPERATIONAL RULES:
 3. Break the user's request into steps. Do not start a task until you have a plan. DO NOT STOP until the user's request is complete and you have verified the completion using whatever means available. Aim to prove to the user that the request is verifiably completed. Continue alternating thinking and tool calling as long as the task is not FULLY and UTTERLY completed. DO NOT END YOUR TURN UNTIL TASK IS COMPLETED.
 4. Use tools. If a tool output is insufficient, DO NOT call the same tool with the same arguments immediately. Try another tool or argument.
 5. SEARCH AND RESEARCH: Whenever you get stuck, perform web searches and fetch web pages to get up to date information.
-6. Once you have the info, synthesize it.  Web searches must be followed up by one or more curl_url tool calls to be effective. If the results are judged to be irrelavant, search again with a different query likely to return more relavant results. Do not keep searching if you have enough info.
+6. Once you have the info, synthesize it.  Web searches must be followed up by one or more fetch_url tool calls to be effective. If the results are judged to be irrelavant, search again with a different query likely to return more relavant results. Do not keep searching if you have enough info.
 7. FILE EDITING: Before editing a file, ALWAYS use read_file tool to get the correct line numbers. Does not matter if you have read the file before, ALWAYS use the read_file prior to editing, to ensure the line number data is up to date. After using the edit file tool, check the response to see the concerned section of the edited file, including your edit. Ensure the edit was placed as you intended. Check to see if the edit is syntactically correct. If you notice any issues, immediately use the edit tool again to fix it. Continue this loop until the edit you intended (and ONLY the edit you intended) has been correctly placed.
 
 AGENT INTERCOM RULES:
@@ -264,6 +264,30 @@ class AgentConfig:
         prompt += "\n- Use `read_skill` to read the steps for a skill listed in your library."
         prompt += "\n- DISTILLATION: When you successfully resolve a difficult, multi-step task, autonomously use `distill_journey` to save the happy-path workflow for the future."
         prompt += "\n- QUAGMIRES: Only use `mark_quagmire` if the user explicitly asks you to log a trap, failure, or dead-end."
+        
+        # Check for project rules in the workspace root
+        try:
+            from toolbox import CURRENT_APP
+            if CURRENT_APP:
+                workspace_root = os.path.abspath(str(CURRENT_APP.query_one("#dir_tree").path))
+            else:
+                workspace_root = os.path.abspath(os.getcwd())
+        except Exception:
+            workspace_root = os.path.abspath(os.getcwd())
+
+        try:
+            if os.path.isdir(workspace_root):
+                root_files = {f.lower(): f for f in os.listdir(workspace_root) if os.path.isfile(os.path.join(workspace_root, f))}
+                for candidate in ["federaide.md","federate.md", "agents.md", "claude.md"]:
+                    if candidate in root_files:
+                        rules_path = os.path.join(workspace_root, root_files[candidate])
+                        with open(rules_path, "r", encoding="utf-8", errors="replace") as f:
+                            rules_content = f.read().strip()
+                        if rules_content:
+                            prompt += f"\n\n--- PROJECT RULES ---\n{rules_content}"
+                        break
+        except Exception:
+            pass
         
         return prompt
 
