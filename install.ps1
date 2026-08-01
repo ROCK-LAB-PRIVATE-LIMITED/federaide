@@ -86,7 +86,7 @@ if ($pathList -notcontains $localBin) {
 
 # 3. Run installation via uv
 Write-Host "[*] Installing FEDERaiDE with extras (audio, vision) on standardized Python 3.13..." -ForegroundColor Yellow
-uv tool install --force --refresh --python 3.13 "federaide[audio,vision]"
+uv tool install --force --refresh --python 3.13 "federaide[all]"
 
 Write-Host "======================================================================" -ForegroundColor Green
 Write-Host " 🎉 Windows installation complete!" -ForegroundColor Green
