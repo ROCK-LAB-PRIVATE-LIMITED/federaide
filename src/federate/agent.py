@@ -493,7 +493,7 @@ class UpdateModal(ModalScreen[str]):
         self.is_updating = True
         
         status_lbl = self.query_one("#update_status", Label)
-        status_lbl.update("[bold yellow]⏳ Exiting application to launch terminal updater...[/bold yellow]")
+        status_lbl.update("[bold yellow] Exiting application to launch terminal updater...[/bold yellow]")
         
         try:
             for btn in self.query("#update_btn_container Button"):
@@ -1340,7 +1340,7 @@ class ConfigModal(ModalScreen[str]):
         # Disable buttons and show loading status in modal
         for btn in self.query("#actions_container Button"):
             btn.disabled = True
-        self.query_one("#ai_modal_status", Label).update(f"[bold yellow]⏳ Verifying API & backstory for '{new_config.name}'...[/bold yellow]")
+        self.query_one("#ai_modal_status", Label).update(f"[bold yellow] Verifying API & backstory for '{new_config.name}'...[/bold yellow]")
 
         # Delegate validation and saving to agent_view
         agent_view = self.app.query_one("AIAgentView")
@@ -2916,7 +2916,7 @@ class AIAgentView(Vertical):
                     try:
                         for btn in modal.query("#actions_container Button"):
                             btn.disabled = False
-                        modal.query_one("#ai_modal_status", Label).update(f"[bold red]❌ {escape(error_msg)}[/bold red]")
+                        modal.query_one("#ai_modal_status", Label).update(f"[bold red] {escape(error_msg)}[/bold red]")
                     except Exception:
                         pass
                 elif is_onboarding:
