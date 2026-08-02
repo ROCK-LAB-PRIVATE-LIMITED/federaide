@@ -3787,11 +3787,14 @@ class AIAgentView(Vertical):
                             missing_messages.append(m)
 
                     if missing_messages:
-                        # Update state with missing messages first
-                        executor.update_state(run_config, {"messages": missing_messages})
-
-                    # Now provide the NEW prompt
-                    stream_input = {"messages": [HumanMessage(content=_format_vision_content(prompt, agent.is_capable_vision))]}
+                        # Update state with prior missing messages (e.g. User Prompt during an Intercom handoff)
+                        if len(missing_messages) > 1:
+                            executor.update_state(run_config, {"messages": missing_messages[:-1]})
+                        # Feed ONLY the very last missing message to stream_input to trigger execution
+                        stream_input = {"messages": [missing_messages[-1]]}
+                    else:
+                        # If nothing is missing (e.g. network retry), resume from checkpoint
+                        stream_input = None
 
                 # Stream execution
                 consecutive_fail_count = 0
