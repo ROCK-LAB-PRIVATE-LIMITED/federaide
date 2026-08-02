@@ -956,7 +956,22 @@ class OnboardingModal(ModalScreen[dict]):
     #onboard_actions { height: 4; align: center middle; border-top: solid $primary; margin-top: 1; }
     """
 
+    def __init__(self, initial_data: dict = None, **kwargs):
+        super().__init__(**kwargs)
+        self.initial_data = initial_data or {}
+
     def on_mount(self):
+        if self.initial_data:
+            if self.initial_data.get("api_key"):
+                self.query_one("#onboard_api_key", Input).value = self.initial_data["api_key"]
+            if self.initial_data.get("model"):
+                self.query_one("#onboard_model", Input).value = self.initial_data["model"]
+            if self.initial_data.get("base_url"):
+                self.query_one("#onboard_base_url", Input).value = self.initial_data["base_url"]
+            if self.initial_data.get("name"):
+                self.query_one("#onboard_name", Input).value = self.initial_data["name"]
+            if self.initial_data.get("backstory"):
+                self.query_one("#onboard_backstory", Input).value = self.initial_data["backstory"]
         self.query_one("#onboard_api_key", Input).focus()
 
     def compose(self) -> ComposeResult:
@@ -1176,6 +1191,7 @@ class ConfigModal(ModalScreen[str]):
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Use Backup Provider", id="ai_use_backup", value=self.agent_config.use_backup)
 
+            yield Label("", id="ai_modal_status", classes="status_center")
             with Horizontal(id="actions_container"):
                 yield Button("Update Active", id="ai_save_btn", variant="primary")
                 yield Button("Save As New", id="ai_save_new_btn", variant="success")
@@ -1253,9 +1269,20 @@ class ConfigModal(ModalScreen[str]):
     def _apply_save(self, is_new: bool):
         fields = self._get_current_fields()
         if not fields["name"]:
+            self.notify("Agent name cannot be empty.", severity="error")
             return
 
-        # Define the callback at the function level. It still safely closes over `is_new`.
+        # 1. Prevent duplicate agent names
+        existing_names = [a.lower() for a in self.agent_manager.agents.keys()]
+        if is_new or fields["name"].lower() != self.agent_config.name.lower():
+            if fields["name"].lower() in existing_names:
+                self.notify(f"An agent named '{fields['name']}' already exists.", severity="error")
+                return
+
+        # 2. Accidental Overwrite Protection (both name and backstory changed on 'Update Active')
+        if not is_new and fields["name"] != self.agent_config.name and fields["backstory"] != self.agent_config.backstory:
+            is_new = True
+
         def handle_unlock(result):
             if not result:
                 return
@@ -1300,18 +1327,24 @@ class ConfigModal(ModalScreen[str]):
             use_backup=fields["use_backup"],
             enabled_tools=fields["enabled_tools"],
             disabled_tools=fields["disabled_tools"],
-            tts_voice=fields["tts_voice"], # <-- NEW
-            pronouns=fields["pronouns"], # <-- NEW
-            disable_all_tools=fields["disable_all_tools"], # <-- NEW
+            tts_voice=fields["tts_voice"],
+            pronouns=fields["pronouns"],
+            disable_all_tools=fields["disable_all_tools"],
             reasoning_effort=fields["reasoning_effort"],
             temperature=fields["temperature"]
         )
 
-
-        # Save keys to .env
+        # Save keys to keyring
         self._update_env(new_config.name, fields["api_key"], fields["backup_api_key"])
 
-        self.dismiss(("save", new_config, is_new))
+        # Disable buttons and show loading status in modal
+        for btn in self.query("#actions_container Button"):
+            btn.disabled = True
+        self.query_one("#ai_modal_status", Label).update(f"[bold yellow]⏳ Verifying API & backstory for '{new_config.name}'...[/bold yellow]")
+
+        # Delegate validation and saving to agent_view
+        agent_view = self.app.query_one("AIAgentView")
+        agent_view.process_agent_save(new_config, is_new, self.agent_config.name, modal=self)
 
     def _update_env(self, agent_name: str, primary_key: str, backup_key: str):
         # We keep the function name '_update_env' to avoid changing other callers
@@ -2782,8 +2815,10 @@ class AIAgentView(Vertical):
                 content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
                 self._write_message_block(f"[bold {color}]{label}:[/bold {color}]", content, color, is_markdown=True)
     
-    def action_open_active_config(self):
+    def action_open_active_config(self, config_override: AgentConfig = None, old_name_override: str = None):
         """F4: Opens the editor. Distinguishes between Renaming and Cloning."""
+        agent_to_edit = config_override or self.active_agent
+
         def handle_modal_result(result_tuple):
             if not result_tuple:
                 return
@@ -2827,30 +2862,117 @@ class AIAgentView(Vertical):
                         banner.update(new_renderable)
                 return
 
-            if action != "save":
-                return
-            
-            # Extract the new config and the 'is_new' flag
-            _, new_config, is_new = result_tuple
-            old_name = self.active_agent.name
-            
-            # 1. Always save the new name
+        self.app.push_screen(ConfigModal(agent_to_edit, self.agent_manager), handle_modal_result)
+
+    @work(thread=True)
+    def process_agent_save(self, new_config: AgentConfig, is_new: bool, old_name: str, modal=None, is_onboarding: bool = False, onboarding_data: dict = None):
+        if new_config.use_backup and new_config.backup_model:
+            model = new_config.backup_model
+            base_url = new_config.backup_base_url or new_config.base_url
+            api_key = new_config.get_backup_api_key() or new_config.get_api_key()
+        else:
+            model = new_config.model
+            base_url = new_config.base_url
+            api_key = new_config.get_api_key()
+
+        error_msg = None
+        translated = None
+
+        if not api_key:
+            error_msg = f"API Key is missing for agent '{new_config.name}'."
+        else:
+            try:
+                from langchain_openai import ChatOpenAI
+                from langchain_core.messages import HumanMessage
+
+                effort = getattr(new_config, "reasoning_effort", "none")
+                extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+
+                llm = ChatOpenAI(
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=0,
+                    max_retries=1,
+                    timeout=15,
+                    **extra_args
+                )
+                pronoun_val = getattr(new_config, "pronouns", "neither")
+                pronoun_instruction = f" Use '{pronoun_val}' pronouns when referring to this agent." if pronoun_val != "neither" else " Use gender-neutral pronouns (they/them) when referring to this agent."
+                prompt = f"Convert the following AI agent backstory from 1st/2nd person to 3rd person. Start with '{new_config.name} is...'.{pronoun_instruction} Only return the converted backstory, nothing else.\n\nOriginal: {new_config.backstory}"
+
+                res = llm.invoke([HumanMessage(content=prompt)])
+                translated = res.content.strip() if res and res.content else None
+                if not translated:
+                    error_msg = "Model returned an empty response during backstory verification."
+            except Exception as e:
+                error_msg = str(e)
+
+        if error_msg:
+            def reset_modal():
+                self.notify(f"Failed to verify agent '{new_config.name}': {error_msg}", severity="error")
+                self.log_to_ui(f"[bold red]Agent save failed for '{new_config.name}':[/bold red] {error_msg}")
+                if modal:
+                    try:
+                        for btn in modal.query("#actions_container Button"):
+                            btn.disabled = False
+                        modal.query_one("#ai_modal_status", Label).update(f"[bold red]❌ {escape(error_msg)}[/bold red]")
+                    except Exception:
+                        pass
+                elif is_onboarding:
+                    self.show_onboarding_modal(onboarding_data)
+
+            self.app.call_from_thread(reset_modal)
+            return
+
+        # Save translated backstory to cache
+        try:
+            cache_path = get_storage_path("agents", "translated_backstories.json")
+            cache = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
+            cache[new_config.name] = {
+                "original": new_config.backstory,
+                "translated": translated
+            }
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=4)
+        except Exception:
+            pass
+
+        def finalize_ui():
             self.agent_manager.save_agent(new_config)
-            
-            # 2. Only delete the old one if it's an UPDATE (Rename), NOT if it's SAVE AS NEW (Clone)
-            if not is_new and new_config.name != old_name:
+            if not is_new and new_config.name != old_name and old_name in self.agent_manager.agents:
                 self.agent_manager.delete_agent(old_name)
                 self.agent_executors.pop(old_name, None)
-            
-            # 3. Switch to the agent (whether it's the renamed one or the brand new clone)
+
+            if is_onboarding:
+                self.agent_manager.set_default_agent_name(new_config.name)
+
             self.select_agent(new_config.name)
-            self.agent_executors.pop(new_config.name, None) 
-            
-            status_msg = "created and activated" if is_new else "updated"
+            self.agent_executors.pop(new_config.name, None)
+
+            status_msg = "configured and activated" if is_onboarding else ("created and activated" if is_new else "updated")
             self.log_to_ui(f"[bold green]Agent '{new_config.name}' {status_msg}.[/bold green]")
             self.update_status_bar()
 
-        self.app.push_screen(ConfigModal(self.active_agent, self.agent_manager), handle_modal_result)
+            new_renderable = get_welcome_banner(self, specific_agent=new_config.name, return_renderable=True)
+            banners = self.query(".welcome_banner_box")
+            if banners:
+                for banner in banners:
+                    banner.update(new_renderable)
+
+            if modal:
+                try:
+                    modal.dismiss()
+                except Exception:
+                    pass
+
+        self.app.call_from_thread(finalize_ui)
     
     def action_open_global_settings(self):
         """F3: Opens the global harness settings."""
@@ -4723,7 +4845,7 @@ class AIAgentView(Vertical):
         if is_pristine or (len(self.agent_manager.agents) == 1 and not self.active_agent.get_api_key()):
             self.call_after_refresh(self.show_onboarding_modal)
 
-    def show_onboarding_modal(self):
+    def show_onboarding_modal(self, initial_data: dict = None):
         """Displays the minimal onboarding dialog screen."""
         def handle_onboarding(result):
             if result:
@@ -4741,28 +4863,10 @@ class AIAgentView(Vertical):
                     temperature=1.0
                 )
                 
-                if result["name"] != old_name:
-                    self.agent_manager.delete_agent(old_name)
-                    self.agent_executors.pop(old_name, None)
-                
-                self.agent_manager.save_agent(new_config)
                 self._update_agent_keys(new_config.name, result["api_key"])
-                self.agent_manager.set_default_agent_name(new_config.name)
-                self.select_agent(new_config.name)
-                self.agent_executors.pop(new_config.name, None)
-                self.update_status_bar()
-                
-                # Synchronize the main welcome banner
-                new_renderable = get_welcome_banner(self, specific_agent=new_config.name, return_renderable=True)
-                banners = self.query(".welcome_banner_box")
-                if banners:
-                    for banner in banners:
-                        banner.update(new_renderable)
-                
-                self.log_to_ui(f"[bold green]Onboarding complete. Agent '{new_config.name}' is now active and ready.[/bold green]")
-                self.notify(f"Agent '{new_config.name}' configured successfully!", severity="success")
+                self.process_agent_save(new_config, is_new=False, old_name=old_name, is_onboarding=True, onboarding_data=result)
 
-        self.app.push_screen(OnboardingModal(), handle_onboarding)
+        self.app.push_screen(OnboardingModal(initial_data), handle_onboarding)
 
     def _update_agent_keys(self, agent_name: str, primary_key: str):
         """Securely stores credentials to the OS Keyring and sets current session variables."""
