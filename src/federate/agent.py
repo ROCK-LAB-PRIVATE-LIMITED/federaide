@@ -1110,15 +1110,6 @@ class ConfigModal(ModalScreen[str]):
             "read_file", "fetch_url", "save_file", "edit_file", 
             "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation"
         ]
-        # 1. Prevent event cascades during composition
-        self._initialized = False
-        # 2. Pre-fetch API keys once during init instead of inside compose()
-        self.api_key = agent_config.get_api_key()
-        self.backup_api_key = agent_config.get_backup_api_key()
-
-    def on_mount(self):
-        # Enable event handlers only after the widget tree is fully mounted
-        self._initialized = True
 
     def compose(self) -> ComposeResult:
         with Vertical(id="config_dialog"):
@@ -1148,22 +1139,27 @@ class ConfigModal(ModalScreen[str]):
                     yield Label("Base URL:")
                     yield Input(value=current_url, id="ai_base_url")
                     yield Label("API Key:")
-                    yield Input(value=self.api_key, id="ai_api_key", password=True)
+                    yield Input(value=self.agent_config.get_api_key(), id="ai_api_key", password=True)
                     yield Label("Agent Color (Hex):")
                     yield Input(value=self.agent_config.color, id="ai_color")
-                    yield Label("TTS Voice:")
-                    # 3. Replace 53-item Select widget with lightweight Input (matches AudioConfigModal)
-                    current_voice = self.agent_config.tts_voice or "af_sarah"
-                    yield Input(value=current_voice, placeholder="Voice (e.g., af_sarah, am_adam)", id="ai_tts_voice")
+                    yield Label("TTS Voice:") # <-- NEW
                     
-                    yield Label("Pronouns:")
-                    yield Select([("He/Him", "he/him"), ("She/Her", "she/her"), ("Neither", "neither")], value=self.agent_config.pronouns or "neither", id="ai_pronouns", allow_blank=False)
+                    # Prepare list options dynamically based on the current assigned voice
+                    current_voice = self.agent_config.tts_voice or "af_sarah"
+                    voice_options = VOICE_OPTIONS.copy()
+                    if not any(opt[1] == current_voice for opt in voice_options):
+                        voice_options.insert(0, (f"{current_voice} (Custom)", current_voice))
+                        
+                    yield Select(voice_options, value=current_voice, id="ai_tts_voice", allow_blank=False) # <-- NEW
+                    yield Label("Pronouns:") # <-- NEW
+                    yield Select([("He/Him", "he/him"), ("She/Her", "she/her"), ("Neither", "neither")], value=self.agent_config.pronouns or "neither", id="ai_pronouns", allow_blank=False) # <-- NEW
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
-                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools)
+                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools) # <-- NEW
 
                     yield Label("Agent Abilities", classes="section_label")
                     yield Button("Manage Agent Abilities...", id="ai_abilities_btn", variant="primary")
+
 
                     yield Label("Backup Inference", classes="section_label")
                     agent_options = [("Manual Entry", "manual")] + [(name, name) for name in self.agent_manager.agents.keys()]
@@ -1175,7 +1171,7 @@ class ConfigModal(ModalScreen[str]):
                     yield Label("Backup Base URL:")
                     yield Input(value=self.agent_config.backup_base_url, id="ai_backup_base_url")
                     yield Label("Backup API Key:")
-                    yield Input(value=self.backup_api_key, id="ai_backup_api_key", password=True)
+                    yield Input(value=self.agent_config.get_backup_api_key(), id="ai_backup_api_key", password=True)
 
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Use Backup Provider", id="ai_use_backup", value=self.agent_config.use_backup)
@@ -1188,8 +1184,6 @@ class ConfigModal(ModalScreen[str]):
 
     @on(Select.Changed, "#ai_copy_from")
     def on_copy_from_changed(self, event: Select.Changed):
-        if not getattr(self, "_initialized", False):
-            return
         if event.value == "manual" or not event.value:
             return
 
@@ -1202,15 +1196,11 @@ class ConfigModal(ModalScreen[str]):
     
     @on(Select.Changed, "#ai_base_url_preset")
     def on_base_url_preset_changed(self, event: Select.Changed):
-        if not getattr(self, "_initialized", False):
-            return
         if event.value != "custom" and event.value != Select.BLANK:
             self.query_one("#ai_base_url", Input).value = str(event.value)
 
     @on(Input.Changed, "#ai_base_url")
     def on_base_url_input_changed(self, event: Input.Changed):
-        if not getattr(self, "_initialized", False):
-            return
         input_val = event.value.strip()
         matched = "custom"
         for label, val in BASE_URL_PRESETS:
@@ -1221,7 +1211,15 @@ class ConfigModal(ModalScreen[str]):
         select_widget = self.query_one("#ai_base_url_preset", Select)
         if select_widget.value != matched:
             select_widget.value = matched
-
+    
+    @on(Button.Pressed, "#ai_abilities_btn")
+    def open_abilities_btn(self):
+        def handle_abilities(result):
+            if result:
+                self.enabled_tools = result["enabled_tools"]
+                self.disabled_tools = result["disabled_tools"]
+        self.app.push_screen(AbilitiesModal(self.enabled_tools, self.disabled_tools, self.all_manageable_tools), handle_abilities)
+    
     def _get_current_fields(self):
         enabled_tools = self.enabled_tools
         disabled_tools = self.disabled_tools
@@ -1246,7 +1244,7 @@ class ConfigModal(ModalScreen[str]):
             "use_backup": self.query_one("#ai_use_backup", Checkbox).value,
             "enabled_tools": enabled_tools,
             "disabled_tools": disabled_tools,
-            "tts_voice": self.query_one("#ai_tts_voice", Input).value.strip() or "af_sarah",
+            "tts_voice": (self.query_one("#ai_tts_voice", Select).value if self.query_one("#ai_tts_voice", Select).value != Select.BLANK else None) or "af_sarah",
             "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her",
             "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "none",
             "temperature": temp
