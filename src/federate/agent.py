@@ -952,6 +952,7 @@ class OnboardingModal(ModalScreen[dict]):
     .pane_title { background: $success; color: $text; text-style: bold; text-align: center; width: 100%; height: 3; content-align: center middle; }
     .section_label { color: $success; text-style: bold; text-align: center; width: 100%; margin-top: 1; margin-bottom: 1; }
     Input, Select, SelectCurrent { background: black !important; color: white !important; border: round $success; height: 3; margin-bottom: 1; }
+    #onboard_backstory { background: black !important; color: white !important; border: round $success; height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
     Input:focus, Select:focus, SelectCurrent:focus { background: black !important; color: white !important; border: round $accent; }
     #onboard_actions { height: 4; align: center middle; border-top: solid $primary; margin-top: 1; }
     """
@@ -971,7 +972,7 @@ class OnboardingModal(ModalScreen[dict]):
             if self.initial_data.get("name"):
                 self.query_one("#onboard_name", Input).value = self.initial_data["name"]
             if self.initial_data.get("backstory"):
-                self.query_one("#onboard_backstory", Input).value = self.initial_data["backstory"]
+                self.query_one("#onboard_backstory", TextArea).text = self.initial_data["backstory"]
         self.query_one("#onboard_api_key", Input).focus()
 
     def compose(self) -> ComposeResult:
@@ -991,7 +992,7 @@ class OnboardingModal(ModalScreen[dict]):
                     yield Label("Agent Name:")
                     yield Input("Rita", id="onboard_name")
                     yield Label("Agent Backstory:")
-                    yield Input("You are Rita, a general purpose senior developer.", id="onboard_backstory")
+                    yield TextArea("You are Rita, a general purpose senior developer.", id="onboard_backstory", show_line_numbers=False)
             with Horizontal(id="onboard_actions"):
                 yield Button("Get Started", id="onboard_submit_btn", variant="success")
 
@@ -1030,7 +1031,7 @@ class OnboardingModal(ModalScreen[dict]):
 
         self.dismiss({
             "name": name,
-            "backstory": self.query_one("#onboard_backstory", Input).value.strip(),
+            "backstory": self.query_one("#onboard_backstory", TextArea).text.strip(),
             "model": self.query_one("#onboard_model", Input).value.strip(),
             "base_url": self.query_one("#onboard_base_url", Input).value.strip(),
             "api_key": api_key,
@@ -1101,6 +1102,7 @@ class ConfigModal(ModalScreen[str]):
     .config_row { layout: horizontal; height: auto; margin-top: 1; }
     .config_row Checkbox { width: 45%; }
     .section_label { background: $primary; color: $text; padding: 0 1; margin-top: 1; text-style: bold; }
+    #ai_backstory { height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
     #ai_abilities_btn { margin-top: 1; margin-bottom: 1; width: 100%; }
     #abilities_container {
         border: round $primary;
@@ -1135,7 +1137,7 @@ class ConfigModal(ModalScreen[str]):
                     yield Label("Agent Name:")
                     yield Input(value=self.agent_config.name, id="ai_name")
                     yield Label("Backstory:")
-                    yield Input(value=self.agent_config.backstory, id="ai_backstory")
+                    yield TextArea(self.agent_config.backstory, id="ai_backstory", show_line_numbers=False)
                     yield Label("Model:")
                     yield Input(value=self.agent_config.model, id="ai_model")
                     yield Label("Reasoning Effort (Thinking models):")
@@ -1247,7 +1249,7 @@ class ConfigModal(ModalScreen[str]):
 
         return {
             "name": self.query_one("#ai_name", Input).value.strip(),
-            "backstory": self.query_one("#ai_backstory", Input).value.strip(),
+            "backstory": self.query_one("#ai_backstory", TextArea).text.strip(),
             "model": self.query_one("#ai_model", Input).value.strip(),
             "base_url": self.query_one("#ai_base_url", Input).value.strip(),
             "is_capable_vision": self.query_one("#ai_vision_capable", Checkbox).value,
@@ -1447,6 +1449,8 @@ class ScheduleModal(ModalScreen[None]):
     #new_time { width: 60%; margin-left: 1; }
     #new_date { width: 50%; }
     #new_repeat { width: 50%; margin-left: 1; }
+    #add_form_scroll { height: auto; max-height: 12; margin-bottom: 1; }
+    #new_prompt { height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
     """
     def __init__(self, agent_view):
         super().__init__()
@@ -1488,15 +1492,16 @@ class ScheduleModal(ModalScreen[None]):
             
             with Vertical(id="add_form"):
                 yield Label("Add New Scheduled Task:")
-                with Horizontal(classes="form_row"):
-                    agents = [(a, a) for a in self.agent_view.agent_manager.agents.keys()]
-                    yield Select(agents, id="new_agent", prompt="Select Agent")
-                    yield Input(placeholder="HH:MM (24h format, e.g., 14:30)", id="new_time")
-                with Horizontal(classes="form_row"):
-                    yield Input(placeholder="YYYY-MM-DD (e.g., 2026-07-16, optional)", id="new_date")
-                    repeats = [("Daily", "daily"), ("Weekly", "weekly"), ("Monthly", "monthly"), ("Annually", "annually")]
-                    yield Select(repeats, value="daily", id="new_repeat", allow_blank=False)
-                yield Input(placeholder="Task Prompt...", id="new_prompt", classes="form_row")
+                with VerticalScroll(id="add_form_scroll"):
+                    with Horizontal(classes="form_row"):
+                        agents = [(a, a) for a in self.agent_view.agent_manager.agents.keys()]
+                        yield Select(agents, id="new_agent", prompt="Select Agent")
+                        yield Input(placeholder="HH:MM (24h format, e.g., 14:30)", id="new_time")
+                    with Horizontal(classes="form_row"):
+                        yield Input(placeholder="YYYY-MM-DD (e.g., 2026-07-16, optional)", id="new_date")
+                        repeats = [("Daily", "daily"), ("Weekly", "weekly"), ("Monthly", "monthly"), ("Annually", "annually")]
+                        yield Select(repeats, value="daily", id="new_repeat", allow_blank=False)
+                    yield TextArea(id="new_prompt", show_line_numbers=False)
                 with Horizontal(classes="form_row"):
                     yield Button("Add Task", id="add_task_btn", variant="success")
                     yield Button("Close", id="close_btn", variant="error")
@@ -1528,7 +1533,7 @@ class ScheduleModal(ModalScreen[None]):
         elif btn_id == "add_task_btn":
             agent = self.query_one("#new_agent", Select).value
             time_str = self.query_one("#new_time", Input).value.strip()
-            prompt = self.query_one("#new_prompt", Input).value.strip()
+            prompt = self.query_one("#new_prompt", TextArea).text.strip()
             date_str = self.query_one("#new_date", Input).value.strip()
             repeat_val = self.query_one("#new_repeat", Select).value
             repeat = str(repeat_val) if repeat_val != Select.BLANK else "daily"
@@ -1555,7 +1560,7 @@ class ScheduleModal(ModalScreen[None]):
                 self.agent_view.schedule_manager.add_task(agent, time_str, prompt, date_str=date_str, repeat=repeat)
                 self.query_one("#new_time", Input).value = ""
                 self.query_one("#new_date", Input).value = ""
-                self.query_one("#new_prompt", Input).value = ""
+                self.query_one("#new_prompt", TextArea).text = ""
                 self.refresh_list()
                 self.notify("Task added successfully.", severity="information")
         elif btn_id and btn_id.startswith("del_"):
@@ -1569,7 +1574,7 @@ class ScheduleModal(ModalScreen[None]):
                 # 1. Populate the input widgets with the existing properties
                 self.query_one("#new_agent", Select).value = task.agent_name
                 self.query_one("#new_time", Input).value = task.time_str
-                self.query_one("#new_prompt", Input).value = task.prompt
+                self.query_one("#new_prompt", TextArea).text = task.prompt
                 
                 # 2. Delete the old task and update the list
                 self.agent_view.schedule_manager.delete_task(task_id)
