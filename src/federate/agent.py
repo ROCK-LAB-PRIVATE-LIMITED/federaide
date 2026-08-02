@@ -1073,7 +1073,7 @@ class AbilitiesModal(ModalScreen[dict]):
 
 class ConfigModal(ModalScreen[str]):
     DEFAULT_CSS = """
-    ConfigModal { align: center middle; background: $background; }
+    ConfigModal { align: center middle; background: $background 60%; }
     #config_dialog { width: 75; max-height: 90vh; border: round $primary; background: $surface; padding: 0 0; }
     #config_scroll { padding: 1 2; }
     #actions_container {
