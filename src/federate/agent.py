@@ -2898,8 +2898,8 @@ class AIAgentView(Vertical):
                     api_key=api_key,
                     base_url=base_url,
                     temperature=0,
-                    max_retries=1,
-                    timeout=15,
+                    max_retries=5,
+                    timeout=150,
                     **extra_args
                 )
                 pronoun_val = getattr(new_config, "pronouns", "neither")
