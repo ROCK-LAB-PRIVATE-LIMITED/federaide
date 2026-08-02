@@ -2754,6 +2754,7 @@ class AIAgentView(Vertical):
 
                         box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{escape(summary)}"
                         box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                        box_widget.styles.border = ("round", color)
                         self._write_log(box_widget)
             else: # role == "human"
                 # Check for synced intercom tags from other agents
@@ -3909,7 +3910,7 @@ class AIAgentView(Vertical):
                                             # Build the boxed widget
                                             box_content = f"[bold]Tool Result ({agent.name}):[/bold]\n{escape(summary)}"
                                             box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
-                                            
+                                            box_widget.styles.border = ("round", agent.color)
                                             self.log_to_ui(box_widget)
                         
                         # Detect completely empty responses and inject a retry prompt natively
