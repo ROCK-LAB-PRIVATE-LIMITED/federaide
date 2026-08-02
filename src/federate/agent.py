@@ -4105,6 +4105,14 @@ class AIAgentView(Vertical):
 
     def tick_spinners(self):
         """Animates all active spinners (research tasks and active agents)."""
+        if not self._running_agents:
+            try:
+                container = self.query_one("#progress_container")
+                if container.styles.display == "none":
+                    return
+            except Exception:
+                return
+
         try:
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
             char = self.spinner_chars[self.spinner_idx]
@@ -4148,8 +4156,6 @@ class AIAgentView(Vertical):
                         spinner_label.update(Text.from_markup(f"{char} {names_str} are working..."))
                     else:
                         spinner_label.update(Text.from_markup(f"{char} [bold #dda0dd]{len(agents_list)} agents[/] are working..."))
-                else:
-                    spinner_label.update(f"{char} Agent is working...")
             except Exception: pass
 
         except Exception:
