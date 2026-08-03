@@ -1431,7 +1431,8 @@ SLASH_COMMAND_DESCS = {
     "/skills": "List all passive and active skills for the active agent",
     "/settings": "Open global harness settings modal",
     "/help": "Show this detailed help menu",
-    "/backstory": "Force update and translate all agent backstories"
+    "/backstory": "Force update and translate all agent backstories",
+    "/consolidate": "Consolidate, summarize, and prune core memorylets"
 }
 
 class ScheduleModal(ModalScreen[None]):
@@ -2568,6 +2569,7 @@ class AIAgentView(Vertical):
         self.set_interval(60.0, self.tick_scheduler)
         if load_global_settings().get("autoupdate_on_launch", False):
             self.check_for_updates_bg(manual=False)
+        self.consolidate_memories(manual=False)
 
     def select_agent(self, name: str) -> bool:
         agent = self.agent_manager.get_agent(name)
@@ -2979,6 +2981,50 @@ class AIAgentView(Vertical):
 
         self.app.call_from_thread(finalize_ui)
     
+    def consolidate_memories(self, manual: bool = False):
+        from datetime import datetime
+        from toolbox import load_global_settings, save_global_settings
+
+        settings = load_global_settings()
+        curr_week = f"{datetime.now().isocalendar()[0]}-W{datetime.now().isocalendar()[1]:02d}"
+        last_week = settings.get("last_consolidated_week", "")
+
+        if not manual and last_week == curr_week:
+            return
+
+        all_agents_list = list(self.agent_manager.agents.values())
+
+        if manual:
+            target_agents = [self.active_agent] if (self.active_agent and self.active_agent.get_api_key()) else []
+            if not target_agents:
+                self.log_to_ui("[bold red]Cannot consolidate memories: API Key is missing for active agent.[/bold red]")
+                return
+        else:
+            target_agents = [a for a in all_agents_list if a.get_api_key()]
+            if not target_agents:
+                return
+            settings["last_consolidated_week"] = curr_week
+            save_global_settings(settings)
+
+        prompt = (
+            "Please review your core memorylets (only MEMORY the section). \n"
+            "1) Consolidate and combine related memorylets in the MEMORY section into single summarized entries. \n"
+            "2) Prune/delete any out-of-date or obsolete or expired memorylets using the `update_core_memory` tool with section='MEMORY'. \n"
+            "3) For example factual data that is now no longer valid should be pruned completely. \n"
+            "4) Ensure no important facts are lost while removing redundancy and outdated information. \n"
+            "5) Ensure that unrelated ideas are separate memorylets. If you find any memorylets clumping unrelated facts together, split them into separate memorylets IMMEDIATELY. When doing so, save the later fact of the clumped memorylet as new memorylet and edit the original to retain only the earlier fact. \n"
+            "6) In case of conflicting or contradictory memories, keep the later version (greater ID) and prune/delete the older version."
+        )
+
+        self.current_batch_id += 1
+        processed_prompt = f"[Memory Consolidation Task]\n{prompt}"
+
+        for agent in target_agents:
+            self.log_to_ui(f"[bold cyan]Starting memory consolidation for {agent.name}...[/bold cyan]")
+            self.session_manager.init_agent_session(agent, all_agents_list)
+            self.session_manager.broadcast_message(agent.name, processed_prompt, is_ai=False)
+            self.run_agent_task(agent, processed_prompt, batch_id=self.current_batch_id)
+
     def action_open_global_settings(self):
         """F3: Opens the global harness settings."""
         def handle_global_config(result):
@@ -3847,6 +3893,9 @@ class AIAgentView(Vertical):
 
                 # Prepare messages from history
                 history = self.session_manager.active_sessions.get(agent.name, [])
+                if not history:
+                    self.session_manager.init_agent_session(agent, list(self.agent_manager.agents.values()))
+                    history = self.session_manager.active_sessions.get(agent.name, [])
                 langchain_messages = []
                 for hm in history:
                     content = hm.content
@@ -4232,22 +4281,28 @@ class AIAgentView(Vertical):
 
     def tick_spinners(self):
         """Animates all active spinners (research tasks and active agents)."""
-        if not self._running_agents:
-            try:
-                container = self.query_one("#progress_container")
-                if container.styles.display == "none":
-                    return
-            except Exception:
-                return
+        try:
+            spinner_label = self.query_one("#ai_thinking_spinner")
+            spinner_visible = spinner_label.display
+        except Exception:
+            spinner_visible = False
+
+        try:
+            container = self.query_one("#progress_container")
+            progress_visible = (container.styles.display != "none")
+        except Exception:
+            progress_visible = False
+
+        if not spinner_visible and not progress_visible:
+            return
 
         try:
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
             char = self.spinner_chars[self.spinner_idx]
 
             # 1. Animate Research Tasks (if container is visible)
-            try:
-                container = self.query_one("#progress_container")
-                if container.styles.display != "none":
+            if progress_visible:
+                try:
                     for row in self.query(".task_row"):
                         try:
                             prog = row.query_one(ProgressBar)
@@ -4257,33 +4312,35 @@ class AIAgentView(Vertical):
                             else:
                                 spin_label.update("")
                         except Exception: continue
-            except Exception: pass
+                except Exception: pass
             
-            # 2. Animate Main Thinking Indicator
-            try:
-                spinner_label = self.query_one("#ai_thinking_spinner")
-                if self._running_agents:
-                    agents_list = sorted(list(self._running_agents))
-                    if len(agents_list) == 1:
-                        a_name = agents_list[0]
-                        a_cfg = self.agent_manager.get_agent(a_name)
-                        a_color = a_cfg.color if a_cfg else "white"
-                        spinner_label.update(Text.from_markup(f"[bold {a_color}]{char} {a_name} is working...[/]"))
-                    elif 1 < len(agents_list) <= 5:
-                        parts = []
-                        for i, name in enumerate(agents_list):
-                            cfg = self.agent_manager.get_agent(name)
-                            color = cfg.color if cfg else "white"
-                            parts.append(f"[bold {color}]{name}[/]")
-                        
-                        if len(parts) == 2:
-                            names_str = f"{parts[0]} and {parts[1]}"
+            # 2. Animate Main Thinking Indicator (if spinner is visible)
+            if spinner_visible:
+                try:
+                    if self._running_agents:
+                        agents_list = sorted(list(self._running_agents))
+                        if len(agents_list) == 1:
+                            a_name = agents_list[0]
+                            a_cfg = self.agent_manager.get_agent(a_name)
+                            a_color = a_cfg.color if a_cfg else "white"
+                            spinner_label.update(Text.from_markup(f"[bold {a_color}]{char} {a_name} is working...[/]"))
+                        elif 1 < len(agents_list) <= 5:
+                            parts = []
+                            for i, name in enumerate(agents_list):
+                                cfg = self.agent_manager.get_agent(name)
+                                color = cfg.color if cfg else "white"
+                                parts.append(f"[bold {color}]{name}[/]")
+                            
+                            if len(parts) == 2:
+                                names_str = f"{parts[0]} and {parts[1]}"
+                            else:
+                                names_str = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+                            spinner_label.update(Text.from_markup(f"{char} {names_str} are working..."))
                         else:
-                            names_str = ", ".join(parts[:-1]) + f", and {parts[-1]}"
-                        spinner_label.update(Text.from_markup(f"{char} {names_str} are working..."))
+                            spinner_label.update(Text.from_markup(f"{char} [bold #dda0dd]{len(agents_list)} agents[/] are working..."))
                     else:
-                        spinner_label.update(Text.from_markup(f"{char} [bold #dda0dd]{len(agents_list)} agents[/] are working..."))
-            except Exception: pass
+                        spinner_label.update(f"{char} Agent is working...")
+                except Exception: pass
 
         except Exception:
             pass

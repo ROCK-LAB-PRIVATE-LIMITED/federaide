@@ -20,7 +20,9 @@ SLASH_COMMANDS =[
     "/skills",
     "/settings",
     "/update", "/version",
-    "/help"
+    "/help",
+    "/backstory",
+    "/consolidate"
 ]
 
 class ChatSuggester(Suggester):
@@ -594,6 +596,14 @@ def process_slash_command(command: str, agent_view):
     elif cmd in ["/version", "/ver"]:
         from agent import get_installed_version
         agent_view.log_to_ui(f"[bold cyan]FEDERaiDE OS Version:[/bold cyan] v{get_installed_version()}")
+        
+    elif cmd == "/backstory":
+        if hasattr(agent_view, "force_update_all_backstories"):
+            agent_view.force_update_all_backstories()
+        return
+
+    elif cmd == "/consolidate":
+        agent_view.consolidate_memories(manual=True)
     
     elif cmd == "/help":
         help_text = """
@@ -616,6 +626,8 @@ def process_slash_command(command: str, agent_view):
 | `/schedule` | Open the automated daily task scheduler menu. |
 | `/skills` | List all passive and active skills currently available to the active agent. |
 | `/settings` | Open global harness settings modal. |
+| `/backstory` | Force update and translate all agent backstories immediately. |
+
 
 ###  Interactive Features
 - **File Injection:** Type `&` followed by a file or directory path (e.g. `&src/main.py`). Press **`UP/DOWN`** to dynamically cycle through available files! Hit `ENTER` to inject their content into the AI's prompt context.

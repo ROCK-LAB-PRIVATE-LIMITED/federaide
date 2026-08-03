@@ -1054,7 +1054,7 @@ class FEDERaiDE(App):
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f: f.write(code.encode('utf-8'))
             raw_nodes = json.loads(subprocess.check_output([bin_path, "parse", f.name], stderr=subprocess.DEVNULL).decode('utf-8'))
             os.remove(f.name)
-            format_nodes = lambda ns: [{"label": f"{'Cl' if n['type'] in ('class','struct','interface','module','namespace','type') else 'ƒ'} {n['name']}", "children": format_nodes(n.get('children',[]))} for n in ns]
+            format_nodes = lambda ns: [{"label": f"{'Cl' if n['type'] in ('class','struct','interface','module','namespace','type') else 'ƒ'} {n['name']}", "line": n.get("start_line", 1), "children": format_nodes(n.get('children',[]))} for n in ns]
             self.app.call_from_thread(self._render_outline, f"{display_name} Outline", format_nodes(raw_nodes))
         except Exception:
             self.app.call_from_thread(self._render_outline, f"{display_name} Outline", [])
@@ -1068,11 +1068,22 @@ class FEDERaiDE(App):
         
         def populate(ui_node, v_nodes):
             for v_node in v_nodes:
-                branch = ui_node.add(escape(v_node["label"]))
+                branch = ui_node.add(escape(v_node["label"]), data=v_node.get("line"))
                 populate(branch, v_node["children"])
                 
         populate(tree.root, virtual_nodes)
         tree.root.expand_all()
+    
+    @on(Tree.NodeSelected, "#outline_tree")
+    def on_outline_node_selected(self, event: Tree.NodeSelected):
+        if event.node.data is not None:
+            tabs = self.query_one("#editor_tabs", TabbedContent)
+            if tabs.active:
+                editor = self.query_one(f"#{tabs.active} TextArea", TextArea)
+                line = max(0, event.node.data - 1)
+                editor.move_cursor((line, 0))
+                editor.scroll_cursor_visible()
+                editor.focus()
     
     def action_change_directory(self):
         current_path = str(self.query_one("#dir_tree", DirectoryTree).path)

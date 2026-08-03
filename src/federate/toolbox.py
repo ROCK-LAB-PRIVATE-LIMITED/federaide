@@ -622,19 +622,22 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                             cmd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE,
+                            #stdin=subprocess.DEVNULL,
                             text=True,
                             cwd=get_storage_path(t_dir, "logic"),
                             start_new_session=True,
                             env=env
                         )
 
-                        while proc.poll() is None:
+                        while True:
                             check_abort()
-                            time.sleep(0.1)
-
-                        stdout, stderr = proc.communicate()
-                        if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
-                        if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
+                            try:
+                                stdout, stderr = proc.communicate(timeout=0.1)
+                                if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
+                                if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
+                                break
+                            except subprocess.TimeoutExpired:
+                                pass
 
                         # Loud execution report featuring concrete tool calling examples
                         executed_cmd_str = " ".join(cmd)
@@ -2722,8 +2725,6 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
         and not source_path 
         and not dependencies 
         and not commit_message
-        and start_line is None
-        and end_line is None
     )
 
     # --- MODE RESTRICTIONS ---

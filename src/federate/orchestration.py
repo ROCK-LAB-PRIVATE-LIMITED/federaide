@@ -251,6 +251,7 @@ class AgentConfig:
         # Memory Operating Rules        
         prompt += "\n\nMEMORY MANAGEMENT RULES:"
         prompt += "\n- BE EXTREMELY PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` IMMEDIATELY on learning any new fact that you did not already know, whether from user responses or toolcalls or however else. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
+        prompt += "\n- FIRST-PERSON PERSPECTIVE: All memory MUST be written in the first person, from YOUR perspective."
         prompt += "\n- The memories are stored locally and are free to use. They can also be edited or deleted later so if there is a doubt on whether or not to save the memory, lean towards saving it. Before every response, consider if you have come to know something novel that you did not know before, if so, `update_core_memory` as follows:"
         prompt += "\n  - ADD: Pass section, subject, content, and leave 'id' empty (\"\")."
         prompt += "\n  - EDIT: Pass section, target 'id' (e.g., '1' from the `[id: ...]` memorylet block), updated subject, and updated content."
@@ -378,6 +379,16 @@ class AgentManager:
             if os.path.exists(path):
                 os.remove(path)
             del self.agents[name]
+            
+            # Clean up orphaned translated backstory cache
+            try:
+                cache_path = get_storage_path("agents", "translated_backstories.json")
+                if os.path.exists(cache_path):
+                    with open(cache_path, "r", encoding="utf-8") as f: cache = json.load(f)
+                    if cache.pop(name, None):  # Removes the agent if it exists
+                        with open(cache_path, "w", encoding="utf-8") as f: json.dump(cache, f, indent=4)
+            except Exception:
+                pass
 
 @dataclass
 class HistoryMessage:
