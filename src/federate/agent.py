@@ -1439,19 +1439,22 @@ class ScheduleModal(ModalScreen[None]):
     DEFAULT_CSS = """
     ScheduleModal { align: center middle; background: $background 60%; }
     #sched_dialog { width: 75; height: 85%; border: thick $primary; background: $surface; padding: 1 2; }
-    #task_list { height: 1fr; border: round $accent; overflow-y: auto; margin-bottom: 1; background: $boost; }
+    #main_scroll { height: 1fr; border: round $accent; padding: 1; background: $boost; margin-bottom: 1; }
+    #add_form { height: auto; margin-bottom: 1; }
+    #task_list { height: auto; }
+    .section_label { text-style: bold; margin-bottom: 1; color: $text; }
     .task_item { layout: horizontal; height: auto; padding: 1; border-bottom: solid $primary 50%; }
     .task_info { width: 1fr; }
     .task_del_btn { width: 10; margin-left: 1; margin-top: 1; }
     .task_edit_btn { width: 10; margin-left: 1; margin-top: 1; }
-    #add_form { border-top: solid $primary; padding-top: 1; height: auto; }
     .form_row { layout: horizontal; height: auto; margin-bottom: 1; }
     #new_agent { width: 40%; }
     #new_time { width: 60%; margin-left: 1; }
     #new_date { width: 50%; }
     #new_repeat { width: 50%; margin-left: 1; }
-    #add_form_scroll { height: auto; max-height: 12; margin-bottom: 1; }
     #new_prompt { height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
+    #action_buttons { height: auto; align: right middle; margin-top: 0; }
+    #action_buttons Button { margin-left: 1; }
     """
     def __init__(self, agent_view):
         super().__init__()
@@ -1469,7 +1472,7 @@ class ScheduleModal(ModalScreen[None]):
             return None
 
         repeat_mode = getattr(task, "repeat", "daily")
-        while candidate <= now or (task.last_run_date == now.strftime("%Y-%m-%d") and candidate.date() <= now.date()):
+        while candidate <= now or (getattr(task, "last_run_date", "").startswith(now.strftime("%Y-%m-%d")) and candidate.date() <= now.date()):
             if repeat_mode == "daily":
                 candidate += timedelta(days=1)
             elif repeat_mode == "weekly":
@@ -1489,11 +1492,10 @@ class ScheduleModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="sched_dialog"):
             yield Label(" Scheduled Tasks", classes="pane_title")
-            yield VerticalScroll(id="task_list")
             
-            with Vertical(id="add_form"):
-                yield Label("Add New Scheduled Task:")
-                with VerticalScroll(id="add_form_scroll"):
+            with VerticalScroll(id="main_scroll"):
+                with Vertical(id="add_form"):
+                    yield Label("Add New Scheduled Task:", classes="section_label")
                     with Horizontal(classes="form_row"):
                         agents = [(a, a) for a in self.agent_view.agent_manager.agents.keys()]
                         yield Select(agents, id="new_agent", prompt="Select Agent")
@@ -1503,9 +1505,13 @@ class ScheduleModal(ModalScreen[None]):
                         repeats = [("Daily", "daily"), ("Weekly", "weekly"), ("Monthly", "monthly"), ("Annually", "annually")]
                         yield Select(repeats, value="daily", id="new_repeat", allow_blank=False)
                     yield TextArea(id="new_prompt", show_line_numbers=False)
-                with Horizontal(classes="form_row"):
-                    yield Button("Add Task", id="add_task_btn", variant="success")
-                    yield Button("Close", id="close_btn", variant="error")
+                
+                yield Label("Saved Tasks:", classes="section_label")
+                yield Vertical(id="task_list")
+                
+            with Horizontal(id="action_buttons"):
+                yield Button("Add Task", id="add_task_btn", variant="success")
+                yield Button("Close", id="close_btn", variant="error")
 
     def on_mount(self):
         self.refresh_list()
@@ -1514,10 +1520,12 @@ class ScheduleModal(ModalScreen[None]):
         container = self.query_one("#task_list")
         container.query("*").remove()
         for t in self.agent_view.schedule_manager.tasks:
+            agent = self.agent_view.agent_manager.get_agent(t.agent_name)
+            a_color = agent.color if agent else "cyan"
             next_run = self._get_next_run(t)
             next_run_str = f"\nNext run: {next_run.strftime('%Y-%m-%d @ %H:%M')}" if next_run else f"Time: {t.time_str}"
             repeat_part = f" [{getattr(t, 'repeat', 'daily').title()}]"
-            info = f"[bold cyan]{t.agent_name}[/bold cyan]  [bold yellow]{next_run_str}[/bold yellow]{repeat_part}\n[dim]{t.prompt}[/dim]"
+            info = f"[bold {a_color}]{t.agent_name}[/]  [bold yellow]{next_run_str}[/bold yellow]{repeat_part}\n[dim]{t.prompt}[/dim]"
             row = Horizontal(
                 Label(info, classes="task_info"),
                 Button("Edit", id=f"edit_{t.id}", variant="primary", classes="task_edit_btn"),
@@ -1591,15 +1599,16 @@ class ScheduledTaskPromptModal(ModalScreen[str]):
     .buttons Button { margin-left: 1; }
     """
 
-    def __init__(self, task, **kwargs):
+    def __init__(self, task, agent_color="#00FFFF", **kwargs):
         super().__init__(**kwargs)
         self.sched_task = task
+        self.agent_color = agent_color
         self.time_left = 60
         self.timer = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="sched_prompt_dialog"):
-            yield Label(f" Scheduled Task Due: [bold cyan]{self.sched_task.agent_name}[/bold cyan]", classes="pane_title")
+            yield Label(f" Scheduled Task Due: [bold {self.agent_color}]{self.sched_task.agent_name}[/]", classes="pane_title")
             yield Label(f"Auto-running in [bold yellow]{self.time_left}s[/bold yellow] if no action taken...", id="prompt_msg", classes="task_msg")
             with Horizontal(classes="buttons"):
                 yield Button("Run Now", id="run_now", variant="success")
@@ -4396,12 +4405,8 @@ class AIAgentView(Vertical):
             run_today = False
             last_scheduled = self._get_last_scheduled(task, now)
             if last_scheduled:
-                try:
-                    last_run_dt = datetime.strptime(task.last_run_date, "%Y-%m-%d") if task.last_run_date else None
-                except Exception:
-                    last_run_dt = None
-                
-                if not last_run_dt or last_run_dt.date() < last_scheduled.date():
+                sched_str = last_scheduled.strftime("%Y-%m-%d %H:%M")
+                if getattr(task, "last_run_date", "") != sched_str:
                     run_today = True
 
             if run_today:
@@ -4416,11 +4421,11 @@ class AIAgentView(Vertical):
                         task.snooze_until = time.time() + 900.0  # Defer 15 minutes
                         self.notify(f"Scheduled task '{task.prompt[:30]}...' deferred for 15 minutes.", severity="warning")
                     elif action == "skip":
-                        task.last_run_date = current_date
+                        task.last_run_date = sched_str
                         self.schedule_manager.save()
                         self.notify("Scheduled task skipped.", severity="information")
                     elif action == "run_now":
-                        task.last_run_date = current_date
+                        task.last_run_date = sched_str
                         self.schedule_manager.save()
                         self.action_clear_all_contexts()
                         self.log_to_ui(Rule(title="[bold yellow] INITIATING AUTOMATED SCHEDULED TASK", style="dim"))
@@ -4433,7 +4438,9 @@ class AIAgentView(Vertical):
                         event = ChatInput.Submitted(chat_input, full_prompt)
                         self.on_input_submitted(event)
 
-                self.app.push_screen(ScheduledTaskPromptModal(task), handle_action)
+                agent = self.agent_manager.get_agent(task.agent_name)
+                a_color = agent.color if agent else "#00FFFF"
+                self.app.push_screen(ScheduledTaskPromptModal(task, agent_color=a_color), handle_action)
                 break
     
     def update_tokens(self):
