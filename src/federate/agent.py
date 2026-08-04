@@ -2578,7 +2578,7 @@ class AIAgentView(Vertical):
         self.set_interval(60.0, self.tick_scheduler)
         if load_global_settings().get("autoupdate_on_launch", False):
             self.check_for_updates_bg(manual=False)
-        self.consolidate_memories(manual=False)
+        #self.consolidate_memories(manual=False)
 
     def select_agent(self, name: str) -> bool:
         agent = self.agent_manager.get_agent(name)
