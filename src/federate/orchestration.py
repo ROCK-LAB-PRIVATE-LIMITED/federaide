@@ -557,12 +557,19 @@ class SessionManager:
 
     def _do_save_session(self, agent_name: str):
         path = self._get_session_path(agent_name)
+        temp_path = path + ".tmp"
         history = self.active_sessions.get(agent_name, [])
         try:
-            with open(path, "w") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump([asdict(m) for m in history], f, indent=4)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, path) # Atomic replacement on Windows & POSIX
         except Exception as e:
             print(f"Error saving session for {agent_name}: {e}")
+            if os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except Exception: pass
 
     def clear_all_contexts(self):
         with self._lock:

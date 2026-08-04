@@ -2991,29 +2991,32 @@ class AIAgentView(Vertical):
         self.app.call_from_thread(finalize_ui)
     
     def consolidate_memories(self, manual: bool = False):
-        from datetime import datetime
-        from toolbox import load_global_settings, save_global_settings
+        if not manual:
+            return  # Auto-consolidation is permanently disabled
 
-        settings = load_global_settings()
-        curr_week = f"{datetime.now().isocalendar()[0]}-W{datetime.now().isocalendar()[1]:02d}"
-        last_week = settings.get("last_consolidated_week", "")
-
-        if not manual and last_week == curr_week:
+        # 1. Check for active agent and API key
+        if not self.active_agent or not self.active_agent.get_api_key():
+            self.log_to_ui("[bold red]Cannot consolidate memories: API Key is missing for active agent.[/bold red]")
             return
 
-        all_agents_list = list(self.agent_manager.agents.values())
+        # 2. Refuse if an agent task is currently running in the background
+        if getattr(self, "_running_agents", None) or getattr(self, "_running_task_count", 0) > 0:
+            self.log_to_ui("[bold red]Consolidation Refused: An agent task is currently running. Please wait for it to finish or press Ctrl+A.[/bold red]")
+            return
 
-        if manual:
-            target_agents = [self.active_agent] if (self.active_agent and self.active_agent.get_api_key()) else []
-            if not target_agents:
-                self.log_to_ui("[bold red]Cannot consolidate memories: API Key is missing for active agent.[/bold red]")
-                return
-        else:
-            target_agents = [a for a in all_agents_list if a.get_api_key()]
-            if not target_agents:
-                return
-            settings["last_consolidated_week"] = curr_week
-            save_global_settings(settings)
+        # 3. HARD GUARDRAIL: Refuse if more than one agent is active in the current room session
+        active_sessions = getattr(self.session_manager, "active_sessions", {})
+        if len(active_sessions) > 1:
+            agent_names = ", ".join([f"'{name}'" for name in active_sessions.keys()])
+            self.log_to_ui(
+                f"[bold red]Consolidation Refused:[/bold red] Multiple agents ({agent_names}) are active in this room session.\n"
+                f"[dim]To prevent cross-agent intercom contamination, please press [bold]Ctrl+K[/bold] to start a fresh single-agent session before running /consolidate.[/dim]"
+            )
+            return
+
+        # 4. Target ONLY the active host agent
+        agent = self.active_agent
+        all_agents_list = list(self.agent_manager.agents.values())
 
         prompt = (
             "Please review your core memorylets (only MEMORY the section). \n"
@@ -3022,17 +3025,20 @@ class AIAgentView(Vertical):
             "3) For example factual data that is now no longer valid should be pruned completely. \n"
             "4) Ensure no important facts are lost while removing redundancy and outdated information. \n"
             "5) Ensure that unrelated ideas are separate memorylets. If you find any memorylets clumping unrelated facts together, split them into separate memorylets IMMEDIATELY. When doing so, save the later fact of the clumped memorylet as new memorylet and edit the original to retain only the earlier fact. \n"
-            "6) In case of conflicting or contradictory memories, keep the later version (greater ID) and prune/delete the older version."
+            "6) In case of conflicting or contradictory memories, keep the later version (greater ID) and prune/delete the older version.\n"
+            "STRICT CONSTRAINTS:\n"
+            "- DO NOT mention or invoke other agents (no @mentions).\n"
+            "- DO NOT use edit_file or save_file on JSON files directly. Use update_core_memory ONLY.\n"
+            "- When finished, provide a concise summary of changes made."
         )
 
         self.current_batch_id += 1
         processed_prompt = f"[Memory Consolidation Task]\n{prompt}"
 
-        for agent in target_agents:
-            self.log_to_ui(f"[bold cyan]Starting memory consolidation for {agent.name}...[/bold cyan]")
-            self.session_manager.init_agent_session(agent, all_agents_list)
-            self.session_manager.broadcast_message(agent.name, processed_prompt, is_ai=False)
-            self.run_agent_task(agent, processed_prompt, batch_id=self.current_batch_id)
+        self.log_to_ui(f"[bold cyan]Starting memory consolidation for {agent.name}...[/bold cyan]")
+        self.session_manager.init_agent_session(agent, all_agents_list)
+        self.session_manager.broadcast_message(agent.name, processed_prompt, is_ai=False)
+        self.run_agent_task(agent, processed_prompt, batch_id=self.current_batch_id)
 
     def action_open_global_settings(self):
         """F3: Opens the global harness settings."""
