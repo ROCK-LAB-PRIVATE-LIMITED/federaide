@@ -127,6 +127,7 @@ from subagents import dispatch_coding_subagent
 from audio_handler import TTSManager, STTManager, AudioConfigModal
 
 _BACKSTORY_LOCK = threading.Lock()
+from chatgpt_auth import is_chatgpt_oauth_agent, has_valid_chatgpt_token, ChatGPTAuthModal
 from telegram_handler import TelegramManager
 from orchestration import AgentManager, SessionManager, AgentConfig, HistoryMessage, ScheduleManager
 
@@ -940,6 +941,7 @@ BASE_URL_PRESETS = [
     ("OpenAI", "https://api.openai.com/v1/"),
     ("Anthropic", "https://api.anthropic.com/v1/"),
     ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+    ("ChatGPT Subscription (OAuth)", "https://chatgpt.com/backend-api/codex"),
     ("Custom", "custom")
 ]
 
@@ -954,12 +956,27 @@ class OnboardingModal(ModalScreen[dict]):
     Input, Select, SelectCurrent { background: black !important; color: white !important; border: round $success; height: 3; margin-bottom: 1; }
     #onboard_backstory { background: black !important; color: white !important; border: round $success; height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
     Input:focus, Select:focus, SelectCurrent:focus { background: black !important; color: white !important; border: round $accent; }
+    #onboard_chatgpt_auth_btn { display: none; margin-top: 1; margin-bottom: 1; width: 100%; }
     #onboard_actions { height: 4; align: center middle; border-top: solid $primary; margin-top: 1; }
     """
 
     def __init__(self, initial_data: dict = None, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__()
         self.initial_data = initial_data or {}
+
+    def update_auth_btn_visibility(self):
+        btn = self.query_one("#onboard_chatgpt_auth_btn", Button)
+        api_input = self.query_one("#onboard_api_key", Input)
+        api_label = self.query_one("#onboard_api_key_label", Label)
+        preset_val = self.query_one("#onboard_base_url_preset", Select).value
+        if preset_val == "https://chatgpt.com/backend-api/codex":
+            btn.styles.display = "block"
+            api_input.styles.display = "none"
+            api_label.styles.display = "none"
+        else:
+            btn.styles.display = "none"
+            api_input.styles.display = "block"
+            api_label.styles.display = "block"
 
     def on_mount(self):
         if self.initial_data:
@@ -973,6 +990,7 @@ class OnboardingModal(ModalScreen[dict]):
                 self.query_one("#onboard_name", Input).value = self.initial_data["name"]
             if self.initial_data.get("backstory"):
                 self.query_one("#onboard_backstory", TextArea).text = self.initial_data["backstory"]
+        self.update_auth_btn_visibility()
         self.query_one("#onboard_api_key", Input).focus()
 
     def compose(self) -> ComposeResult:
@@ -981,8 +999,9 @@ class OnboardingModal(ModalScreen[dict]):
             with VerticalScroll(id="onboard_scroll"):
                 with Vertical(classes="details_box"):
                     yield Label("Please configure your first agent to get started:", classes="section_label")
-                    yield Label("API Key:")
+                    yield Label("API Key:", id="onboard_api_key_label")
                     yield Input(placeholder="Enter your API Key...", id="onboard_api_key", password=True)
+                    yield Button("Authenticate with OAuth", id="onboard_chatgpt_auth_btn", variant="primary")
                     yield Label("Base URL Preset:")
                     yield Select(BASE_URL_PRESETS, value="https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url_preset", allow_blank=False)
                     yield Label("Model:")
@@ -1000,24 +1019,40 @@ class OnboardingModal(ModalScreen[dict]):
     def on_preset_changed(self, event: Select.Changed):
         if event.value != "custom" and event.value != Select.BLANK:
             self.query_one("#onboard_base_url", Input).value = str(event.value)
+        self.update_auth_btn_visibility()
+
+    @on(Button.Pressed, "#onboard_chatgpt_auth_btn")
+    def on_onboard_chatgpt_auth(self):
+        from chatgpt_auth import ChatGPTAuthModal
+        def on_auth_done(success: bool):
+            if success:
+                self.query_one("#onboard_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
+        self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
     @on(Input.Changed, "#onboard_base_url")
     def on_base_url_changed(self, event: Input.Changed):
         input_val = event.value.strip()
         matched = "custom"
+        check_val = "https://chatgpt.com/backend-api/codex" if input_val == "https://api.openai.com/v1/?oauth=chatgpt" else input_val
         for label, val in BASE_URL_PRESETS:
-            if val == input_val:
+            if val == check_val:
                 matched = val
                 break
         select_widget = self.query_one("#onboard_base_url_preset", Select)
         if select_widget.value != matched:
             select_widget.value = matched
+        self.update_auth_btn_visibility()
 
     @on(Input.Submitted, "#onboard_api_key")
     @on(Input.Submitted, "#onboard_name")
     @on(Button.Pressed, "#onboard_submit_btn")
     def submit(self):
+        preset_val = self.query_one("#onboard_base_url_preset", Select).value
         api_key = self.query_one("#onboard_api_key", Input).value.strip()
+        if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key:
+            api_key = "CHATGPT_OAUTH_ACTIVE"
+
         if not api_key:
             self.notify("API Key cannot be empty. Please enter your API key to proceed.", severity="error")
             self.query_one("#onboard_api_key", Input).focus()
@@ -1104,6 +1139,7 @@ class ConfigModal(ModalScreen[str]):
     .section_label { background: $primary; color: $text; padding: 0 1; margin-top: 1; text-style: bold; }
     #ai_backstory { height: auto; min-height: 3; max-height: 18; margin-bottom: 1; }
     #ai_abilities_btn { margin-top: 1; margin-bottom: 1; width: 100%; }
+    #ai_chatgpt_auth_btn { display: none; margin-top: 1; margin-bottom: 1; width: 100%; }
     #abilities_container {
         border: round $primary;
         height: auto;
@@ -1128,6 +1164,23 @@ class ConfigModal(ModalScreen[str]):
             "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation"
         ]
 
+    def update_auth_btn_visibility(self):
+        btn = self.query_one("#ai_chatgpt_auth_btn", Button)
+        api_input = self.query_one("#ai_api_key", Input)
+        api_label = self.query_one("#ai_api_key_label", Label)
+        preset_val = self.query_one("#ai_base_url_preset", Select).value
+        if preset_val == "https://chatgpt.com/backend-api/codex":
+            btn.styles.display = "block"
+            api_input.styles.display = "none"
+            api_label.styles.display = "none"
+        else:
+            btn.styles.display = "none"
+            api_input.styles.display = "block"
+            api_label.styles.display = "block"
+
+    def on_mount(self):
+        self.update_auth_btn_visibility()
+
     def compose(self) -> ComposeResult:
         with Vertical(id="config_dialog"):
             yield Label(f"Agent Editor: {self.agent_config.name}", classes="pane_title")
@@ -1146,6 +1199,9 @@ class ConfigModal(ModalScreen[str]):
                     yield Input(value=str(getattr(self.agent_config, "temperature", 1.0)), id="ai_temperature")
                     yield Label("Base URL Preset:")
                     current_url = self.agent_config.base_url or "https://openrouter.ai/api/v1"
+                    if current_url == "https://api.openai.com/v1/?oauth=chatgpt":
+                        current_url = "https://chatgpt.com/backend-api/codex"
+                        
                     matched_preset = "custom"
                     for label, val in BASE_URL_PRESETS:
                         if val == current_url:
@@ -1155,8 +1211,9 @@ class ConfigModal(ModalScreen[str]):
                     
                     yield Label("Base URL:")
                     yield Input(value=current_url, id="ai_base_url")
-                    yield Label("API Key:")
+                    yield Label("API Key:", id="ai_api_key_label")
                     yield Input(value=self.agent_config.get_api_key(), id="ai_api_key", password=True)
+                    yield Button("Authenticate with OAuth", id="ai_chatgpt_auth_btn", variant="primary")
                     yield Label("Agent Color (Hex):")
                     yield Input(value=self.agent_config.color, id="ai_color")
                     yield Label("TTS Voice:") # <-- NEW
@@ -1216,19 +1273,31 @@ class ConfigModal(ModalScreen[str]):
     def on_base_url_preset_changed(self, event: Select.Changed):
         if event.value != "custom" and event.value != Select.BLANK:
             self.query_one("#ai_base_url", Input).value = str(event.value)
+        self.update_auth_btn_visibility()
+
+    @on(Button.Pressed, "#ai_chatgpt_auth_btn")
+    def on_config_chatgpt_auth(self):
+        from chatgpt_auth import ChatGPTAuthModal
+        def on_auth_done(success: bool):
+            if success:
+                self.query_one("#ai_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
+        self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
     @on(Input.Changed, "#ai_base_url")
     def on_base_url_input_changed(self, event: Input.Changed):
         input_val = event.value.strip()
         matched = "custom"
+        check_val = "https://chatgpt.com/backend-api/codex" if input_val == "https://api.openai.com/v1/?oauth=chatgpt" else input_val
         for label, val in BASE_URL_PRESETS:
-            if val == input_val:
+            if val == check_val:
                 matched = val
                 break
         
         select_widget = self.query_one("#ai_base_url_preset", Select)
         if select_widget.value != matched:
             select_widget.value = matched
+        self.update_auth_btn_visibility()
     
     @on(Button.Pressed, "#ai_abilities_btn")
     def open_abilities_btn(self):
@@ -1247,6 +1316,11 @@ class ConfigModal(ModalScreen[str]):
         except ValueError:
             temp = 1.0
 
+        preset_val = self.query_one("#ai_base_url_preset", Select).value
+        api_key_val = self.query_one("#ai_api_key", Input).value.strip()
+        if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key_val:
+            api_key_val = "CHATGPT_OAUTH_ACTIVE"
+
         return {
             "name": self.query_one("#ai_name", Input).value.strip(),
             "backstory": self.query_one("#ai_backstory", TextArea).text.strip(),
@@ -1254,7 +1328,7 @@ class ConfigModal(ModalScreen[str]):
             "base_url": self.query_one("#ai_base_url", Input).value.strip(),
             "is_capable_vision": self.query_one("#ai_vision_capable", Checkbox).value,
             "disable_all_tools": self.query_one("#ai_disable_all_tools", Checkbox).value,
-            "api_key": self.query_one("#ai_api_key", Input).value.strip(),
+            "api_key": api_key_val,
             "color": self.query_one("#ai_color", Input).value.strip() or "#00FFFF",
             "backup_model": self.query_one("#ai_backup_model", Input).value.strip(),
             "backup_base_url": self.query_one("#ai_backup_base_url", Input).value.strip(),
@@ -2538,6 +2612,7 @@ class AIAgentView(Vertical):
             self.app.push_screen(KeyringUnlockModal(), handle_initial_unlock)
         else:
             self.check_onboarding()
+
         
         self.agent_executors = {} # Cache for react agents
         self.shell_mode = False
@@ -2580,18 +2655,62 @@ class AIAgentView(Vertical):
             self.check_for_updates_bg(manual=False)
         #self.consolidate_memories(manual=False)
 
+    def check_chatgpt_oauth_status(self, agent=None):
+        if getattr(self, "_chatgpt_auth_modal_open", False):
+            return
+        target_agent = agent or getattr(self, "active_agent", None)
+        if target_agent and is_chatgpt_oauth_agent(target_agent) and not has_valid_chatgpt_token():
+            self._chatgpt_auth_modal_open = True
+            def on_auth_done(success: bool):
+                self._chatgpt_auth_modal_open = False
+                if success:
+                    self.notify(f"ChatGPT Subscription authorized for {target_agent.name}!", severity="information")
+                    self.update_status_bar()
+                else:
+                    self.notify(f"ChatGPT OAuth authentication required for {target_agent.name}.", severity="warning")
+            self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
+
+    def ensure_chatgpt_auth_for_agent(self, agent) -> bool:
+        if not is_chatgpt_oauth_agent(agent):
+            return True
+        if has_valid_chatgpt_token():
+            return True
+        
+        event = threading.Event()
+        result_box = [False]
+        
+        def on_done(ok: bool):
+            result_box[0] = ok
+            event.set()
+            
+        def push_modal():
+            if getattr(self, "_chatgpt_auth_modal_open", False):
+                return
+            self._chatgpt_auth_modal_open = True
+            self.notify(f"ChatGPT Subscription authentication required for {agent.name}.", severity="warning")
+            def on_modal_done(ok: bool):
+                self._chatgpt_auth_modal_open = False
+                on_done(ok)
+            self.app.push_screen(ChatGPTAuthModal(), on_modal_done)
+            
+        self.app.call_from_thread(push_modal)
+        
+        while not event.is_set():
+            if toolbox.ABORT_EVENT.is_set():
+                return False
+            event.wait(0.1)
+            
+        return result_box[0]
+
     def select_agent(self, name: str) -> bool:
         agent = self.agent_manager.get_agent(name)
         if agent:
             self.active_agent = agent
-            #self.session_manager.init_agent_session(agent, list(self.agent_manager.agents.values()))
             
-            # Apply agent-specific color to the UI programmatically
             try:
                 input_container = self.query_one("#input_container")
                 prompt_label = self.query_one("#prompt_label")
                 
-                # Update borders and label color
                 input_container.styles.border_top = ("solid", agent.color)
                 input_container.styles.border_bottom = ("solid", agent.color)
                 prompt_label.styles.color = agent.color
@@ -2599,6 +2718,7 @@ class AIAgentView(Vertical):
                 pass
             
             self.update_tokens()
+            self.check_chatgpt_oauth_status(agent)
             return True
         return False
     
@@ -3798,6 +3918,11 @@ class AIAgentView(Vertical):
         toolbox.register_thread()
         if agent.name in self._running_agents:
             self.log_to_ui(f"[dim yellow]Agent {agent.name} is already working on a task.[/dim yellow]")
+            toolbox.unregister_thread()
+            return
+
+        if not self.ensure_chatgpt_auth_for_agent(agent):
+            self.log_to_ui(f"[bold red]ChatGPT OAuth authentication required for {agent.name}. Task cancelled.[/bold red]")
             toolbox.unregister_thread()
             return
 
