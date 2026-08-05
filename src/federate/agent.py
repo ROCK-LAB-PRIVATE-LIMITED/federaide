@@ -985,7 +985,15 @@ class OnboardingModal(ModalScreen[dict]):
             if self.initial_data.get("model"):
                 self.query_one("#onboard_model", Input).value = self.initial_data["model"]
             if self.initial_data.get("base_url"):
-                self.query_one("#onboard_base_url", Input).value = self.initial_data["base_url"]
+                b_url = self.initial_data["base_url"]
+                self.query_one("#onboard_base_url", Input).value = b_url
+                matched = "custom"
+                for label, val in BASE_URL_PRESETS:
+                    if val == b_url:
+                        matched = val
+                        break
+                with self.prevent(Select.Changed):
+                    self.query_one("#onboard_base_url_preset", Select).value = matched
             if self.initial_data.get("name"):
                 self.query_one("#onboard_name", Input).value = self.initial_data["name"]
             if self.initial_data.get("backstory"):
@@ -1018,7 +1026,8 @@ class OnboardingModal(ModalScreen[dict]):
     @on(Select.Changed, "#onboard_base_url_preset")
     def on_preset_changed(self, event: Select.Changed):
         if event.value != "custom" and event.value != Select.BLANK:
-            self.query_one("#onboard_base_url", Input).value = str(event.value)
+            with self.prevent(Input.Changed):
+                self.query_one("#onboard_base_url", Input).value = str(event.value)
         self.update_auth_btn_visibility()
 
     @on(Button.Pressed, "#onboard_chatgpt_auth_btn")
@@ -1041,7 +1050,8 @@ class OnboardingModal(ModalScreen[dict]):
                 break
         select_widget = self.query_one("#onboard_base_url_preset", Select)
         if select_widget.value != matched:
-            select_widget.value = matched
+            with self.prevent(Select.Changed):
+                select_widget.value = matched
         self.update_auth_btn_visibility()
 
     @on(Input.Submitted, "#onboard_api_key")
@@ -1049,8 +1059,9 @@ class OnboardingModal(ModalScreen[dict]):
     @on(Button.Pressed, "#onboard_submit_btn")
     def submit(self):
         preset_val = self.query_one("#onboard_base_url_preset", Select).value
+        base_url = self.query_one("#onboard_base_url", Input).value.strip()
         api_key = self.query_one("#onboard_api_key", Input).value.strip()
-        if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key:
+        if (preset_val == "https://chatgpt.com/backend-api/codex" or base_url == "https://chatgpt.com/backend-api/codex") and not api_key:
             api_key = "CHATGPT_OAUTH_ACTIVE"
 
         if not api_key:
@@ -1272,7 +1283,8 @@ class ConfigModal(ModalScreen[str]):
     @on(Select.Changed, "#ai_base_url_preset")
     def on_base_url_preset_changed(self, event: Select.Changed):
         if event.value != "custom" and event.value != Select.BLANK:
-            self.query_one("#ai_base_url", Input).value = str(event.value)
+            with self.prevent(Input.Changed):
+                self.query_one("#ai_base_url", Input).value = str(event.value)
         self.update_auth_btn_visibility()
 
     @on(Button.Pressed, "#ai_chatgpt_auth_btn")
@@ -1296,7 +1308,8 @@ class ConfigModal(ModalScreen[str]):
         
         select_widget = self.query_one("#ai_base_url_preset", Select)
         if select_widget.value != matched:
-            select_widget.value = matched
+            with self.prevent(Select.Changed):
+                select_widget.value = matched
         self.update_auth_btn_visibility()
     
     @on(Button.Pressed, "#ai_abilities_btn")

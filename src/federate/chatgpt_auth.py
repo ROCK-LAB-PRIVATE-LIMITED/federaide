@@ -344,7 +344,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
         def success_and_close():
             self.notify("ChatGPT Subscription authorized successfully!", severity="information")
-            self.dismiss(True)
+            self.safe_dismiss(True)
 
         self.app.call_from_thread(success_and_close)
 
@@ -457,7 +457,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
             def success_and_close():
                 self.notify("ChatGPT Subscription authorized successfully!", severity="information")
-                self.dismiss(True)
+                self.safe_dismiss(True)
 
             self.app.call_from_thread(success_and_close)
 
@@ -488,9 +488,19 @@ class ChatGPTAuthModal(ModalScreen[bool]):
         except Exception as e:
             self.notify(f"Could not open browser: {e}", severity="error")
 
+    def safe_dismiss(self, result: bool = False):
+        try:
+            self.dismiss(result)
+        except Exception:
+            try:
+                if self.is_mounted:
+                    self.app.pop_screen()
+            except Exception:
+                pass
+
     @on(Button.Pressed, "#cancel_btn")
     def cancel(self):
-        self.dismiss(False)
+        self.safe_dismiss(False)
 
 # --- HTTP TRANSPORT PROTOCOL TRANSLATOR ---
 
