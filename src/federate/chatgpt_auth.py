@@ -256,11 +256,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
                 yield Button("Cancel", id="cancel_btn", variant="error")
 
     def on_mount(self):
-        is_termux = os.path.exists("/data/data/com.termux") or ("TERMUX_VERSION" in os.environ)
-        if is_termux:
-            self.start_device_flow()
-        else:
-            self.start_browser_flow()
+        self.start_browser_flow()
 
     @work(thread=True)
     def start_browser_flow(self):
