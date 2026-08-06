@@ -29,22 +29,20 @@ def _copy_to_clipboard(text: str):
     try:
         import pyperclip
         pyperclip.copy(text)
-        return
     except Exception:
-        pass
-    try:
-        import subprocess, platform
-        sys_os = platform.system()
-        if sys_os == "Darwin":
-            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
-        elif sys_os == "Windows":
-            subprocess.run(["clip"], input=text.encode("utf-16"), check=False)
-        elif os.path.exists("/data/data/com.termux"):
-            subprocess.run(["termux-clipboard-set"], input=text.encode("utf-8"), check=False)
-        else:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
-    except Exception:
-        pass
+        try:
+            import subprocess, platform
+            sys_os = platform.system()
+            if sys_os == "Darwin":
+                subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
+            elif sys_os == "Windows":
+                subprocess.run(["clip"], input=text.encode("utf-16"), check=False)
+            elif os.path.exists("/data/data/com.termux"):
+                subprocess.run(["termux-clipboard-set"], input=text.encode("utf-8"), check=False)
+            else:
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
+        except Exception:
+            pass
 
 # --- OPENAI CHATGPT OAUTH CONSTANTS ---
 CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
