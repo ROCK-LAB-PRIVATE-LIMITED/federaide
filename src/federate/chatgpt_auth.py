@@ -25,6 +25,27 @@ from textual import on, work
 
 logger = logging.getLogger(__name__)
 
+def _copy_to_clipboard(text: str):
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+        return
+    except Exception:
+        pass
+    try:
+        import subprocess, platform
+        sys_os = platform.system()
+        if sys_os == "Darwin":
+            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
+        elif sys_os == "Windows":
+            subprocess.run(["clip"], input=text.encode("utf-16"), check=False)
+        elif os.path.exists("/data/data/com.termux"):
+            subprocess.run(["termux-clipboard-set"], input=text.encode("utf-8"), check=False)
+        else:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
+    except Exception:
+        pass
+
 # --- OPENAI CHATGPT OAUTH CONSTANTS ---
 CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CHATGPT_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize"
@@ -236,7 +257,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 class ChatGPTAuthModal(ModalScreen[bool]):
     DEFAULT_CSS = """
     ChatGPTAuthModal { align: center middle; background: $background 60%; }
-    #chatgpt_auth_dialog { width: 70; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
+    #chatgpt_auth_dialog { width: 78; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
     .auth_status { margin: 1 0; text-align: center; color: $accent; text-style: bold; }
     .auth_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
     .auth_buttons Button { margin-left: 1; }
@@ -252,8 +273,16 @@ class ChatGPTAuthModal(ModalScreen[bool]):
             
             with Horizontal(classes="auth_buttons"):
                 yield Button("Purge Local", id="purge_btn", variant="warning")
+                yield Button("Copy URL", id="copy_url_btn", variant="primary")
                 yield Button("Re-open Browser", id="open_browser_btn", variant="primary")
                 yield Button("Cancel", id="cancel_btn", variant="error")
+
+    @on(Button.Pressed, "#copy_url_btn")
+    def copy_url(self):
+        url = getattr(self, "authorize_url", "") or self.query_one("#url_display", Input).value
+        if url:
+            _copy_to_clipboard(url)
+            self.notify("OAuth URL copied to clipboard!", severity="information")
 
     def on_mount(self):
         self.start_browser_flow()
