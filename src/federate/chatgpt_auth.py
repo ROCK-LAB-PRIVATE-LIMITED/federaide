@@ -20,29 +20,10 @@ import langchain_openai
 from textual.screen import ModalScreen
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Label, Input, Button
+from textual.widgets import Label, Input, Button, TextArea
 from textual import on, work
 
 logger = logging.getLogger(__name__)
-
-def _copy_to_clipboard(text: str):
-    try:
-        import pyperclip
-        pyperclip.copy(text)
-    except Exception:
-        try:
-            import subprocess, platform
-            sys_os = platform.system()
-            if sys_os == "Darwin":
-                subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=False)
-            elif sys_os == "Windows":
-                subprocess.run(["clip"], input=text.encode("utf-16"), check=False)
-            elif os.path.exists("/data/data/com.termux"):
-                subprocess.run(["termux-clipboard-set"], input=text.encode("utf-8"), check=False)
-            else:
-                subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=False)
-        except Exception:
-            pass
 
 # --- OPENAI CHATGPT OAUTH CONSTANTS ---
 CHATGPT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -255,7 +236,8 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 class ChatGPTAuthModal(ModalScreen[bool]):
     DEFAULT_CSS = """
     ChatGPTAuthModal { align: center middle; background: $background 60%; }
-    #chatgpt_auth_dialog { width: 78; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
+    #chatgpt_auth_dialog { width: 75; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
+    #url_display { height: auto; min-height: 4; max-height: 10; margin-bottom: 1; border: round $accent; }
     .auth_status { margin: 1 0; text-align: center; color: $accent; text-style: bold; }
     .auth_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
     .auth_buttons Button { margin-left: 1; }
@@ -266,21 +248,13 @@ class ChatGPTAuthModal(ModalScreen[bool]):
             yield Label(" ChatGPT OAuth Authorization", classes="pane_title")
             yield Label("Opening sign-in page in your default browser...", classes="field_label")
             yield Label("Authorization Link:", classes="field_label")
-            yield Input("https://auth.openai.com/oauth/authorize", id="url_display")
+            yield TextArea("https://auth.openai.com/oauth/authorize", id="url_display", show_line_numbers=False, read_only=True)
             yield Label("Connecting to OpenAI...", id="status_label", classes="auth_status")
             
             with Horizontal(classes="auth_buttons"):
                 yield Button("Purge Local", id="purge_btn", variant="warning")
-                yield Button("Copy URL", id="copy_url_btn", variant="primary")
                 yield Button("Re-open Browser", id="open_browser_btn", variant="primary")
                 yield Button("Cancel", id="cancel_btn", variant="error")
-
-    @on(Button.Pressed, "#copy_url_btn")
-    def copy_url(self):
-        url = getattr(self, "authorize_url", "") or self.query_one("#url_display", Input).value
-        if url:
-            _copy_to_clipboard(url)
-            self.notify("OAuth URL copied to clipboard!", severity="information")
 
     def on_mount(self):
         self.start_browser_flow()
@@ -322,7 +296,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
             return
 
         def update_ui():
-            self.query_one("#url_display", Input).value = authorize_url
+            self.query_one("#url_display", TextArea).text = authorize_url
             self.query_one("#status_label", Label).update("[bold cyan]Waiting for browser authorization...[/bold cyan]")
             try:
                 webbrowser.open(authorize_url)
@@ -410,7 +384,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
                 return
 
             def update_ui():
-                self.query_one("#url_display", Input).value = f"{verification_uri} (Code: {user_code})"
+                self.query_one("#url_display", TextArea).text = f"{verification_uri} (Code: {user_code})"
                 self.query_one("#status_label", Label).update(f"[bold cyan]Code: {user_code} | Waiting for approval in browser...[/bold cyan]")
             
             self.app.call_from_thread(update_ui)
