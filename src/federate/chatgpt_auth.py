@@ -202,9 +202,18 @@ def has_valid_chatgpt_token() -> bool:
 class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     server_result = {}
     callback_path = DEFAULT_REDIRECT_PATH
+    authorize_url = ""
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        
+        # Local 302 HTTP redirect shortcut
+        if parsed.path == "/login" and self.authorize_url:
+            self.send_response(302)
+            self.send_header("Location", self.authorize_url)
+            self.end_headers()
+            return
+
         if parsed.path != self.callback_path:
             self.send_response(404)
             self.end_headers()
@@ -237,7 +246,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
     DEFAULT_CSS = """
     ChatGPTAuthModal { align: center middle; background: $background 60%; }
     #chatgpt_auth_dialog { width: 75; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
-    #url_display { height: auto; min-height: 4; max-height: 10; margin-bottom: 1; border: round $accent; }
+    #url_display { margin-bottom: 1; }
     .auth_status { margin: 1 0; text-align: center; color: $accent; text-style: bold; }
     .auth_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
     .auth_buttons Button { margin-left: 1; }
@@ -247,8 +256,8 @@ class ChatGPTAuthModal(ModalScreen[bool]):
         with Vertical(id="chatgpt_auth_dialog"):
             yield Label(" ChatGPT OAuth Authorization", classes="pane_title")
             yield Label("Opening sign-in page in your default browser...", classes="field_label")
-            yield Label("Authorization Link:", classes="field_label")
-            yield TextArea("https://auth.openai.com/oauth/authorize", id="url_display", show_line_numbers=False, read_only=True)
+            yield Label("Short Redirect Link:", classes="field_label")
+            yield Input(f"http://{DEFAULT_REDIRECT_HOST}:{DEFAULT_REDIRECT_PORT}/login", id="url_display")
             yield Label("Connecting to OpenAI...", id="status_label", classes="auth_status")
             
             with Horizontal(classes="auth_buttons"):
@@ -288,6 +297,8 @@ class ChatGPTAuthModal(ModalScreen[bool]):
             server_result = {}
             callback_path = DEFAULT_REDIRECT_PATH
 
+        Handler.authorize_url = authorize_url
+
         try:
             server = http.server.HTTPServer((host, port), Handler)
             server.timeout = 1.0
@@ -296,8 +307,9 @@ class ChatGPTAuthModal(ModalScreen[bool]):
             return
 
         def update_ui():
-            self.query_one("#url_display", TextArea).text = authorize_url
-            self.query_one("#status_label", Label).update("[bold cyan]Waiting for browser authorization...[/bold cyan]")
+            short_url = f"http://{host}:{port}/login"
+            self.query_one("#url_display", Input).value = short_url
+            self.query_one("#status_label", Label).update(f"[bold cyan]Open [bold yellow]{short_url}[/bold yellow] in browser[/bold cyan]")
             try:
                 webbrowser.open(authorize_url)
             except Exception: pass
