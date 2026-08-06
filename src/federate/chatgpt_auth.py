@@ -113,10 +113,12 @@ class _FileChatGPTOAuthTokenProvider:
         with self._lock:
             data = None
             try:
-                import keyring
-                raw = keyring.get_password("Federate", "chatgpt_oauth_token")
-                if raw:
-                    data = json.loads(raw)
+                from toolbox import is_keyring_locked
+                if not is_keyring_locked():
+                    import keyring
+                    raw = keyring.get_password("Federate", "chatgpt_oauth_token")
+                    if raw:
+                        data = json.loads(raw)
             except Exception:
                 data = None
 
@@ -163,16 +165,20 @@ class _FileChatGPTOAuthTokenProvider:
                 "id_token": token.id_token
             }
             try:
-                import keyring
-                keyring.set_password("Federate", "chatgpt_oauth_token", json.dumps(data, indent=2))
+                from toolbox import is_keyring_locked
+                if not is_keyring_locked():
+                    import keyring
+                    keyring.set_password("Federate", "chatgpt_oauth_token", json.dumps(data, indent=2))
             except Exception:
                 pass
 
     def clear(self):
         with self._lock:
             try:
-                import keyring
-                keyring.delete_password("Federate", "chatgpt_oauth_token")
+                from toolbox import is_keyring_locked
+                if not is_keyring_locked():
+                    import keyring
+                    keyring.delete_password("Federate", "chatgpt_oauth_token")
             except Exception:
                 pass
 

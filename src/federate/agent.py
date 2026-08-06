@@ -2579,12 +2579,7 @@ class AIAgentView(Vertical):
         self.schedule_manager = ScheduleManager()
         self.current_batch_id = 0
         
-        # Load the persisted default
-        default_name = self.agent_manager.get_default_agent_name()
-        initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
-        self.select_agent(initial_agent.name)
-
-        # STARTUP: Handle Termux/EncryptedKeyring blocking
+        # STARTUP: Handle Termux/EncryptedKeyring blocking BEFORE selecting agents/checking OAuth
         from toolbox import is_keyring_locked, unlock_keyring
         if is_keyring_locked():
             def handle_initial_unlock(result):
@@ -2593,7 +2588,9 @@ class AIAgentView(Vertical):
                     if action == "unlock" and password:
                         if unlock_keyring(password):
                             self.notify("Keyring unlocked.", severity="information")
-                            self.select_agent(self.active_agent.name)
+                            default_name = self.agent_manager.get_default_agent_name()
+                            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+                            self.select_agent(initial_agent.name)
                             self.update_status_bar()
                             self.check_onboarding()
                         else:
@@ -2609,14 +2606,14 @@ class AIAgentView(Vertical):
                                 
                             for b in backends:
                                 if type(b).__name__ == "EncryptedKeyring":
-                                    # Dynamically resolve and delete the file if it exists
                                     if hasattr(b, "file_path") and b.file_path and os.path.exists(b.file_path):
                                         os.remove(b.file_path)
-                                    # Inject the new password into memory
                                     b.__dict__['keyring_key'] = password
                             
                             self.notify("Keyring initialized successfully. New password established.", severity="warning")
-                            self.select_agent(self.active_agent.name)
+                            default_name = self.agent_manager.get_default_agent_name()
+                            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+                            self.select_agent(initial_agent.name)
                             self.update_status_bar()
                             self.check_onboarding()
                         except Exception as e:
@@ -2624,6 +2621,9 @@ class AIAgentView(Vertical):
             
             self.app.push_screen(KeyringUnlockModal(), handle_initial_unlock)
         else:
+            default_name = self.agent_manager.get_default_agent_name()
+            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+            self.select_agent(initial_agent.name)
             self.check_onboarding()
 
         
