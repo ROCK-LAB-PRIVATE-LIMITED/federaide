@@ -119,7 +119,8 @@ from toolbox import (
     move_cursor_absolute,
     move_cursor_relative,
     send_scroll,
-    inject_keyboard_input
+    inject_keyboard_input,
+    send_file_to_telegram
 )
 from toolbox import shared_memory, update_core_memory, save_skill, read_skill, distill_journey, mark_quagmire, delete_passive_skill, list_skills, is_keyring_locked, unlock_keyring, get_locked_keyring
 import time
