@@ -1853,7 +1853,8 @@ class ChatInput(TextArea):
             partial_id = val[last_dollar + 1:]
             if " " not in partial_id:
                 try:
-                    sm = self.app.query_one("AIAgentView").session_manager
+                    agent_view = self.app.query_one("#ai_agent_view")
+                    sm = agent_view.session_manager
                     from toolbox import shared_db_conn
                     cursor = shared_db_conn.cursor()
                     cursor.execute("SELECT id FROM global_tool_results WHERE session_id = ? AND CAST(id AS TEXT) LIKE ?", (sm.current_session_id, f"{partial_id}%"))
@@ -4120,11 +4121,24 @@ class AIAgentView(Vertical):
                         langchain_messages.append(AIMessageChunk(content=content, tool_calls=hm.tool_calls or []))
                         if hm.tool_calls:
                             # Self-Heal: Ensure every tool call has a response
-                            outputs_by_name = {o.get("name"): o for o in (hm.tool_outputs or [])}
+                            outputs_by_id = {o.get("tool_call_id"): o for o in (hm.tool_outputs or []) if o.get("tool_call_id")}
+                            outputs_by_name_list = {}
+                            for o in (hm.tool_outputs or []):
+                                n = o.get("name")
+                                if n:
+                                    outputs_by_name_list.setdefault(n, []).append(o)
+
                             for tc in hm.tool_calls:
                                 tc_name = tc.get("name")
-                                if tc_name in outputs_by_name:
-                                    output = outputs_by_name[tc_name]
+                                tc_id = tc.get("id")
+                                
+                                output = None
+                                if tc_id and tc_id in outputs_by_id:
+                                    output = outputs_by_id[tc_id]
+                                elif tc_name in outputs_by_name_list and outputs_by_name_list[tc_name]:
+                                    output = outputs_by_name_list[tc_name].pop(0)
+
+                                if output:
                                     tool_content = str(output.get("content", ""))
                                     
                                     # 1. Standard plain-text ToolMessage (Satisfies strict API schemas)
@@ -4386,8 +4400,7 @@ class AIAgentView(Vertical):
                                 current_ai_text = ""
                                 full_ai_response = ""
                                 current_ai_widget = None
-                                tool_outputs = []
-                                tool_calls = []
+                                # DO NOT clear tool_outputs and tool_calls here so they correctly accumulate across retries
                                 continue
                             else:
                                 raise ValueError("Empty response received from API after multiple retries")
@@ -4408,8 +4421,6 @@ class AIAgentView(Vertical):
 
                 # Broadcast AI response and tool outputs to others
                 if full_ai_response.strip() or tool_outputs or tool_calls:
-                    if batch_id != 0 and (batch_id != self.current_batch_id or batch_id in self.session_manager.aborted_batch_ids):
-                        return
                     ai_response = full_ai_response.strip()
                     # 1. Save to session manager so others can see it
                     self.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls)
@@ -4456,11 +4467,52 @@ class AIAgentView(Vertical):
                     self.session_manager.join_conversation(agent.name, next_agent, list(self.agent_manager.agents.values()))
                     self.run_agent_task(next_agent, prompt, batch_id=batch_id)
 
-            except Exception as e:
-                error_str = str(e)
+            except (Exception, SystemExit, BaseException) as e:
+                error_str = str(e) if str(e) else "Operation forcefully aborted by user."
 
-                # Silence abort/interrupt errors
-                if any(term in error_str.lower() for term in ["aborted", "interrupted"]):
+                # Handle abort/interrupt errors cleanly while preserving all available tool results
+                if isinstance(e, (SystemExit, BaseException)) or toolbox.ABORT_EVENT.is_set() or any(term in error_str.lower() for term in ["aborted", "interrupted"]):
+                    completed_ids = {o.get("tool_call_id") for o in tool_outputs if o.get("tool_call_id")}
+                    completed_names_count = {}
+                    for o in tool_outputs:
+                        n = o.get("name")
+                        if n: completed_names_count[n] = completed_names_count.get(n, 0) + 1
+
+                    # Fill in missing outputs for aborted/uncompleted tool calls
+                    for tc in tool_calls:
+                        tc_id = tc.get("id")
+                        tc_name = tc.get("name", "tool")
+                        
+                        is_completed = False
+                        if tc_id and tc_id in completed_ids:
+                            is_completed = True
+                        elif not tc_id and completed_names_count.get(tc_name, 0) > 0:
+                            completed_names_count[tc_name] -= 1
+                            is_completed = True
+
+                        if not is_completed:
+                            aborted_output = {
+                                "name": tc_name,
+                                "content": "Error: Tool execution aborted by user.",
+                                "tool_call_id": tc_id
+                            }
+                            tool_outputs.append(aborted_output)
+                            
+                            # Render UI box for the aborted tool
+                            box_content = f"[bold]Tool Result ({agent.name}):[/bold]\nError: Tool execution aborted by user."
+                            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                            box_widget.styles.border = ("round", agent.color)
+                            self.log_to_ui(box_widget)
+
+                    # Save both completed and aborted tools to DB & Session History
+                    if tool_outputs or tool_calls:
+                        ai_resp = full_ai_response.strip() or "[Operation Aborted by User]"
+                        self.session_manager.broadcast_message(
+                            agent.name, ai_resp, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls
+                        )
+                        self.app.call_from_thread(self.update_tokens)
+
+                    self.log_to_ui("[bold red] Operation Aborted by User. Partial tool results saved.[/bold red]")
                     return
 
                 # Broad, guaranteed mitigation check for any API validation, schema, or Bad Request (400) errors
