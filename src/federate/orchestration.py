@@ -61,7 +61,7 @@ class AgentConfig:
     backup_base_url: str = "https://openrouter.ai/api/v1"
     use_backup: bool = False
     enabled_tools: List[str] = field(default_factory=list)
-    disabled_tools: List[str] = field(default_factory=lambda: ["visual_computer_operation"])
+    disabled_tools: List[str] = field(default_factory=lambda: ["visual_computer_operation", "send_file_to_telegram"])
     tts_voice: str = "af_sarah" # <-- NEW: Unique Agent Voice Field (Default: Sarah)
     pronouns: str = "she/her" # <-- NEW: Binary Pronoun Field (Default: she/her)
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
@@ -179,7 +179,7 @@ class AgentConfig:
             computer_section = "COMPUTER AUTOMATION RULES:\n- Computer interaction and screen automation are completely disabled. You do not have access to any vision or cursor tools."
             active_list_str = "None (All external executable tools disabled)"
         else:
-            disabled_list = getattr(self, "disabled_tools", ["visual_computer_operation"])
+            disabled_list = getattr(self, "disabled_tools", ["visual_computer_operation", "send_file_to_telegram"])
             if "manage_agenda" in disabled_list:
                 agenda_section = "AGENDA & SYNC RULES:\n- Agenda management is disabled for you."
             else:
@@ -325,6 +325,8 @@ class AgentManager:
                         # Filter out fields that might not be in the dataclass if coming from old versions
                         valid_fields = {k: v for k, v in data.items() if k in AgentConfig.__dataclass_fields__}
                         agent = AgentConfig(**valid_fields)
+                        if "send_file_to_telegram" not in agent.disabled_tools and "send_file_to_telegram" not in agent.enabled_tools:
+                            agent.disabled_tools.append("send_file_to_telegram")
                         self.agents[agent.name] = agent
                 except Exception as e:
                     print(f"Error loading agent {filename}: {e}")

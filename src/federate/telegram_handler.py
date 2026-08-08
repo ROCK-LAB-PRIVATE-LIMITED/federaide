@@ -24,6 +24,8 @@ def load_telegram_config():
         "bot_token": "",
         "is_active": False,
         "tts_enabled": False,
+        "allow_file_reception": False,
+        "allow_file_sending": False,
         "allowed_users": "" 
     }
     if os.path.exists(TELEGRAM_CONFIG_FILE):
@@ -90,6 +92,8 @@ class TelegramConfigModal(ModalScreen[str]):
             with Vertical(id="tele_details_box"):
                 yield Checkbox("Enable Telegram Bot", id="tele_active")
                 yield Checkbox("Enable Telegram TTS (Voice Replies)", id="tele_tts_active")
+                yield Checkbox("Allow File Reception (Telegram ➔ Workspace)", id="tele_allow_files")
+                yield Checkbox("Allow Sending Files (Workspace ➔ Telegram)", id="tele_allow_send_files")
                 yield Label("Bot Token (from @BotFather):")
                 yield Input(id="tele_bot_token", password=True)
                 yield Label("Allowed Users (comma separated usernames/IDs, optional):")
@@ -103,6 +107,8 @@ class TelegramConfigModal(ModalScreen[str]):
         config = load_telegram_config()
         self.query_one("#tele_active", Checkbox).value = config.get("is_active", False)
         self.query_one("#tele_tts_active", Checkbox).value = config.get("tts_enabled", False)
+        self.query_one("#tele_allow_files", Checkbox).value = config.get("allow_file_reception", False)
+        self.query_one("#tele_allow_send_files", Checkbox).value = config.get("allow_file_sending", False)
         self.query_one("#tele_bot_token", Input).value = config.get("bot_token", "")
         self.query_one("#tele_allowed_users", Input).value = config.get("allowed_users", "")
 
@@ -111,6 +117,8 @@ class TelegramConfigModal(ModalScreen[str]):
         config = {
             "is_active": self.query_one("#tele_active", Checkbox).value,
             "tts_enabled": self.query_one("#tele_tts_active", Checkbox).value,
+            "allow_file_reception": self.query_one("#tele_allow_files", Checkbox).value,
+            "allow_file_sending": self.query_one("#tele_allow_send_files", Checkbox).value,
             "bot_token": self.query_one("#tele_bot_token", Input).value,
             "allowed_users": self.query_one("#tele_allowed_users", Input).value
         }
@@ -145,6 +153,8 @@ class TelegramManager:
         config = load_telegram_config()
         self.bot_token = config.get("bot_token", "").strip()
         self.tts_enabled = config.get("tts_enabled", False)
+        self.allow_file_reception = config.get("allow_file_reception", False)
+        self.allow_file_sending = config.get("allow_file_sending", False)
         self.allowed_users = [
             u.strip().lower() for u in config.get("allowed_users", "").split(",") if u.strip()
         ]
@@ -287,6 +297,49 @@ class TelegramManager:
             try: os.remove(temp_wav)
             except: pass
 
+    def download_file_to_workspace(self, file_id: str, original_filename: str) -> str:
+        """Downloads a file securely from Telegram into the active workspace."""
+        if not self.bot_token:
+            return None
+
+        try:
+            # 1. Get remote path from Telegram API
+            get_file_url = f"https://api.telegram.org/bot{self.bot_token}/getFile"
+            res = requests.get(get_file_url, params={"file_id": file_id}, timeout=15)
+            if res.status_code != 200 or not res.json().get("ok"):
+                return None
+
+            file_path_remote = res.json()["result"]["file_path"]
+
+            # 2. Get local workspace directory
+            try:
+                from toolbox import CURRENT_APP
+                workspace_dir = str(CURRENT_APP.query_one("#dir_tree").path) if CURRENT_APP else os.getcwd()
+            except Exception:
+                workspace_dir = os.getcwd()
+
+            # 3. Sanitize filename to prevent path traversal (../../)
+            clean_name = os.path.basename(original_filename or file_path_remote)
+            clean_name = re.sub(r'[^\w\.\-]', '_', clean_name)
+            if not clean_name:
+                clean_name = f"telegram_file_{int(time.time())}"
+
+            local_abs_path = os.path.join(workspace_dir, clean_name)
+
+            # 4. Download file bytes
+            download_url = f"https://api.telegram.org/file/bot{self.bot_token}/{file_path_remote}"
+            file_resp = requests.get(download_url, timeout=60, stream=True)
+            if file_resp.status_code == 200:
+                with open(local_abs_path, "wb") as f:
+                    for chunk in file_resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return clean_name
+            return None
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"[bold red]Telegram Download Error:[/bold red] {e}")
+            return None
+
     def _poll_worker(self):
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
         while self.is_running:
@@ -298,22 +351,52 @@ class TelegramManager:
                         for update in data.get("result", []):
                             self.offset = update["update_id"] + 1
                             msg = update.get("message")
-                            if msg and "text" in msg:
+                            if msg:
                                 chat_id = msg["chat"]["id"]
                                 username = msg.get("from", {}).get("username", "").lower()
-                                text = msg["text"]
                                 
-                                # --- PROGRAMMATIC GUARDRAIL: Refuse Group Chats ---
+                                # Refuse group chats
                                 if chat_id < 0:
                                     self.send_message(chat_id, "Group chats are disabled for security reasons. Please message me privately.")
                                     continue
                                     
-                                # --- SECURITY FIX: Unconditional auth check ---
+                                # Unconditional auth check
                                 if username not in self.allowed_users and str(chat_id) not in self.allowed_users:
                                     self.send_message(chat_id, "Sorry, you are not authorized.")
                                     continue
-                                    
-                                self.callback(chat_id, text)
+
+                                # Extract files (documents or photos)
+                                file_id = None
+                                file_name = None
+                                if "document" in msg:
+                                    doc = msg["document"]
+                                    file_id = doc.get("file_id")
+                                    file_name = doc.get("file_name") or f"file_{int(time.time())}"
+                                elif "photo" in msg:
+                                    photos = msg["photo"]
+                                    if photos:
+                                        file_id = photos[-1].get("file_id") # Highest resolution
+                                        file_name = f"photo_{int(time.time())}.jpg"
+
+                                caption = msg.get("caption", "").strip()
+                                text = msg.get("text", "").strip()
+
+                                if file_id:
+                                    if not getattr(self, "allow_file_reception", False):
+                                        self.send_message(chat_id, "ℹ️ File reception from Telegram is disabled in settings.")
+                                        continue
+
+                                    self.send_message(chat_id, f"📥 Receiving file `{file_name}`...")
+                                    saved_name = self.download_file_to_workspace(file_id, file_name)
+                                    if saved_name:
+                                        prompt = f"File received from Telegram and saved to workspace: {saved_name}"
+                                        if caption:
+                                            prompt += f"\nUser Instruction: {caption}"
+                                        self.callback(chat_id, prompt)
+                                    else:
+                                        self.send_message(chat_id, f"❌ Failed to download file `{file_name}`.")
+                                elif text:
+                                    self.callback(chat_id, text)
                 else:
                     time.sleep(2)
             except requests.exceptions.Timeout:

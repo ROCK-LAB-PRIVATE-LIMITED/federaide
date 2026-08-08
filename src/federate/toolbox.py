@@ -2224,6 +2224,39 @@ def get_go_state_path():
     return None
 
 @tool
+def send_file_to_telegram(filepath: str, caption: str = "") -> str:
+    """
+    Sends a file from the local workspace to the active Telegram user.
+    Use this tool when the user asks you on Telegram to send them a file, report, script, image, or dataset.
+    """
+    try:
+        if not CURRENT_APP:
+            return "Error: System UI not active."
+        
+        agent_view = CURRENT_APP.query_one("#ai_agent_view")
+        tm = getattr(agent_view, "telegram_manager", None)
+        chat_id = getattr(agent_view, "current_telegram_chat_id", None)
+        
+        if not tm or not tm.bot_token or not tm.is_running:
+            return "Error: Telegram bot is not connected or active."
+
+        # Master Check from /telegram menu
+        if not getattr(tm, "allow_file_sending", False):
+            return "Sending files to Telegram is disabled. Please enable this from /telegram menu first."
+
+        if not chat_id:
+            return "Error: No active Telegram chat session found."
+
+        safe_path, display_path = get_safe_path(filepath)
+        if not os.path.exists(safe_path):
+            return f"Error: File '{filepath}' not found in workspace."
+
+        tm.send_document(chat_id, safe_path, caption=caption or f"File: {display_path}")
+        return f"Successfully sent '{display_path}' to Telegram."
+    except Exception as e:
+        return f"Error sending file to Telegram: {e}"
+
+@tool
 def manage_agenda(action: str, agenda_data: str = "", project_name: str = "") -> str:
     """
     Manages the local agenda. 

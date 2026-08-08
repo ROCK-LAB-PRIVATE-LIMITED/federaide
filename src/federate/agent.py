@@ -1181,11 +1181,11 @@ class ConfigModal(ModalScreen[str]):
         self.agent_config = agent_config
         self.agent_manager = agent_manager
         self.enabled_tools = list(agent_config.enabled_tools)
-        self.disabled_tools = list(getattr(agent_config, "disabled_tools", ["visual_computer_operation"]))
+        self.disabled_tools = list(getattr(agent_config, "disabled_tools", ["visual_computer_operation", "send_file_to_telegram"]))
         self.all_manageable_tools = [
             "list_files", "search_web", "perform_research", "manage_agenda",
             "read_file", "fetch_url", "save_file", "edit_file", 
-            "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation"
+            "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation", "send_file_to_telegram"
         ]
 
     def update_auth_btn_visibility(self):
@@ -3569,7 +3569,8 @@ class AIAgentView(Vertical):
             llm = RestrictedModelWrapper(llm, allowed_names)
             
         else:
-            disabled_tools = getattr(agent_config, "disabled_tools", ["visual_computer_operation"])
+            disabled_tools = set(getattr(agent_config, "disabled_tools", ["visual_computer_operation", "send_file_to_telegram"]))
+
             def is_tool_disabled(t_name: str) -> bool:
                 if t_name in disabled_tools:
                     return True
@@ -3593,7 +3594,8 @@ class AIAgentView(Vertical):
                 "move_cursor_absolute": move_cursor_absolute, 
                 "move_cursor_relative": move_cursor_relative,       
                 "send_scroll": send_scroll,                    
-                "inject_keyboard_input": inject_keyboard_input
+                "inject_keyboard_input": inject_keyboard_input,
+                "send_file_to_telegram": send_file_to_telegram
             }
             
             from langchain_core.tools import StructuredTool
@@ -4807,6 +4809,12 @@ class AIAgentView(Vertical):
 
     def handle_telegram_input(self, chat_id: int, text: str):
         """Processes incoming Telegram messages exactly like UI chat."""
+        if text.strip().startswith("/") or text.strip().startswith("&"):
+            self.telegram_manager.send_message(
+                chat_id, 
+                "ℹ️ Slash and Attachment commands are disabled on Telegram."
+            )
+            return
         def _process():
             try:
                 self.current_telegram_chat_id = chat_id
@@ -4923,8 +4931,8 @@ class AIAgentView(Vertical):
                     return
 
                 time_stamp = f"[Today's date is {datetime.now().strftime('%A, %B %d, %Y')} and the time now is {datetime.now().strftime('%H:%M')}]\n"
-                processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
-                processed_prompt = handle_dollar_commands(processed_prompt, self)
+                processed_prompt = time_stamp + clean_prompt
+                #processed_prompt = handle_dollar_commands(processed_prompt, self)
                 
                 # Broadcast user message
                 self.session_manager.broadcast_message(f"Telegram {u_name} ({chat_id})", processed_prompt, is_ai=False)
