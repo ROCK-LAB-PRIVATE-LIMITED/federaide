@@ -2638,6 +2638,9 @@ class AIAgentView(Vertical):
                             initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
                             self.select_agent(initial_agent.name)
                             self.update_status_bar()
+                            # Reload Telegram config now that keyring is unlocked
+                            if hasattr(self, "telegram_manager"):
+                                self.telegram_manager.reload_config()
                             self.check_onboarding()
                         else:
                             self.notify("Unlock failed. Stored keys may be unavailable.", severity="error")

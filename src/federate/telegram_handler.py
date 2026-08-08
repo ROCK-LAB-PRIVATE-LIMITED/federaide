@@ -297,6 +297,36 @@ class TelegramManager:
             try: os.remove(temp_wav)
             except: pass
 
+    def format_telegram_file_attachment(self, saved_name: str) -> str:
+        """Formats a downloaded file directly into an internal attachment payload without using ampersand commands."""
+        try:
+            from toolbox import CURRENT_APP
+            workspace_dir = str(CURRENT_APP.query_one("#dir_tree").path) if CURRENT_APP else os.getcwd()
+        except Exception:
+            workspace_dir = os.getcwd()
+
+        abs_path = os.path.abspath(os.path.join(workspace_dir, saved_name))
+        ext = os.path.splitext(saved_name)[1].lower()
+
+        # Image and PDF formats -> Vision/Image payload
+        if ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf'}:
+            return f"\n[Attached Image: {abs_path}]\n"
+        
+        # Code/Text formats -> Numbered text payload
+        else:
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()
+                try:
+                    from toolbox import format_numbered_lines
+                    formatted_content = format_numbered_lines(lines, start_line_num=1)
+                except Exception:
+                    formatted_content = "".join(f"{i+1}: {line}" for i, line in enumerate(lines))
+                
+                return f"\n--- Content of {saved_name} ---\n{formatted_content}\n--- End of {saved_name} ---\n"
+            except Exception as e:
+                return f"\n[Attached File: {saved_name} (Failed to read text: {e})]\n"
+
     def download_file_to_workspace(self, file_id: str, original_filename: str) -> str:
         """Downloads a file securely from Telegram into the active workspace."""
         if not self.bot_token:
@@ -389,9 +419,12 @@ class TelegramManager:
                                     self.send_message(chat_id, f"📥 Receiving file `{file_name}`...")
                                     saved_name = self.download_file_to_workspace(file_id, file_name)
                                     if saved_name:
-                                        prompt = f"File received from Telegram and saved to workspace: {saved_name}"
+                                        # Internal Turn-0 Attachment Formatting (No ampersand parsing required)
+                                        attachment_payload = self.format_telegram_file_attachment(saved_name)
                                         if caption:
-                                            prompt += f"\nUser Instruction: {caption}"
+                                            prompt = f"{attachment_payload}\nUser Instruction: {caption}"
+                                        else:
+                                            prompt = f"{attachment_payload}\nUser provided the attached file '{saved_name}'. Please inspect it."
                                         self.callback(chat_id, prompt)
                                     else:
                                         self.send_message(chat_id, f"❌ Failed to download file `{file_name}`.")
