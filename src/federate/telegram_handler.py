@@ -351,6 +351,18 @@ class TelegramManager:
             # 3. Sanitize filename to prevent path traversal (../../)
             clean_name = os.path.basename(original_filename or file_path_remote)
             clean_name = re.sub(r'[^\w\.\-]', '_', clean_name)
+
+            # Extension Whitelist Guardrail
+            ALLOWED_EXTENSIONS = {
+                '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp',
+                '.py', '.txt', '.md', '.json', '.yaml', '.yml',
+                '.csv', '.sh', '.c', '.cpp', '.h', '.rs', '.go', '.js', '.ts'
+            }
+            ext = os.path.splitext(clean_name)[1].lower()
+            if ext not in ALLOWED_EXTENSIONS:
+                if self.log_callback:
+                    self.log_callback(f"[bold yellow]Rejected Telegram file {clean_name}: Extension '{ext}' not allowed.[/bold yellow]")
+                return None
             if not clean_name:
                 clean_name = f"telegram_file_{int(time.time())}"
 
@@ -424,7 +436,7 @@ class TelegramManager:
                                         if caption:
                                             prompt = f"{attachment_payload}\nUser Instruction: {caption}"
                                         else:
-                                            prompt = f"{attachment_payload}\nUser provided the attached file '{saved_name}'. Please inspect it."
+                                            prompt = f"{attachment_payload}\nUser provided the attached file '{saved_name}'. Please inspect it. No need to call read_file it is already injected into your context."
                                         self.callback(chat_id, prompt)
                                     else:
                                         self.send_message(chat_id, f"❌ Failed to download file `{file_name}`.")
