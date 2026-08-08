@@ -88,7 +88,9 @@ DEFAULT_GLOBAL_SETTINGS = {
     "research_image_retries": 1,
     "research_images_as_links": False,
     "autoupdate_on_launch": False,
+    "tool_result_visibility": "private",
 }
+
 
 
 def load_global_settings() -> dict:
@@ -3175,13 +3177,98 @@ def retrieve_episodic_memory(session_id: str, config: RunnableConfig) -> str:
     except Exception as e:
         return f"Error reading session log: {e}"
 
+@tool
+def get_toolresult(id: int, config: RunnableConfig = None) -> str:
+    """Fetches the hidden output of a tool call using its ID."""
+    agent_name = _get_agent(config)
+    try:
+        if not CURRENT_APP:
+            return "Error: System not initialized."
+
+        sm = CURRENT_APP.query_one("#ai_agent_view").session_manager
+        current_session_id = sm.current_session_id
+
+        cursor = shared_db_conn.cursor()
+        cursor.execute("SELECT agent_name, tool_name, output FROM global_tool_results WHERE id = ? AND session_id = ?", (id, current_session_id))
+        row = cursor.fetchone()
+        if not row:
+            return f"Error: Tool result ID {id} not found in the current chat session."
+            
+        orig_agent, tool_name, output = row
+        return f"Result (ID {id}) successfully retrieved for tool '{tool_name}':\n\n{output}"
+    except Exception as e:
+        return f"Error retrieving tool result: {e}"
+
+@tool
+def set_toolresult(id: int, config: RunnableConfig = None) -> str:
+    """Toggles a tool result between PUBLIC (unhidden) and PRIVATE (hidden behind stub). You can only use this for tools YOU originally executed."""
+    try:
+        caller_agent = None
+        if config and config.get("configurable", {}).get("thread_id") == "human_override":
+            caller_agent = "HUMAN"
+        else:
+            caller_agent = _get_agent(config) if config else "Unknown"
+            
+        if not CURRENT_APP:
+            return "Error: System not initialized."
+
+        sm = CURRENT_APP.query_one("#ai_agent_view").session_manager
+        current_session_id = sm.current_session_id
+        
+        cursor = shared_db_conn.cursor()
+        cursor.execute("SELECT agent_name, tool_name, output, is_public, args, timestamp FROM global_tool_results WHERE id = ? AND session_id = ?", (id, current_session_id))
+        row = cursor.fetchone()
+        if not row:
+            return f"Error: Tool result ID {id} not found in the current chat session."
+            
+        orig_agent, tool_name, output, is_public, db_args, ts = row
+        
+        if caller_agent != "HUMAN" and caller_agent != orig_agent:
+            return f"Error: You ({caller_agent}) cannot toggle Tool Result {id} because it was executed by {orig_agent}. Only the original executing agent or the human user can toggle it."
+        
+        new_public_state = 0 if is_public == 1 else 1
+        cursor.execute("UPDATE global_tool_results SET is_public = ? WHERE id = ? AND session_id = ?", (new_public_state, id, current_session_id))
+        shared_db_conn.commit()
+        
+        if new_public_state == 1:
+            new_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{orig_agent}" tool="{tool_name}" id="{id}">\n{output}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+            status_desc = "PUBLIC (visible to all agents)"
+        else:
+            args_str = db_args or "None"
+            stub = (
+                f"[Tool Output Hidden]\n"
+                f"- Tool Name: {tool_name}\n"
+                f"- Result ID: {id}\n"
+                f"- Arguments: {args_str}\n"
+                f"- Time: {ts or ''}\n"
+                f"- Action: Use get_toolresult(id={id}) to read output privately, or set_toolresult(id={id}) to make public."
+            )
+            new_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{orig_agent}" tool="{tool_name}" id="{id}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+            status_desc = "PRIVATE (hidden behind stub)"
+
+        with sm._lock:
+            import re
+            for a_name, history in sm.active_sessions.items():
+                for hm in history:
+                    if hm.role == "human" and f'id="{id}">' in hm.content:
+                        hm.content = re.sub(
+                            rf'<AGENT_INTERCOM_TOOL_RESPONSE[^>]*id="{id}">.*?</AGENT_INTERCOM_TOOL_RESPONSE>',
+                            lambda _: new_content,
+                            hm.content,
+                            flags=re.DOTALL
+                        )
+                sm.save_session(a_name, _bypass_lock=True)
+            return f"Tool result ID {id} toggled to {status_desc}."
+    except Exception as e:
+        return f"Error: {e}"
+
 # Monkey-patch SessionManager to keep episodic memory retrieval private to the executing agent
 try:
     from orchestration import SessionManager
     _orig_broadcast = SessionManager.broadcast_message
     SessionManager.broadcast_message = lambda self, sender, content, is_ai=True, tool_outputs=None, tool_calls=None: _orig_broadcast(
         self, sender, content, is_ai,
-        [out for out in tool_outputs if out.get("name") not in ("search_episodic_memory", "retrieve_episodic_memory")] if tool_outputs else None,
+        [out for out in tool_outputs if out.get("name") not in ("search_episodic_memory", "retrieve_episodic_memory", "get_toolresult", "set_toolresult")] if tool_outputs else None,
         tool_calls
     )
 except Exception:

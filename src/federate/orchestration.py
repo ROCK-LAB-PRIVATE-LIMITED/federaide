@@ -34,6 +34,7 @@ AGENT INTERCOM RULES:
 - If you want to review the work of parallel agents afterwards, while dispatching invoke yourself sequentially at the end of the prompt (e.g., "@@Gordon do X, @@Danny do Y, and @YourName (I) will summarize the results when you both are done"). You will be safely queued until all parallel agents have finished.
 - IMPORTANT CONCURRENCY RULE: If you and other agents were just summoned together in parallel (@@), they are ALREADY working on their tasks at this exact moment. Do NOT tag them again sequentially. Just complete your own assigned part and wait, they are also completing their tasks though this may not be apparent to you until the next turn.
 - To stop a runaway conversation (too many agent intercom calls without any real need for it), include @askuser in your message. This will safely pause the agent queue and wait for the user to respond or type @resume.
+- If you see a [Tool Output Hidden] stub from another agent, check the listed 'Result ID: X' and 'Arguments'. If you need that output, call get_toolresult(id=X) using the exact integer Result ID X. Do NOT guess IDs or use string tool call keys.
 - Do NOT use raw <AGENT_INTERCOM> tags directly. It won't work and you will look like a fool. If you use it the UI will clearly show the user that you pretended to be someone else. If the user invokes a non-existent agent tell them so instead of pretending to be this non-existent agent.
 - DELEGATION:
     - You MUST delegate the task if another agent is more suitable for the given task, based on their backstory. 
@@ -410,6 +411,26 @@ class SessionManager:
         db_path = os.path.join(FEDERATE_DIR, "episodic_memory.db")
         self.semantic_engine = SemanticSearchEngine(db_path=db_path)
         
+        # Private Tool Call Global Store via SQLite
+        from toolbox import shared_db_conn
+        self.db_conn = shared_db_conn
+        with self._lock:
+            self.db_conn.execute("""
+                CREATE TABLE IF NOT EXISTS global_tool_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    agent_name TEXT,
+                    tool_name TEXT,
+                    args TEXT,
+                    output TEXT,
+                    timestamp TEXT,
+                    is_public INTEGER DEFAULT 0
+                )
+            """)
+            self.db_conn.commit()
+
+        self.MEMORY_TOOLS = {"search_episodic_memory", "retrieve_episodic_memory", "update_core_memory", "save_skill", "read_skill", "list_skills", "distill_journey", "delete_passive_skill", "mark_quagmire", "get_user_clarification", "get_toolresult", "set_toolresult"}
+        
         # Start background sync
         threading.Thread(target=self.sync_all_sessions, daemon=True).start()
 
@@ -504,7 +525,27 @@ class SessionManager:
                     dst_history.append(HistoryMessage(role="human", content=intercom_content))
                     if msg.tool_outputs:
                         for output in msg.tool_outputs:
-                            tool_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{src_name}" tool="{output.get("name")}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                            gid = output.get("global_id")
+                            if gid:
+                                cursor = self.db_conn.cursor()
+                                cursor.execute("SELECT is_public, timestamp, args FROM global_tool_results WHERE id = ?", (gid,))
+                                row = cursor.fetchone()
+                                is_public, ts, db_args = (row[0], row[1], row[2]) if row else (0, "", "")
+                                if not is_public:
+                                    args_str = db_args or str(output.get("args") or "None")
+                                    stub = (
+                                        f"[Tool Output Hidden]\n"
+                                        f"- Tool Name: {output.get('name')}\n"
+                                        f"- Result ID: {gid}\n"
+                                        f"- Arguments: {args_str}\n"
+                                        f"- Time: {ts}\n"
+                                        f"- Action: Use get_toolresult(id={gid}) to read output privately, or set_toolresult(id={gid}) to make public."
+                                    )
+                                    tool_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{src_name}" tool="{output.get("name")}" id="{gid}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                                else:
+                                    tool_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{src_name}" tool="{output.get("name")}" id="{gid}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                            else:
+                                tool_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{src_name}" tool="{output.get("name")}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
                             dst_history.append(HistoryMessage(role="human", content=tool_content))
             elif msg.role == "human":
                 # --- MITIGATION: Skip importing intercom messages sent by the destination agent themselves ---
@@ -524,6 +565,37 @@ class SessionManager:
 
     def broadcast_message(self, sender_name: str, content: str, is_ai: bool = True, tool_outputs: Optional[List[Dict[str, Any]]] = None, tool_calls: Optional[List[Dict[str, Any]]] = None):
         with self._lock:
+            if tool_outputs:
+                cursor = self.db_conn.cursor()
+                for output in tool_outputs:
+                    t_name = output.get("name", "")
+                    if t_name not in getattr(self, "MEMORY_TOOLS", set()):
+                        t_args = ""
+                        if tool_calls:
+                            for tc in tool_calls:
+                                tc_id_match = output.get("tool_call_id") and tc.get("id") == output.get("tool_call_id")
+                                tc_name_match = not output.get("tool_call_id") and tc.get("name") == t_name
+                                if tc_id_match or tc_name_match:
+                                    t_args = str(tc.get("args", ""))
+                                    break
+                        
+                        ts = time.strftime("%H:%M:%S")
+                        out_str = str(output.get("content", ""))
+                        
+                        from toolbox import load_global_settings
+                        is_public_default = 1 if load_global_settings().get("tool_result_visibility", "private") == "public" else 0
+
+                        cursor.execute("""
+                            INSERT INTO global_tool_results (session_id, agent_name, tool_name, args, output, timestamp, is_public)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (self.current_session_id, sender_name, t_name, t_args, out_str, ts, is_public_default))
+                        
+                        gid = cursor.lastrowid
+                        output["global_id"] = gid
+                        output["timestamp"] = ts
+                        output["args"] = t_args
+                self.db_conn.commit()
+
             for agent_name, history in self.active_sessions.items():
                 msg_idx = len(history)
                 if is_ai:
@@ -538,7 +610,23 @@ class SessionManager:
                         history.append(HistoryMessage(role="human", content=intercom_content))
                         if tool_outputs:
                             for output in tool_outputs:
-                                tool_intercom = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{sender_name}" tool="{output.get("name")}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                                gid = output.get("global_id")
+                                if gid:
+                                    if not is_public_default:
+                                        args_str = str(output.get("args") or "None")
+                                        stub = (
+                                            f"[Tool Output Hidden]\n"
+                                            f"- Tool Name: {output.get('name')}\n"
+                                            f"- Result ID: {gid}\n"
+                                            f"- Arguments: {args_str}\n"
+                                            f"- Time: {output.get('timestamp', '')}\n"
+                                            f"- Action: Use get_toolresult(id={gid}) to read output privately, or set_toolresult(id={gid}) to make public."
+                                        )
+                                        tool_intercom = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{sender_name}" tool="{output.get("name")}" id="{gid}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                                    else:
+                                        tool_intercom = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{sender_name}" tool="{output.get("name")}" id="{gid}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                                else:
+                                    tool_intercom = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{sender_name}" tool="{output.get("name")}">\n{output.get("content")}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
                                 history.append(HistoryMessage(role="human", content=tool_intercom))
                 else:
                     history.append(HistoryMessage(role="human", content=content))

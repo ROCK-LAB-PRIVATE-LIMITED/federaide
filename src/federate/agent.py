@@ -17,7 +17,7 @@ from textual import work, on
 from textual.message import Message
 from textual import events
 
-from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands
+from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands, handle_dollar_commands
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk, ToolMessage, messages_to_dict, messages_from_dict
@@ -107,6 +107,8 @@ from toolbox import (
     get_user_clarification,
     search_episodic_memory,
     retrieve_episodic_memory,
+    get_toolresult,
+    set_toolresult,
     load_dynamic_tools,
     prepare_active_skill,
     finalize_active_skill,
@@ -689,6 +691,12 @@ class GlobalSettingsModal(ModalScreen[str]):
                 with Vertical(classes="field_container"):
                     yield Checkbox("Embed images directly (instead of links)", id="research_images_as_links")
 
+                yield Label("Multi-Agent Intercom", classes="section_label")
+                with Vertical(classes="field_container"):
+                    yield Label("Tool Result Availability", classes="field_label")
+                    yield Label("Controls whether tool outputs shared between agents are hidden behind stubs (Private) or broadcasted immediately (Public).", classes="field_help")
+                    yield Select([("Private (Token Efficient)", "private"), ("Public", "public")], value="private", id="tool_result_visibility", allow_blank=False)
+
                 yield Label("Context Compression", classes="section_label")
                 with Vertical(classes="field_container"):
                     yield Label("Verbatim Messages to Keep", classes="field_label")
@@ -723,6 +731,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#pdf_body_font_size", Input).value = str(config.get("pdf_body_font_size", "11pt"))
         self.query_one("#pdf_h1_font_size", Input).value = str(config.get("pdf_h1_font_size", "28pt"))
         self.query_one("#keep_verbatim_count", Input).value = str(config.get("keep_verbatim_count", 1))
+        self.query_one("#tool_result_visibility", Select).value = config.get("tool_result_visibility", "private")
         
         self.query_one("#research_images_max", Input).value = str(config.get("research_images_max", 10))
         self.query_one("#research_image_retries", Input).value = str(config.get("research_image_retries", 1))
@@ -820,8 +829,12 @@ class GlobalSettingsModal(ModalScreen[str]):
         img_system_enabled = self.query_one("#research_image_system_enabled", Checkbox).value
         images_as_links = not self.query_one("#research_images_as_links", Checkbox).value
         autoupdate_on_launch = self.query_one("#autoupdate_on_launch", Checkbox).value
+        
+        tool_result_vis_val = self.query_one("#tool_result_visibility", Select).value
+        tool_result_visibility = str(tool_result_vis_val) if tool_result_vis_val != Select.BLANK else "private"
 
         config = {
+            "tool_result_visibility": tool_result_visibility,
             "user_name": user_name,
             "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
@@ -1833,6 +1846,27 @@ class ChatInput(TextArea):
                 self.update_suggestions_ui()
                 return
 
+        # Handle $ for tool results
+        last_dollar = val.rfind("$")
+        if last_dollar != -1:
+            partial_id = val[last_dollar + 1:]
+            if " " not in partial_id:
+                try:
+                    sm = self.app.query_one("AIAgentView").session_manager
+                    from toolbox import shared_db_conn
+                    cursor = shared_db_conn.cursor()
+                    cursor.execute("SELECT id FROM global_tool_results WHERE session_id = ? AND CAST(id AS TEXT) LIKE ?", (sm.current_session_id, f"{partial_id}%"))
+                    rows = cursor.fetchall()
+                    matches = [str(r[0]) for r in rows]
+                    matches.sort(key=lambda x: int(x), reverse=True)
+                    self._suggestion_matches = matches
+                    self._suggestion_index = 0
+                    self._base_val = val[:last_dollar + 1]
+                    self._mode = "toolresult"
+                    self.update_suggestions_ui()
+                    return
+                except: pass
+
         # Handle @ for agents
         last_at = val.rfind("@")
         if last_at != -1:
@@ -1871,6 +1905,18 @@ class ChatInput(TextArea):
                     return backstory[:60] + "..." if len(backstory) > 60 else backstory
             except: pass
             return "AI Agent Persona"
+        elif mode == "toolresult":
+            try:
+                from toolbox import shared_db_conn
+                cursor = shared_db_conn.cursor()
+                cursor.execute("SELECT agent_name, tool_name, is_public FROM global_tool_results WHERE id = ?", (int(match),))
+                row = cursor.fetchone()
+                if row:
+                    pub_str = "Public" if row[2] else "Private"
+                    return f"Agent: {row[0]} | Tool: {row[1]} | Status: {pub_str}"
+            except:
+                pass
+            return "Tool Result"
         elif mode == "file":
             try:
                 if os.path.isdir(match):
@@ -2942,7 +2988,7 @@ class AIAgentView(Vertical):
             else: # role == "human"
                 # Check for synced intercom tags from other agents
                 intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
-                tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)">([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
+                tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
 
                 if intercom_match:
                     label = intercom_match.group(1) # The synced agent's name
@@ -3474,7 +3520,8 @@ class AIAgentView(Vertical):
             tools = [
                 update_core_memory, save_skill, read_skill, list_skills, 
                 distill_journey, delete_passive_skill, mark_quagmire, 
-                get_user_clarification, search_episodic_memory, retrieve_episodic_memory
+                get_user_clarification, search_episodic_memory, retrieve_episodic_memory,
+                get_toolresult
             ]
             allowed_names = {getattr(t, "name", t) for t in tools}
             
@@ -3531,7 +3578,7 @@ class AIAgentView(Vertical):
                     return True
                 return False
 
-            raw_tools = [list_files, search_web, perform_research, manage_agenda, update_core_memory, save_skill, read_skill, distill_journey, delete_passive_skill, list_skills, mark_quagmire, get_user_clarification, search_episodic_memory, retrieve_episodic_memory, prepare_active_skill, finalize_active_skill, manage_active_skill, fix_active_skill]
+            raw_tools = [list_files, search_web, perform_research, manage_agenda, update_core_memory, save_skill, read_skill, distill_journey, delete_passive_skill, list_skills, mark_quagmire, get_user_clarification, search_episodic_memory, retrieve_episodic_memory, prepare_active_skill, finalize_active_skill, manage_active_skill, fix_active_skill, get_toolresult]
             raw_tools.extend(load_dynamic_tools(agent_config.name))
 
             high_priv_map = {
@@ -3782,7 +3829,11 @@ class AIAgentView(Vertical):
             self._write_log(Rule(style="dim"))
             process_slash_command(prompt, self)
             return
-
+        
+        if prompt.startswith("$"):
+            self._write_log(Rule(style="dim"))
+            handle_dollar_commands(prompt, self)
+            return
         # Multi-Agent Routing
         acting_agent = self.active_agent
         clean_prompt = prompt
@@ -3915,6 +3966,7 @@ class AIAgentView(Vertical):
         # Process & context injection
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
         processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
+        processed_prompt = handle_dollar_commands(processed_prompt, self)
         
         # Broadcast user message to all active agents (now they all definitely have sessions)
         self.session_manager.broadcast_message(u_name, processed_prompt, is_ai=False)
@@ -4283,6 +4335,7 @@ class AIAgentView(Vertical):
                                     elif node_name == "tools":
                                         for msg in messages:
                                             tool_name = getattr(msg, 'name', 'tool')
+                                            tool_call_id = getattr(msg, 'tool_call_id', None)
                                             
                                             content_to_save = msg.content
                                             if isinstance(msg.content, list):
@@ -4294,7 +4347,7 @@ class AIAgentView(Vertical):
                                                         reconstructed += "\n[ImageBase64: <data_transmitted>]\n"
                                                 content_to_save = reconstructed
                                                 
-                                            tool_outputs.append({"name": tool_name, "content": content_to_save})
+                                            tool_outputs.append({"name": tool_name, "content": content_to_save, "tool_call_id": tool_call_id})
                                             
                                             if "[Attached Image:" in str(content_to_save):
                                                 img_match = re.search(r'\[Attached Image: (.*?)\]', str(content_to_save))
@@ -4871,6 +4924,7 @@ class AIAgentView(Vertical):
 
                 time_stamp = f"[Today's date is {datetime.now().strftime('%A, %B %d, %Y')} and the time now is {datetime.now().strftime('%H:%M')}]\n"
                 processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
+                processed_prompt = handle_dollar_commands(processed_prompt, self)
                 
                 # Broadcast user message
                 self.session_manager.broadcast_message(f"Telegram {u_name} ({chat_id})", processed_prompt, is_ai=False)

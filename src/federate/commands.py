@@ -74,6 +74,26 @@ class ChatSuggester(Suggester):
                 rel_path = rel_path.replace(" ", r"\ ")
                 return prefix + rel_path
         
+        # 4. Provide Autocompletion for $ Tool Results
+        last_dollar_idx = value.rfind("$")
+        if last_dollar_idx != -1:
+            prefix = value[:last_dollar_idx + 1]
+            partial_id = value[last_dollar_idx + 1:]
+            
+            try:
+                app = self.get_app_cb()
+                sm = app.query_one("AIAgentView").session_manager
+                from toolbox import shared_db_conn
+                cursor = shared_db_conn.cursor()
+                cursor.execute("SELECT id FROM global_tool_results WHERE session_id = ? AND CAST(id AS TEXT) LIKE ?", (sm.current_session_id, f"{partial_id}%"))
+                rows = cursor.fetchall()
+                if rows:
+                    matches = [str(r[0]) for r in rows]
+                    matches.sort(key=lambda x: int(x), reverse=True)
+                    return prefix + matches[0]
+            except:
+                pass
+
         # 3. Provide Autocompletion for @ Agents
         last_at_idx = value.rfind("@")
         if last_at_idx != -1:
@@ -504,7 +524,7 @@ def process_slash_command(command: str, agent_view):
     elif cmd == "/schedule":
         from agent import ScheduleModal
         agent_view.app.push_screen(ScheduleModal(agent_view))
-    
+
     elif cmd == "/select_agent":
         if not args:
             agent_view.log_to_ui("[bold red]Usage: /select_agent <agent_name>[/bold red]")
@@ -641,6 +661,20 @@ def process_slash_command(command: str, agent_view):
 
     else:
         agent_view.log_to_ui(f"Unknown command: {cmd}. Type `/help` for a list of available commands.")
+
+def handle_dollar_commands(prompt: str, agent_view) -> str:
+    pattern = r'\$(\d+)'
+    def replacer(match):
+        tid = int(match.group(1))
+        try:
+            from toolbox import set_toolresult
+            res = set_toolresult.invoke({"id": tid}, config={"configurable": {"thread_id": "human_override"}})
+            agent_view.log_to_ui(f"[bold cyan]{res}[/bold cyan]")
+            return f"[{res}]"
+        except Exception as e:
+            agent_view.log_to_ui(f"[bold red]Failed to toggle Tool Result {tid}: {e}[/bold red]")
+            return f"[Failed to toggle Tool Result {tid}: {e}]"
+    return re.sub(pattern, replacer, prompt)
 
 def handle_ampersand_commands(prompt: str, agent_view) -> str:
     """Inject file contents directly into the prompt and strip out ignored files."""
