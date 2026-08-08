@@ -3211,8 +3211,8 @@ def retrieve_episodic_memory(session_id: str, config: RunnableConfig) -> str:
         return f"Error reading session log: {e}"
 
 @tool
-def get_toolresult(id: int, config: RunnableConfig = None) -> str:
-    """Fetches the hidden output of a tool call using its ID."""
+def get_toolresult(ids: List[int], config: RunnableConfig = None) -> str:
+    """Fetches hidden outputs of tool calls. BATCHING MANDATE: If you need multiple tool outputs, pass ALL their Result IDs together in a single list (e.g. ids=[1, 2, 3])."""
     agent_name = _get_agent(config)
     try:
         if not CURRENT_APP:
@@ -3221,16 +3221,22 @@ def get_toolresult(id: int, config: RunnableConfig = None) -> str:
         sm = CURRENT_APP.query_one("#ai_agent_view").session_manager
         current_session_id = sm.current_session_id
 
+        if isinstance(ids, int):
+            ids = [ids]
+
         cursor = shared_db_conn.cursor()
-        cursor.execute("SELECT agent_name, tool_name, output FROM global_tool_results WHERE id = ? AND session_id = ?", (id, current_session_id))
-        row = cursor.fetchone()
-        if not row:
-            return f"Error: Tool result ID {id} not found in the current chat session."
-            
-        orig_agent, tool_name, output = row
-        return f"Result (ID {id}) successfully retrieved for tool '{tool_name}':\n\n{output}"
+        results = []
+        for id_val in ids:
+            cursor.execute("SELECT agent_name, tool_name, output FROM global_tool_results WHERE id = ? AND session_id = ?", (id_val, current_session_id))
+            row = cursor.fetchone()
+            if not row:
+                results.append(f"Error: Tool result ID {id_val} not found in the current chat session.")
+            else:
+                orig_agent, tool_name, output = row
+                results.append(f"Result (ID {id_val}) successfully retrieved for tool '{tool_name}':\n\n{output}")
+        return "\n\n".join(results)
     except Exception as e:
-        return f"Error retrieving tool result: {e}"
+        return f"Error retrieving tool results: {e}"
 
 @tool
 def set_toolresult(id: int, config: RunnableConfig = None) -> str:
@@ -3274,7 +3280,7 @@ def set_toolresult(id: int, config: RunnableConfig = None) -> str:
                 f"- Result ID: {id}\n"
                 f"- Arguments: {args_str}\n"
                 f"- Time: {ts or ''}\n"
-                f"- Action: Use get_toolresult(id={id}) to read output privately, or set_toolresult(id={id}) to make public."
+                f"- Action: Use get_toolresult(ids=[{id}]) to read output privately, or set_toolresult(id={id}) to make public."
             )
             new_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{orig_agent}" tool="{tool_name}" id="{id}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
             status_desc = "PRIVATE (hidden behind stub)"

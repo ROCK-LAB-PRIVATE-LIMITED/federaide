@@ -34,7 +34,7 @@ AGENT INTERCOM RULES:
 - If you want to review the work of parallel agents afterwards, while dispatching invoke yourself sequentially at the end of the prompt (e.g., "@@Gordon do X, @@Danny do Y, and @YourName (I) will summarize the results when you both are done"). You will be safely queued until all parallel agents have finished.
 - IMPORTANT CONCURRENCY RULE: If you and other agents were just summoned together in parallel (@@), they are ALREADY working on their tasks at this exact moment. Do NOT tag them again sequentially. Just complete your own assigned part and wait, they are also completing their tasks though this may not be apparent to you until the next turn.
 - To stop a runaway conversation (too many agent intercom calls without any real need for it), include @askuser in your message. This will safely pause the agent queue and wait for the user to respond or type @resume.
-- If you see a [Tool Output Hidden] stub from another agent, check the listed 'Result ID: X' and 'Arguments'. If you need that output, call get_toolresult(id=X) using the exact integer Result ID X. Do NOT guess IDs or use string tool call keys.
+- If you see a [Tool Output Hidden] stub from another agent, check the listed 'Result ID: X' and 'Arguments'. If you need that output, call get_toolresult(ids=[X, Y]) using the exact integer Result IDs. Do NOT guess IDs or use string tool call keys. You can fetch multiple results at once by passing the IDs as list, like this: get_toolresult(ids=[X, Y, Z])
 - Do NOT use raw <AGENT_INTERCOM> tags directly. It won't work and you will look like a fool. If you use it the UI will clearly show the user that you pretended to be someone else. If the user invokes a non-existent agent tell them so instead of pretending to be this non-existent agent.
 - DELEGATION:
     - You MUST delegate the task if another agent is more suitable for the given task, based on their backstory. 
@@ -541,7 +541,7 @@ class SessionManager:
                                         f"- Result ID: {gid}\n"
                                         f"- Arguments: {args_str}\n"
                                         f"- Time: {ts}\n"
-                                        f"- Action: Use get_toolresult(id={gid}) to read output privately, or set_toolresult(id={gid}) to make public."
+                                        f"- Action: Use get_toolresult(ids=[{gid}]) to read output. (Combine multiple IDs into one list e.g. ids=[{gid}, ...])"
                                     )
                                     tool_content = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{src_name}" tool="{output.get("name")}" id="{gid}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
                                 else:
@@ -622,7 +622,7 @@ class SessionManager:
                                             f"- Result ID: {gid}\n"
                                             f"- Arguments: {args_str}\n"
                                             f"- Time: {output.get('timestamp', '')}\n"
-                                            f"- Action: Use get_toolresult(id={gid}) to read output privately, or set_toolresult(id={gid}) to make public."
+                                            f"- Action: Use get_toolresult(ids=[{gid}]) to read output. (Combine multiple IDs into one list e.g. ids=[{gid}, ...])"
                                         )
                                         tool_intercom = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{sender_name}" tool="{output.get("name")}" id="{gid}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
                                     else:
