@@ -324,6 +324,30 @@ shared_db_conn.execute("PRAGMA journal_mode=WAL;")  # Allows simultaneous readin
 shared_memory = SqliteSaver(shared_db_conn)
 shared_memory.setup() # Automatically creates the required SQL tables
 
+def purge_db_checkpoints():
+    """Purges ephemeral LangGraph checkpoints and vacuums the database on clean exit."""
+    try:
+        cursor = shared_db_conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        # 1. Delete all rows
+        for table in tables:
+            cursor.execute(f"DELETE FROM {table};")
+            
+        # 2. MUST COMMIT DELETION FIRST (SQLite forbids VACUUM inside an open transaction)
+        shared_db_conn.commit()
+        
+        # 3. Truncate WAL & VACUUM (now outside transaction)
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        cursor.execute("VACUUM;")
+        cursor.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        shared_db_conn.commit()
+        
+        print("\n[FEDERaiDE] Checkpoint database purged and vacuumed on exit.\n")
+    except Exception as e:
+        print(f"\n[FEDERaiDE] Checkpoint purge error: {e}\n")
+
 def _get_agent(config: RunnableConfig) -> str:
     """Extracts the agent name natively from the LangGraph session ID or thread context."""
     if hasattr(thread_context, "agent_name") and thread_context.agent_name:

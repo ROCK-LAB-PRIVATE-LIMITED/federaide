@@ -256,7 +256,7 @@ class Federate(App):
             pass
         
     def action_quit(self):
-        """Signals background threads to stop, clears the UI, and kills the process after a short delay."""
+        """Signals background threads to stop, clears the UI, cleans checkpoint DB, and kills the process after a short delay."""
         import threading
         import os
         
@@ -267,9 +267,10 @@ class Federate(App):
         except:
             pass
             
-        # 2. Start a 'Dead Man's Switch' timer. 
-        # This gives the UI 200ms to clear the screen and restore the terminal 
-        # before we forcefully terminate the process (and any hung threads).
+        # 2. Purge checkpoint database (runs to completion regardless of time)
+        toolbox.purge_db_checkpoints()
+
+        # 3. Start a 'Dead Man's Switch' timer AFTER purge finishes
         def hard_kill():
             print('\033[?25h', end='', flush=True)
             os._exit(0)
@@ -278,10 +279,10 @@ class Federate(App):
         kill_timer.daemon = True
         kill_timer.start()
         
-        # 3. Standard polite exit (restores terminal state)
+        # 4. Standard polite exit (restores terminal state)
         self.exit()
         
-        # 4. Clear terminal after TUI closes
+        # 5. Clear terminal after TUI closes
         os.system('cls' if os.name == 'nt' else 'clear')
         
     def compose(self) -> ComposeResult:

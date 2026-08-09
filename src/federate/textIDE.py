@@ -553,10 +553,15 @@ class FEDERaiDE(App):
             self.query_one("#ai_agent_view").action_abort()
         except Exception:
             pass
-            
-        # 2. Start a 'Dead Man's Switch' timer. 
-        # This gives Textual 500ms to cleanly tear down the TUI screen and restore terminal modes
-        # before we forcefully terminate the process and any hung background threads.
+
+        # 2. Purge checkpoint database (runs to completion regardless of time)
+        try:
+            import toolbox
+            toolbox.purge_db_checkpoints()
+        except Exception:
+            pass
+
+        # 3. Start a 'Dead Man's Switch' timer AFTER purge finishes
         def hard_kill():
             print('\033[?25h', end='', flush=True)
             os._exit(0)
@@ -565,10 +570,10 @@ class FEDERaiDE(App):
         kill_timer.daemon = True
         kill_timer.start()
         
-        # 3. Standard polite exit (restores terminal state)
+        # 4. Standard polite exit (restores terminal state)
         self.exit()
         
-        # 4. Clear terminal after TUI closes
+        # 5. Clear terminal after TUI closes
         try:
             os.system('cls' if os.name == 'nt' else 'clear')
         except Exception:
