@@ -17,7 +17,7 @@ from textual import work, on
 from textual.message import Message
 from textual import events
 
-from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands, handle_dollar_commands
+from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk, ToolMessage, messages_to_dict, messages_from_dict
@@ -1806,6 +1806,7 @@ class ChatInput(TextArea):
         # 3. Check for standard Enter LAST to send the message
         elif event.key == "enter":
             event.prevent_default()
+            event.stop()
             val = self.text.strip()
             self.post_message(self.Submitted(self, val))
 
@@ -1846,29 +1847,6 @@ class ChatInput(TextArea):
                 self._mode = "file"
                 self.update_suggestions_ui()
                 return
-
-        # Handle $ for tool results
-        last_dollar = val.rfind("$")
-        if last_dollar != -1:
-            partial_id = val[last_dollar + 1:]
-            if " " not in partial_id:
-                try:
-                    agent_view = self.app.query_one("#ai_agent_view")
-                    sm = agent_view.session_manager
-                    from toolbox import shared_db_conn
-                    cursor = shared_db_conn.cursor()
-                    cursor.execute("SELECT id FROM global_tool_results WHERE session_id = ? AND CAST(id AS TEXT) LIKE ?", (sm.current_session_id, f"{partial_id}%"))
-                    rows = cursor.fetchall()
-                    matches = [str(r[0]) for r in rows]
-                    matches.sort(key=lambda x: int(x), reverse=True)
-                    self._suggestion_matches = matches
-                    self._suggestion_index = 0
-                    self._base_val = val[:last_dollar + 1]
-                    self._mode = "toolresult"
-                    self.update_suggestions_ui()
-                    return
-                except: pass
-
         # Handle @ for agents
         last_at = val.rfind("@")
         if last_at != -1:
@@ -1907,18 +1885,7 @@ class ChatInput(TextArea):
                     return backstory[:60] + "..." if len(backstory) > 60 else backstory
             except: pass
             return "AI Agent Persona"
-        elif mode == "toolresult":
-            try:
-                from toolbox import shared_db_conn
-                cursor = shared_db_conn.cursor()
-                cursor.execute("SELECT agent_name, tool_name, is_public FROM global_tool_results WHERE id = ?", (int(match),))
-                row = cursor.fetchone()
-                if row:
-                    pub_str = "Public" if row[2] else "Private"
-                    return f"Agent: {row[0]} | Tool: {row[1]} | Status: {pub_str}"
-            except:
-                pass
-            return "Tool Result"
+        
         elif mode == "file":
             try:
                 if os.path.isdir(match):
@@ -3837,10 +3804,7 @@ class AIAgentView(Vertical):
             process_slash_command(prompt, self)
             return
         
-        if prompt.startswith("$"):
-            self._write_log(Rule(style="dim"))
-            handle_dollar_commands(prompt, self)
-            return
+        
         # Multi-Agent Routing
         acting_agent = self.active_agent
         clean_prompt = prompt
@@ -3973,7 +3937,6 @@ class AIAgentView(Vertical):
         # Process & context injection
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
         processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
-        processed_prompt = handle_dollar_commands(processed_prompt, self)
         
         # Broadcast user message to all active agents (now they all definitely have sessions)
         self.session_manager.broadcast_message(u_name, processed_prompt, is_ai=False)
