@@ -3,7 +3,7 @@
 #            FEDERaiDE Universal POSIX & Linux Installer Script
 # ==============================================================================
 # Compatible with both /bin/sh (BusyBox/ash/dash) and /bin/bash across:
-# - Alpine Linux (apk)
+# - Alpine Linux (apk - musl libc)
 # - Debian / Ubuntu / Mint / Pop!_OS / Kali / Raspberry Pi OS (apt)
 # - Fedora / RHEL / CentOS / Rocky Linux / AlmaLinux / Amazon Linux (dnf / yum)
 # - Arch Linux / Manjaro / EndeavourOS (pacman)
@@ -37,7 +37,21 @@ esac
 echo "[*] Operating System: $OS_NAME"
 echo "[*] System Architecture: $ARCH_NAME"
 
-# 2. Downloader Helper Functions (Supports both curl and wget)
+# 2. Musl libc Detection Helper
+is_musl() {
+    if [ -f /etc/alpine-release ]; then
+        return 0
+    fi
+    if ldd /bin/sh 2>&1 | grep -qi "musl"; then
+        return 0
+    fi
+    if ls /lib/ld-musl* >/dev/null 2>&1 || ls /lib64/ld-musl* >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# 3. Downloader Helper Functions (Supports both curl and wget)
 download_stdout() {
     url="$1"
     if command -v curl >/dev/null 2>&1; then
@@ -64,7 +78,7 @@ download_file() {
     fi
 }
 
-# 3. Privilege Escalation Helper
+# 4. Privilege Escalation Helper
 run_root() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"
@@ -79,7 +93,7 @@ run_root() {
     fi
 }
 
-# 4. System Package Manager Detection & WeasyPrint / Build Dependency Installation
+# 5. System Package Manager Detection & WeasyPrint / Build Dependency Installation
 install_system_dependencies() {
     echo "[*] Detecting Linux Distribution and Package Manager for WeasyPrint dependencies..."
 
@@ -132,10 +146,10 @@ install_system_dependencies() {
 
 install_system_dependencies
 
-# 5. Ensure PATH includes standard local binary locations
+# 6. Ensure PATH includes standard local binary locations
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-# 6. Ensure uv is Installed
+# 7. Ensure uv is Installed
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         echo "[*] uv is already installed and available on PATH."
@@ -151,7 +165,6 @@ ensure_uv() {
         download_stdout https://astral.sh/uv/install.sh | sh
     fi
 
-    # Re-export path in case uv was installed into ~/.local/bin or ~/.cargo/bin
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
     if ! command -v uv >/dev/null 2>&1; then
@@ -171,7 +184,36 @@ ensure_uv() {
 
 ensure_uv
 
-# 7. Perform Installation via uv tool
+# 8. Dummy sqlite-vec Wheel Generator (Bypasses compilation crashes on musl/Alpine/Termux)
+build_dummy_sqlite_vec() {
+    tyres_target_dir="$1"
+    echo "    [*] Building dummy sqlite-vec wheel to bypass C-extension compilation on musl/mobile..."
+
+    BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR/sqlite_vec"
+
+    touch "$BUILD_DIR/README.md"
+    touch "$BUILD_DIR/sqlite_vec/__init__.py"
+    cat << 'EOF' > "$BUILD_DIR/pyproject.toml"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlite-vec"
+version = "0.1.9"
+description = "Dummy package to bypass C-extension build on musl/mobile"
+readme = "README.md"
+requires-python = ">=3.8"
+EOF
+
+    (cd "$BUILD_DIR" && uv build --wheel) >/dev/null 2>&1 || true
+    cp "$BUILD_DIR/dist/"*.whl "$tyres_target_dir/" 2>/dev/null || true
+    rm -rf "$BUILD_DIR"
+}
+
+# 9. Perform Installation via uv tool
 install_federaide() {
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"
     REPO_NAME="FEDERaiDE"
@@ -181,33 +223,14 @@ install_federaide() {
     rm -rf "$TYRES_DIR" && mkdir -p "$TYRES_DIR"
     RAW_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/tyres"
 
+    # Always generate dummy sqlite-vec wheel on musl/Alpine or Termux
+    if [ "$IS_TERMUX" = true ] || is_musl; then
+        build_dummy_sqlite_vec "$TYRES_DIR"
+    fi
+
     if [ "$IS_TERMUX" = true ]; then
         echo "[*] Configuring Termux installation..."
         unset UV_FIND_LINKS
-
-        BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
-        rm -rf "$BUILD_DIR"
-        mkdir -p "$BUILD_DIR/sqlite_vec"
-
-        echo "    [*] Creating dummy sqlite-vec package structures..."
-        touch "$BUILD_DIR/README.md"
-        touch "$BUILD_DIR/sqlite_vec/__init__.py"
-        cat << 'EOF' > "$BUILD_DIR/pyproject.toml"
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[project]
-name = "sqlite-vec"
-version = "0.1.9"
-description = "Dummy package to trick the Android environment resolver"
-readme = "README.md"
-requires-python = ">=3.8"
-EOF
-
-        echo "    [*] Building wheel for sqlite-vec..."
-        (cd "$BUILD_DIR" && uv build --wheel)
-        cp "$BUILD_DIR/dist/"*.whl "$TYRES_DIR/" 2>/dev/null || true
 
         export ANDROID_API_LEVEL=19
         echo "[*] Installing FEDERaiDE on Python 3.13..."
@@ -223,7 +246,6 @@ EOF
 
         grep -qF ".local/bin" ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         unset UV_FIND_LINKS
-        rm -rf "$BUILD_DIR"
 
     elif [ "$OS_NAME" = "Linux" ] && [ "$IS_ARM" = true ]; then
         echo "[*] Configuring Linux ARM (aarch64) installation..."
@@ -242,7 +264,8 @@ EOF
             uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
         else
             echo "[*] Installing FEDERaiDE on Python 3.13..."
-            uv tool install --force --refresh --python 3.13 "federaide[all]" || uv tool install --force --refresh --python 3.13 federaide
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]" || \
+            uv tool install --force --refresh --python 3.13 federaide
         fi
 
     else
@@ -279,12 +302,12 @@ else:
         echo "[*] Installing FEDERaiDE with all features on standardized Python 3.13 environment..."
         if [ -n "$LATEST_VER" ]; then
             echo "[*] Target version resolved: v$LATEST_VER"
-            if ! uv tool install --force --refresh --python 3.13 "federaide[all]==$LATEST_VER"; then
+            if ! uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]==$LATEST_VER"; then
                 echo "[!] Explicit version install failed. Falling back to standard resolution..."
-                uv tool install --force --refresh --python 3.13 "federaide[all]"
+                uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
             fi
         else
-            uv tool install --force --refresh --python 3.13 "federaide[all]"
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
         fi
     fi
 
@@ -293,7 +316,7 @@ else:
 
 install_federaide
 
-# 8. Ensure ~/.local/bin is permanently added to user's shell configuration
+# 10. Ensure ~/.local/bin is permanently added to user's shell configuration
 for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile"; do
     if [ -f "$rc_file" ]; then
         if ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
