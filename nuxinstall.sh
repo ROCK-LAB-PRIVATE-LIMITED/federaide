@@ -1,12 +1,12 @@
-#!/bin/bash
+#!/bin/sh
 # ==============================================================================
-#            FEDERaiDE Universal Linux & POSIX Installer Script
+#            FEDERaiDE Universal POSIX & Linux Installer Script
 # ==============================================================================
-# Supported Linux Distributions & Environments:
+# Compatible with both /bin/sh (BusyBox/ash/dash) and /bin/bash across:
+# - Alpine Linux (apk)
 # - Debian / Ubuntu / Mint / Pop!_OS / Kali / Raspberry Pi OS (apt)
 # - Fedora / RHEL / CentOS / Rocky Linux / AlmaLinux / Amazon Linux (dnf / yum)
 # - Arch Linux / Manjaro / EndeavourOS (pacman)
-# - Alpine Linux (apk)
 # - openSUSE / SLES (zypper)
 # - Void Linux (xbps-install)
 # - Gentoo (emerge)
@@ -39,10 +39,10 @@ echo "[*] System Architecture: $ARCH_NAME"
 
 # 2. Downloader Helper Functions (Supports both curl and wget)
 download_stdout() {
-    local url="$1"
-    if command -v curl &> /dev/null; then
+    url="$1"
+    if command -v curl >/dev/null 2>&1; then
         curl -LsSf "$url"
-    elif command -v wget &> /dev/null; then
+    elif command -v wget >/dev/null 2>&1; then
         wget -qO- "$url"
     else
         echo "[!] Error: Neither 'curl' nor 'wget' is available on this system." >&2
@@ -52,11 +52,11 @@ download_stdout() {
 }
 
 download_file() {
-    local url="$1"
-    local dest="$2"
-    if command -v curl &> /dev/null; then
+    url="$1"
+    dest="$2"
+    if command -v curl >/dev/null 2>&1; then
         curl -LsSf "$url" -o "$dest"
-    elif command -v wget &> /dev/null; then
+    elif command -v wget >/dev/null 2>&1; then
         wget -qO "$dest" "$url"
     else
         echo "[!] Error: Neither 'curl' nor 'wget' is available on this system." >&2
@@ -68,9 +68,9 @@ download_file() {
 run_root() {
     if [ "$(id -u)" -eq 0 ]; then
         "$@"
-    elif command -v sudo &> /dev/null; then
+    elif command -v sudo >/dev/null 2>&1; then
         sudo "$@"
-    elif command -v doas &> /dev/null; then
+    elif command -v doas >/dev/null 2>&1; then
         doas "$@"
     else
         echo "[!] Warning: Root privileges required for '$*'." >&2
@@ -91,36 +91,36 @@ install_system_dependencies() {
         return 0
     fi
 
-    if command -v apt-get &> /dev/null; then
+    if command -v apk >/dev/null 2>&1; then
+        echo "[*] Package Manager: apk (Alpine Linux)"
+        run_root apk add --no-cache bash pango cairo gdk-pixbuf libffi-dev fontconfig openjpeg gcc musl-dev python3-dev pkgconf || true
+
+    elif command -v apt-get >/dev/null 2>&1; then
         echo "[*] Package Manager: apt-get (Debian/Ubuntu/Mint/Pop!_OS/Raspberry Pi OS)"
         run_root apt-get update -y || true
         run_root apt-get install -y libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 libffi-dev shared-mime-info fontconfig openjpeg2-tools build-essential python3-dev pkg-config || true
 
-    elif command -v dnf &> /dev/null; then
+    elif command -v dnf >/dev/null 2>&1; then
         echo "[*] Package Manager: dnf (Fedora/RHEL/CentOS/Rocky/AlmaLinux)"
         run_root dnf install -y pango pango-devel cairo cairo-devel gdk-pixbuf2 gdk-pixbuf2-devel libffi-devel fontconfig openjpeg2 gcc python3-devel pkgconfig || true
 
-    elif command -v yum &> /dev/null; then
+    elif command -v yum >/dev/null 2>&1; then
         echo "[*] Package Manager: yum (CentOS/RHEL)"
         run_root yum install -y pango pango-devel cairo cairo-devel gdk-pixbuf2 gdk-pixbuf2-devel libffi-devel fontconfig openjpeg2 gcc python3-devel pkgconfig || true
 
-    elif command -v pacman &> /dev/null; then
+    elif command -v pacman >/dev/null 2>&1; then
         echo "[*] Package Manager: pacman (Arch Linux/Manjaro/EndeavourOS)"
         run_root pacman -Sy --noconfirm pango cairo gdk-pixbuf2 libffi fontconfig openjpeg2 pkgconf base-devel || true
 
-    elif command -v apk &> /dev/null; then
-        echo "[*] Package Manager: apk (Alpine Linux)"
-        run_root apk add --no-cache pango cairo gdk-pixbuf libffi-dev fontconfig openjpeg gcc musl-dev python3-dev pkgconf || true
-
-    elif command -v zypper &> /dev/null; then
+    elif command -v zypper >/dev/null 2>&1; then
         echo "[*] Package Manager: zypper (openSUSE/SLES)"
         run_root zypper --non-interactive install pango pango-devel cairo cairo-devel gdk-pixbuf-devel libffi-devel fontconfig openjpeg || true
 
-    elif command -v xbps-install &> /dev/null; then
+    elif command -v xbps-install >/dev/null 2>&1; then
         echo "[*] Package Manager: xbps-install (Void Linux)"
         run_root xbps-install -Sy pango pango-devel cairo cairo-devel gdk-pixbuf gdk-pixbuf-devel libffi-devel fontconfig openjpeg pkg-config || true
 
-    elif command -v emerge &> /dev/null; then
+    elif command -v emerge >/dev/null 2>&1; then
         echo "[*] Package Manager: emerge (Gentoo)"
         run_root emerge --ask=n x11-libs/pango x11-libs/cairo x11-libs/gdk-pixbuf dev-libs/libffi media-libs/fontconfig || true
 
@@ -137,7 +137,7 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # 6. Ensure uv is Installed
 ensure_uv() {
-    if command -v uv &> /dev/null; then
+    if command -v uv >/dev/null 2>&1; then
         echo "[*] uv is already installed and available on PATH."
         return 0
     fi
@@ -154,7 +154,7 @@ ensure_uv() {
     # Re-export path in case uv was installed into ~/.local/bin or ~/.cargo/bin
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-    if ! command -v uv &> /dev/null; then
+    if ! command -v uv >/dev/null 2>&1; then
         if [ -x "$HOME/.local/bin/uv" ]; then
             alias uv="$HOME/.local/bin/uv"
         elif [ -x "$HOME/.cargo/bin/uv" ]; then
@@ -227,12 +227,10 @@ EOF
 
     elif [ "$OS_NAME" = "Linux" ] && [ "$IS_ARM" = true ]; then
         echo "[*] Configuring Linux ARM (aarch64) installation..."
-        WHEELS=(
-            "numpy-2.4.4-cp312-cp312-manylinux2014_aarch64.whl"
-        )
+        WHEELS="numpy-2.4.4-cp312-cp312-manylinux2014_aarch64.whl"
 
         DOWNLOAD_SUCCESS=false
-        for wheel in "${WHEELS[@]}"; do
+        for wheel in $WHEELS; do
             echo "    [*] Downloading binary cache: $wheel"
             if download_file "$RAW_URL/$wheel" "$TYRES_DIR/$wheel"; then
                 DOWNLOAD_SUCCESS=true
@@ -296,9 +294,8 @@ else:
 install_federaide
 
 # 8. Ensure ~/.local/bin is permanently added to user's shell configuration
-for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
-    if [ -f "$rc_file" ] || [ "${rc_file##*/}" = ".bashrc" -a "$SHELL" = "/bin/bash" ] || [ "${rc_file##*/}" = ".zshrc" -a "$SHELL" = "/bin/zsh" ]; then
-        touch "$rc_file" 2>/dev/null || true
+for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    if [ -f "$rc_file" ]; then
         if ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
             echo '' >> "$rc_file"
             echo '# FEDERaiDE binary path' >> "$rc_file"
@@ -308,11 +305,11 @@ for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile"; do
 done
 
 echo "======================================================================"
-echo " 🎉 FEDERaiDE Linux installation complete!"
+echo " 🎉 FEDERaiDE POSIX installation complete!"
 echo "======================================================================"
 echo " To ensure both 'uv' and 'federaide' are on your active shell PATH,"
 echo " please restart your terminal or run:"
-echo "     source ~/.bashrc  (or ~/.zshrc if using Zsh)"
+echo "     source ~/.profile  (or ~/.bashrc / ~/.zshrc)"
 echo ""
 echo " To launch the application:"
 echo "     federaide"
