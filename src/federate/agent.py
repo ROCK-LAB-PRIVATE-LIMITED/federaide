@@ -2281,7 +2281,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
             "  [bold #f2a813]Tips for getting started:[/bold #f2a813]\n"
             "  1. Ask questions, edit files, or run commands.\n"
             "  2. Use & to inject files. Use @ to invoke particular agents.\n"
-            "  3. Press F2 to configure the active agent.\n"
+            "  3. Press F4 to configure the active agent.\n"
             "  4. Press Ctrl+K to start a fresh conversation."
         )
         

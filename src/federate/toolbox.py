@@ -1133,7 +1133,7 @@ def search_web(query: str) -> str:
         check_abort()
         sleep_time = _get_search_delay()
         if sleep_time > 0.0:
-            log_tool(f" Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
+            log_tool(f" Throttling search to prevent abuse (sleeping {int(sleep_time)}s)...")
             for _ in range(int(sleep_time * 10)):
                 check_abort()
                 time.sleep(0.1)
@@ -1601,7 +1601,7 @@ def node_execute_search(state: AgentState):
         check_abort()
         sleep_time = _get_search_delay()
         if sleep_time > 0.0:
-            safe_print(f" Throttling search to prevent rate limits (sleeping {int(sleep_time)}s)...")
+            safe_print(f" Throttling search to prevent abuse (sleeping {int(sleep_time)}s)...")
             for _ in range(int(sleep_time * 10)):
                 check_abort()
                 time.sleep(0.1)

@@ -41,7 +41,7 @@ Even on mobile, you can delegate complex multi-step coding tasks to an autonomou
 
 ## Installation
 
-Mac/Linux/Android(Termux):
+Mac/Android(Termux):
 ```bash
 curl https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.sh | bash
 ```
@@ -49,6 +49,11 @@ curl https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/i
 Windows:
 ```powershell
 irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex
+```
+
+Linux:
+```powershell
+wget -O- https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/nuxinstall.sh | sh
 ```
 
 Via `uv`:
