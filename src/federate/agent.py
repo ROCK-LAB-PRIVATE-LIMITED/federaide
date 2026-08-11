@@ -103,6 +103,7 @@ from toolbox import (
     fetch_url, 
     search_web,
     perform_research,
+    render_pdf,
     manage_agenda,
     get_user_clarification,
     search_episodic_memory,
@@ -1184,7 +1185,7 @@ class ConfigModal(ModalScreen[str]):
         self.enabled_tools = list(agent_config.enabled_tools)
         self.disabled_tools = list(getattr(agent_config, "disabled_tools", ["visual_computer_operation", "send_file_to_telegram"]))
         self.all_manageable_tools = [
-            "list_files", "search_web", "perform_research", "manage_agenda",
+            "list_files", "search_web", "perform_research", "render_pdf", "manage_agenda",
             "read_file", "fetch_url", "save_file", "edit_file", 
             "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation", "send_file_to_telegram"
         ]
@@ -3551,7 +3552,7 @@ class AIAgentView(Vertical):
                     return True
                 return False
 
-            raw_tools = [list_files, search_web, perform_research, manage_agenda, update_core_memory, save_skill, read_skill, distill_journey, delete_passive_skill, list_skills, mark_quagmire, get_user_clarification, search_episodic_memory, retrieve_episodic_memory, prepare_active_skill, finalize_active_skill, manage_active_skill, fix_active_skill, get_toolresult]
+            raw_tools = [list_files, search_web, perform_research, render_pdf, manage_agenda, update_core_memory, save_skill, read_skill, distill_journey, delete_passive_skill, list_skills, mark_quagmire, get_user_clarification, search_episodic_memory, retrieve_episodic_memory, prepare_active_skill, finalize_active_skill, manage_active_skill, fix_active_skill, get_toolresult]
             raw_tools.extend(load_dynamic_tools(agent_config.name))
 
             high_priv_map = {

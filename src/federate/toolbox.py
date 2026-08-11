@@ -1252,26 +1252,25 @@ def get_gmt_string():
     now_gmt = datetime.datetime.now(datetime.timezone.utc)
     return f"Todays date is {now_gmt.strftime('%Y-%m-%d')} and the current time is {now_gmt.strftime('%H:%M:%S')} GMT."
 
-DEFAULT_PDF_CSS_TEMPLATE = """
+DEFAULT_PDF_CSS_TEMPLATE = """@import url('https://fonts.googleapis.com/css2?family=Michroma&family=Space+Grotesk:wght@300;400;700&family=Space+Mono&display=swap');
+
 {bundled_fonts_css}
 
-@import url('https://fonts.googleapis.com/css2?family=Michroma&family=Space+Grotesk:wght@300;400;700&family=Space+Mono&display=swap');
-
 body {{
-  font-family: "{body_font}", sans-serif;
+  font-family: {body_font}, sans-serif;
   font-size: {body_font_size};
   line-height: 1.6;
   color: #111;
 }}
 
 h1, h2, h3, h4 {{
-  font-family: "{header_font}", sans-serif;
+  font-family: {header_font}, sans-serif;
   letter-spacing: 0.04em;
   margin-top: 2em;
 }}
 
 code, pre {{
-  font-family: "{code_font}", monospace;
+  font-family: {code_font}, monospace;
   font-size: 9.5pt;
 }}
 
@@ -1289,14 +1288,14 @@ pre {{
 
   @bottom-left {{
     content: "Page " counter(page) " of " counter(pages);
-    font-family: "{body_font}", sans-serif;
+    font-family: {body_font}, sans-serif;
     font-size: 8pt;
     color: #666;
   }}
 
   @bottom-right {{
     content: "{footer_text}";
-    font-family: "{header_font}", sans-serif;
+    font-family: {header_font}, sans-serif;
     font-size: 8pt;
     color: #666;
   }}
@@ -1323,7 +1322,7 @@ img {{
 }}
 """
 
-def render_markdown_to_pdf(md_path: str, pdf_path: str):
+def render_markdown_to_pdf(md_path: str, pdf_path: str, url_map: dict = None):
     if not WEASYPRINT_AVAILABLE:
         safe_print(" [PDF ERROR] weasyprint not installed.")
         return
@@ -1334,6 +1333,38 @@ def render_markdown_to_pdf(md_path: str, pdf_path: str):
         if global_settings.get("research_images_as_links", False):
             md_text = md_text.replace('![', '[')
 
+        # Unified Link-Resolution Engine: Extract reference URLs if not explicitly passed
+        if url_map is None:
+            url_map = {}
+        for match in re.finditer(r'\[(?:Source\s+)?(\d+)\]:\s*(\S+)', md_text, flags=re.IGNORECASE):
+            url_map[int(match.group(1))] = match.group(2)
+        for match in re.finditer(r'^\s*(\d+)\.\s+(?:\[.*?\]\()?([https?://\S]+)\)?', md_text, flags=re.MULTILINE):
+            url_map[int(match.group(1))] = match.group(2)
+
+        if url_map:
+            def inject_links(m):
+                raw_inner = m.group(1)
+                expanded = re.sub(
+                    r'(\d+)\s*(?:[-–—\u2013\u2014]|to)\s*(\d+)',
+                    lambda rng: " ".join(str(i) for i in range(int(rng.group(1)), int(rng.group(2)) + 1))
+                    if int(rng.group(2)) >= int(rng.group(1)) and (int(rng.group(2)) - int(rng.group(1))) < 20
+                    else rng.group(0),
+                    raw_inner
+                )
+                indices = re.findall(r'\d+', expanded)
+                if not indices: return m.group(0)
+                links = []
+                for idx_str in indices:
+                    idx = int(idx_str)
+                    url = url_map.get(idx)
+                    if url: links.append(f"[Source {idx}]({url})")
+                    else: links.append(f"[Source {idx}]")
+                return ", ".join(links)
+
+            md_text = re.sub(r"\[Sources?\s+([0-9\s,a-zA-Z\-\u2013\u2014]+?)\]", inject_links, md_text)
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(md_text)
+
         html_text = markdown(md_text, extensions=["fenced_code", "tables", "toc", "codehilite", "extra"])
         
         # 1. Respect user workspace CSS overrides if present
@@ -1343,32 +1374,52 @@ def render_markdown_to_pdf(md_path: str, pdf_path: str):
             stylesheet = CSS(filename=str(css_file))
         else:
             # 2. Build dynamic stylesheet from global settings
-            footer_text = global_settings.get("pdf_footer_text", "FEDERATE RESEARCH REPORT")
-            body_font = global_settings.get("pdf_body_font", "Space Grotesk")
-            header_font = global_settings.get("pdf_header_font", "Michroma")
-            code_font = global_settings.get("pdf_code_font", "Space Mono")
+            def _clean_font_name(font_setting: str, default_font: str) -> str:
+                name = (font_setting or default_font).strip().strip('"').strip("'")
+                return f'"{name}"' if name else f'"{default_font}"'
+
+            footer_text = global_settings.get("pdf_footer_text", "FEDERATE RESEARCH REPORT").replace('"', '\\"')
+            body_font = _clean_font_name(global_settings.get("pdf_body_font"), "Space Grotesk")
+            header_font = _clean_font_name(global_settings.get("pdf_header_font"), "Michroma")
+            code_font = _clean_font_name(global_settings.get("pdf_code_font"), "Space Mono")
             body_font_size = global_settings.get("pdf_body_font_size", "11pt")
             h1_font_size = global_settings.get("pdf_h1_font_size", "28pt")
 
             # Resolve local bundled fonts directory relative to this package file
             package_dir = os.path.dirname(os.path.abspath(__file__))
-            fonts_dir = Path(package_dir) / "styles" / "fonts"
+            candidate_font_dirs = [
+                Path(package_dir) / "styles" / "fonts",
+                Path("styles/fonts"),
+                Path("src/federate/styles/fonts"),
+            ]
+            fonts_dir = None
+            for d in candidate_font_dirs:
+                if d.exists() and d.is_dir():
+                    fonts_dir = d.resolve()
+                    break
 
             font_declarations = []
-            if (fonts_dir / "Michroma-Regular.ttf").exists():
-                font_declarations.append(
-                    f"@font-face {{ font-family: 'Michroma'; src: url('{(fonts_dir / 'Michroma-Regular.ttf').as_uri()}'); }}"
-                )
-            if (fonts_dir / "SpaceGrotesk-VariableFont_wght.ttf").exists():
-                font_declarations.append(
-                    f"@font-face {{ font-family: 'Space Grotesk'; src: url('{(fonts_dir / 'SpaceGrotesk-VariableFont_wght.ttf').as_uri()}'); }}"
-                )
-            if (fonts_dir / "SpaceGrotesk-Bold.ttf").exists():
-                font_declarations.append(
-                    f"@font-face {{ font-family: 'Space Grotesk'; font-weight: bold; src: url('{(fonts_dir / 'SpaceGrotesk-Bold.ttf').as_uri()}'); }}"
-                )
+            if fonts_dir:
+                font_files = {
+                    "Michroma-Regular.ttf": ("Michroma", "normal", "normal"),
+                    "SpaceGrotesk-VariableFont_wght.ttf": ("Space Grotesk", "normal", "normal"),
+                    "SpaceGrotesk-Bold.ttf": ("Space Grotesk", "bold", "normal"),
+                    "SpaceMono-Regular.ttf": ("Space Mono", "normal", "normal"),
+                    "SpaceMono-Bold.ttf": ("Space Mono", "bold", "normal"),
+                }
+                for file_name, (family, weight, style) in font_files.items():
+                    font_path = fonts_dir / file_name
+                    if font_path.exists():
+                        font_declarations.append(
+                            f"@font-face {{\n"
+                            f"  font-family: '{family}';\n"
+                            f"  font-weight: {weight};\n"
+                            f"  font-style: {style};\n"
+                            f"  src: url('{font_path.as_uri()}');\n"
+                            f"}}"
+                        )
 
-            bundled_fonts_css = "\n".join(font_declarations)
+            bundled_fonts_css = "\n\n".join(font_declarations)
 
             css_string = DEFAULT_PDF_CSS_TEMPLATE.format(
                 bundled_fonts_css=bundled_fonts_css,
@@ -1379,13 +1430,51 @@ def render_markdown_to_pdf(md_path: str, pdf_path: str):
                 body_font_size=body_font_size,
                 h1_font_size=h1_font_size
             )
-            stylesheet = CSS(string=css_string)
+            base_url = str(fonts_dir) if fonts_dir else str(Path.cwd())
+            stylesheet = CSS(string=css_string, base_url=base_url)
 
         html = HTML(string=html_text, base_url=str(Path.cwd()))
         html.write_pdf(pdf_path, stylesheets=[stylesheet])
         safe_print(f" [PDF] Success: {pdf_path}")
     except Exception as e:
         safe_print(f" [PDF ERROR] WeasyPrint failed: {e}")
+
+@tool
+def render_pdf(pdf_path: str, md_path: str = None, markdown_content: str = None) -> str:
+    """
+    Renders Markdown text or a Markdown file into a styled PDF document using the report rendering engine.
+    Converts headers, fenced code blocks, tables, images, and Markdown links into clickable PDF hyperlinks.
+
+    Args:
+        pdf_path: Target filename or path for the generated PDF (e.g., 'report.pdf').
+        md_path: Optional path to an existing Markdown file in the workspace to convert.
+        markdown_content: Optional raw Markdown text string to render if md_path is omitted.
+    """
+    try:
+        if not WEASYPRINT_AVAILABLE:
+            return "Error: WeasyPrint dependency is not installed on this system."
+
+        safe_pdf_path, display_pdf_path = get_safe_path(pdf_path)
+
+        if md_path:
+            safe_md_path, _ = get_safe_path(md_path)
+            if not os.path.exists(safe_md_path):
+                return f"Error: Markdown file '{md_path}' was not found in the workspace."
+        elif markdown_content:
+            safe_md_path = os.path.splitext(safe_pdf_path)[0] + ".md"
+            with open(safe_md_path, "w", encoding="utf-8") as f:
+                f.write(markdown_content)
+        else:
+            return "Error: You must provide either 'md_path' (path to a .md file) or 'markdown_content' (raw markdown string)."
+
+        log_tool(f"Rendering PDF: [cyan]{display_pdf_path}[/cyan]")
+        render_markdown_to_pdf(safe_md_path, safe_pdf_path)
+
+        if os.path.exists(safe_pdf_path):
+            return f"Successfully generated PDF document at '{display_pdf_path}'."
+        return f"Error: PDF file '{display_pdf_path}' was not created."
+    except Exception as e:
+        return f"Error rendering PDF: {e}"
 
 def get_token_status(messages: List[BaseMessage]) -> str:
     try: encoding = tiktoken.get_encoding("cl100k_base")
@@ -1720,18 +1809,15 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
             report_text = final_state["messages"][-1].content
             url_map = final_state.get("hidden_urls", {})
 
-            def inject_links(match):
-                idx = int(match.group(1))
-                url = url_map.get(idx)
-                return f"[[Source {idx}]({url})]" if url else f"[Source {idx}]"
-
-            final_message = re.sub(r"\[Source (\d+)\]", inject_links, report_text)
-            
-            safe_print(f"[POST-PROCESS] Linked {len(url_map)} sources in final Markdown.")
             with open(md_path, "w", encoding="utf-8") as f:
-                f.write(final_message)
+                f.write(report_text)
             
-            render_markdown_to_pdf(md_path, pdf_path)
+            render_markdown_to_pdf(md_path, pdf_path, url_map=url_map)
+            safe_print(f"[POST-PROCESS] Linked {len(url_map)} sources in final Markdown and PDF.")
+
+            with open(md_path, "r", encoding="utf-8") as f:
+                final_message = f.read()
+
             safe_print(f" {task_name}: Finished.")
             # --- START TELEGRAM DISPATCH HOOK ---
             if CURRENT_APP:
