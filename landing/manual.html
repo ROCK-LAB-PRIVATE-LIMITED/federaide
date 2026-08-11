@@ -322,7 +322,8 @@
             border-radius: 4px;
             font-size: 0.9rem;
             border: 1px solid rgba(255,255,255,0.05);
-            word-break: break-word;
+            white-space: nowrap;
+            word-break: normal;
         }
 
         pre {
@@ -373,7 +374,7 @@
         .callout-warning h5 { color: var(--brand-yellow); }
         .callout-alert h5 { color: var(--brand-red); }
 
-        /* Tables - Responsive Scroll Wrapper */
+        /* Tables - Responsive Scroll Wrapper & Single-Line Command Columns */
         table {
             width: 100%;
             max-width: 100%;
@@ -392,7 +393,7 @@
             text-align: left;
             border-bottom: 1px solid var(--border-color);
             font-size: 0.92rem;
-            word-break: break-word;
+            vertical-align: top;
         }
 
         th {
@@ -403,6 +404,18 @@
             font-size: 0.82rem;
             letter-spacing: 0.05em;
             font-family: var(--font-mono);
+            white-space: nowrap;
+        }
+
+        td:first-child {
+            white-space: nowrap;
+            width: 1%;
+        }
+
+        td:last-child {
+            word-break: normal;
+            overflow-wrap: break-word;
+            width: auto;
         }
 
         tr:last-child td {
@@ -475,7 +488,8 @@
             <li><a href="#scheduler">11. Scheduled Task Routines</a></li>
             <li><a href="#memory">12. Memory & Context Management</a></li>
             <li><a href="#slash-commands">13. Slash Command Reference</a></li>
-            <li><a href="#troubleshooting">14. Troubleshooting & FAQ</a></li>
+            <li><a href="#cli-reference">14. Command-Line (CLI) Reference</a></li>
+            <li><a href="#troubleshooting">15. Troubleshooting & FAQ</a></li>
         </ul>
     </sidebar>
 
@@ -553,14 +567,14 @@ pip install "federaide[all]"</code></pre>
                 On your very first launch, FEDERaiDE automatically opens the <strong>Onboarding Popup Wizard</strong>. This modal guides you through configuring your initial active AI agent:
             </p>
             <ol>
-                <li><strong>API Key:</strong> Input your API key (e.g., from OpenRouter, Google Gemini, OpenAI, or Anthropic).</li>
-                <li><strong>Base URL Preset:</strong> Select a provider preset from the dropdown menu (Google Gemini, OpenRouter, OpenAI, Anthropic, or Custom). Choosing a preset populates the base URL automatically.</li>
-                <li><strong>Model Identifier:</strong> Specify your desired LLM model (e.g., <code>gemini-2.5-flash</code>, <code>openai/gpt-4o</code>, or <code>anthropic/claude-3.5-sonnet</code>).</li>
-                <li><strong>Base URL:</strong> Enter or adjust the API endpoint URL (for local models, you can enter <code>http://localhost:11434/v1</code> for Ollama or <code>http://localhost:1234/v1</code> for LM Studio).</li>
-                <li><strong>Agent Name & Backstory:</strong> Name your agent (default: <em>Rita</em>) and define a short backstory describing its role (e.g., <em>"You are Rita, a general-purpose senior software engineer."</em>).</li>
+                <li><strong>Base URL Preset:</strong> Select a provider preset from the dropdown menu (Google Gemini, OpenRouter, OpenAI, Anthropic, ChatGPT Subscription (OAuth), or Custom). Choosing a preset populates the base URL automatically.</li>
+                <li><strong>API Key / OAuth Authentication:</strong> Input your API key (e.g., from OpenRouter, Google Gemini, OpenAI, or Anthropic). If you choose <em>ChatGPT Subscription (OAuth)</em>, click <strong>Authenticate with OAuth</strong> to connect your ChatGPT Plus, Pro, or Team subscription directly without needing a pay-per-token API key.</li>
+                <li><strong>Model Identifier:</strong> Specify your desired LLM model (e.g., <code>gemini-3.1-flash-lite</code>, <code>openai/gpt-4o</code>, <code>anthropic/claude-3.5-sonnet</code>, or <code>gpt-5.6-luna</code> for ChatGPT OAuth).</li>
+                <li><strong>Base URL:</strong> Enter or adjust the API endpoint URL (for local models, enter <code>http://localhost:11434/v1</code> for Ollama or <code>http://localhost:1234/v1</code> for LM Studio).</li>
+                <li><strong>Agent Name & Backstory:</strong> Name your agent (default: <em>Rita</em>) and define a backstory describing its role (default: <em>"You are Rita, a general purpose senior developer."</em>).</li>
             </ol>
             <p>
-                Click <strong>Get Started</strong>. FEDERaiDE securely encrypts and stores your API credentials inside your native OS Keychain (macOS Keychain, Windows Credential Manager, or Linux/Termux Encrypted Keyring).
+                Click <strong>Get Started</strong>. FEDERaiDE securely encrypts and stores your credentials inside your native OS Keychain (macOS Keychain, Windows Credential Manager, or Linux/Termux Encrypted Keyring).
             </p>
 
             <h3>2.4. Phase 1: Operating in Single-Agent Mode</h3>
@@ -785,32 +799,128 @@ pip install "federaide[all]"</code></pre>
         <section id="ide">
             <h2>6. Built-in Code Editor & Program Runner (IDE View)</h2>
 
-            <h3>6.1. Switching Panels</h3>
+            <h3>6.1. Workspace Architecture & View Navigation (<kbd>F6</kbd>)</h3>
             <p>
-                Press <kbd>F6</kbd> to cycle between the three primary views: <strong>Chat View ↔ Code Editor Workspace ↔ Executions Dashboard</strong>.
+                Launching FEDERaiDE via the <code>federaide</code> command boots the full multi-panel Terminal IDE. Press <kbd>F6</kbd> at any time to cycle sequentially between the three primary interface views:
             </p>
+            <ol>
+                <li><strong>Multi-Agent Chat View (<code>ai_chat_view</code>):</strong> The central multi-agent discussion workspace, voice dictation interface, and tool execution feed.</li>
+                <li><strong>Code Editor Workspace (<code>code_view</code>):</strong> The three-panel coding environment comprising the File Explorer, Tabbed Editor, and Real-Time Structure Outline.</li>
+                <li><strong>Executions Dashboard (<code>exec_manager_view</code>):</strong> The tabbed terminal dashboard displaying live outputs, PTY terminal shells, and script execution logs. <em>(Note: <kbd>F6</kbd> automatically bypasses this view if no program executions are active or if only the idle panel is open).</em></li>
+            </ol>
 
-            <h3>6.2. Navigating the File Explorer & File Creation</h3>
+            <h3>6.2. Workspace File Explorer & Folder Navigation</h3>
+            <p>
+                The left-hand Explorer Pane (<code>#explorer_pane</code>) renders an interactive tree view of your active working directory.
+            </p>
             <ul>
-                <li>Use the left-hand Explorer tree to browse files and folders in your project.</li>
-                <li>Press <kbd>Ctrl + N</kbd> to create a new file in the current folder.</li>
-                <li>Press <kbd>F7</kbd> to create a new subfolder in the current directory.</li>
+                <li><strong>Browsing & Opening Files:</strong> Use <kbd>UP</kbd> / <kbd>DOWN</kbd> arrow keys to highlight items. Press <kbd>Enter</kbd> to expand or collapse folders, or to open a selected file in a new document tab inside the central code editor.</li>
+                <li><strong>Navigating Up One Directory Level (<kbd>Backspace</kbd>):</strong> Press <kbd>Backspace</kbd> while focused on the Explorer tree to instantly navigate up one directory level in the filesystem hierarchy.</li>
+                <li><strong>Set Highlighted Folder as Visual Root (<kbd>Ctrl + B</kbd>):</strong> Highlight any subfolder in the tree and press <kbd>Ctrl + B</kbd> to set that folder as the new visual root of your File Explorer tree.</li>
+                <li><strong>Creating New Files (<kbd>Ctrl + N</kbd>):</strong> Press <kbd>Ctrl + N</kbd> to open the filename modal and create a new empty file in the active workspace directory.</li>
+                <li><strong>Creating New Folders (<kbd>F7</kbd>):</strong> Press <kbd>F7</kbd> to open the folder modal and create a new directory or nested subfolder tree in your workspace root.</li>
+                <li><strong>Changing Workspace Root Directory (<kbd>F8</kbd> / <code>/dir</code>):</strong> Press <kbd>F8</kbd> or type <code>/dir</code> to open the interactive directory selector modal (<code>DirectoryModal</code>) to navigate your drive and switch the application's root working directory.</li>
             </ul>
 
-            <h3>6.3. Find & Replace (<kbd>Ctrl + F</kbd>)</h3>
+            <h3>6.3. Tabbed Code Editor & Document Management</h3>
             <p>
-                Press <kbd>Ctrl + F</kbd> inside the code editor to open the Find & Replace modal. Search forward (<em>Next</em>) or backward (<em>Prev</em>), replace individual matches (<em>Replace</em>), or replace all occurrences (<em>All</em>). Uncheck the <em>Match Case</em> checkbox for case-insensitive searching.
+                The central Editor Pane (<code>#editor_pane</code>) provides multi-document tabbed editing with automatic language detection, line numbers, soft wrapping controls, and syntax highlighting across 18+ file extensions.
             </p>
 
-            <h3>6.4. Language Executables & Custom Flags (<kbd>F9</kbd>)</h3>
-            <p>
-                Press <kbd>F9</kbd> to configure executable binaries and parameters for 12+ supported programming languages (Python, Go, C, C++, Rust, Node.js, Julia, Fortran, Nim, Zig, Bash, PowerShell). You can use variables like <code>{file}</code> and <code>{file_no_ext}</code> in custom flag strings.
-            </p>
+            <h4>Tab Navigation & Closing Shortcuts</h4>
+            <ul>
+                <li><strong>Cycle Forward to Next Tab (<kbd>Ctrl + L</kbd>):</strong> Press <kbd>Ctrl + L</kbd> to switch focus sequentially to the next open editor tab.</li>
+                <li><strong>Cycle Backward to Previous Tab (<kbd>Ctrl + O</kbd>):</strong> Press <kbd>Ctrl + O</kbd> to switch focus to the previous open editor tab.</li>
+                <li><strong>Close Active Document Tab (<kbd>Ctrl + W</kbd>):</strong> Press <kbd>Ctrl + W</kbd> to close the currently focused editor tab. When all document tabs are closed, the editor and structure outline panes automatically hide, returning focus to the File Explorer tree.</li>
+            </ul>
 
-            <h3>6.5. Virtual Environment (Venv) Manager (<kbd>F10</kbd>)</h3>
+            <h4>Saving & File Clipboard Controls</h4>
+            <ul>
+                <li><strong>Save Active File (<kbd>Ctrl + S</kbd>):</strong> Press <kbd>Ctrl + S</kbd> to write changes in the current editor tab directly to disk.</li>
+                <li><strong>Save As (<kbd>Ctrl + Shift + S</kbd>):</strong> Press <kbd>Ctrl + Shift + S</kbd> to open the "Save As" modal, allowing you to save the document under a new filename or path.</li>
+                <li><strong>Copy Selected Text (<kbd>Ctrl + C</kbd>):</strong> Highlight text inside any open editor tab and press <kbd>Ctrl + C</kbd> to copy the selection directly to your native system clipboard (integrated via <code>pyperclip</code>).</li>
+            </ul>
+
+            <h3>6.4. Real-Time Code Structure Outline & Jump Navigation</h3>
             <p>
-                Press <kbd>F10</kbd> to open the Venv Manager. FEDERaiDE automatically scans your workspace directory for existing <code>.venv</code> or <code>venv/</code> folders. You can activate local project virtual environments, switch between global environments, or create a fresh environment on demand using <code>uv</code>.
+                The right-hand Structure Pane (<code>#outline_pane</code>) parses open code documents in real-time using high-speed Tree-Sitter language sidecars across 10+ supported programming languages (Python, Go, Rust, C, C++, TypeScript, JavaScript, PHP, Bash, CSS).
             </p>
+            <ul>
+                <li><strong>Symbol Classification & Icons:</strong> Displays structural declarations with visual category indicators:
+                    <ul>
+                        <li><code>Cl</code> — Classes, Structs, Interfaces, Modules, Types, and Namespaces.</li>
+                        <li><code>ƒ</code> — Functions, Methods, Closures, and Routines.</li>
+                    </ul>
+                </li>
+                <li><strong>One-Click & Keyboard Line Jumping:</strong> Select any symbol node in the Structure Tree and press <kbd>Enter</kbd> (or click with your mouse). FEDERaiDE instantly moves the code editor cursor directly to that symbol's starting line number, scrolls the line into view, and focuses the editor.</li>
+            </ul>
+
+            <h3>6.5. Find & Replace Modal (<kbd>Ctrl + F</kbd>)</h3>
+            <p>
+                Press <kbd>Ctrl + F</kbd> while editing any document tab to open the Find & Replace modal screen:
+            </p>
+            <ul>
+                <li><strong>Find Input:</strong> Type the search term or regex pattern to locate.</li>
+                <li><strong>Replace Input:</strong> Type the desired replacement string.</li>
+                <li><strong>Match Case Checkbox:</strong> Uncheck the <em>Match Case</em> checkbox for case-insensitive searching (defaults to case-insensitive).</li>
+                <li><strong>Search Navigation (<kbd>Next</kbd> / <kbd>Prev</kbd>):</strong> Click <strong>Next</strong> or <strong>Prev</strong> to navigate forward or backward through search matches. The editor automatically selects and scrolls each match into view.</li>
+                <li><strong>Replacing Matches (<kbd>Replace</kbd> / <kbd>All</kbd>):</strong> Click <strong>Replace</strong> to substitute the currently selected match, or click <strong>All</strong> to replace every occurrence across the entire file simultaneously with an instant status toast notification.</li>
+            </ul>
+
+            <h3>6.6. Program Execution & Live Executions Dashboard (<kbd>Ctrl + R</kbd> & <kbd>Ctrl + E</kbd>)</h3>
+
+            <h4>Running Code (<kbd>Ctrl + R</kbd>)</h4>
+            <p>
+                Press <kbd>Ctrl + R</kbd> in any open code editor tab. FEDERaiDE automatically performs a series of synchronized execution steps:
+            </p>
+            <ol>
+                <li>Auto-saves the active document tab to disk.</li>
+                <li>Determines the programming language based on file extension and looks up its execution flags and binary path.</li>
+                <li>Creates a new tab inside the <strong>Executions Dashboard</strong> labeled <code>&lt;filename&gt; #&lt;run_id&gt;</code>.</li>
+                <li>Launches the code inside an interactive pseudo-terminal (PTY) runner and automatically switches the active view to the Executions Dashboard.</li>
+            </ol>
+
+            <h4>Interactive PTY Terminal Emulation & Keyboard Passthrough</h4>
+            <p>
+                Every running script executes inside a dedicated <strong>Terminal Emulator</strong> with native PTY backend integration (<code>pty</code> on Linux/macOS or <code>pywinpty</code> on Windows):
+            </p>
+            <ul>
+                <li><strong>ANSI Control Code Processing:</strong> Renders carriage returns (<code>\r</code>), backspaces (<code>\b</code>), tab stops, and clear-line sequences natively.</li>
+                <li><strong>Live Interactive Input Passthrough:</strong> When an execution tab is focused, keystrokes are passed directly to the running process in real-time. You can answer interactive prompts (e.g. Python <code>input()</code> statements, CLI confirmations, or REPL shells) directly in the execution tab!</li>
+            </ul>
+
+            <h4>Execution Tab Navigation & Process Termination</h4>
+            <ul>
+                <li><strong>Cycling Execution Tabs (<kbd>Ctrl + L</kbd> / <kbd>Ctrl + O</kbd>):</strong> Press <kbd>Ctrl + L</kbd> or <kbd>Ctrl + O</kbd> while viewing the Executions Dashboard to switch focus between multiple concurrently running scripts.</li>
+                <li><strong>Terminate Active Process (<kbd>Ctrl + E</kbd>):</strong> Press <kbd>Ctrl + E</kbd> to send a termination signal (<code>SIGTERM</code> / process kill) to the script running in the active execution tab.</li>
+                <li><strong>Close Execution Tab (<kbd>Ctrl + W</kbd>):</strong> Press <kbd>Ctrl + W</kbd> to close the active execution tab (terminating the process if still active). When the last execution tab is closed, the dashboard automatically resets to its Idle state and returns focus to the Code Editor workspace.</li>
+            </ul>
+
+            <h3>6.7. Custom Language Executables & Flags Configuration (<kbd>F9</kbd>)</h3>
+            <p>
+                Press <kbd>F9</kbd> to open the Execution Settings modal (<code>SettingsModal</code>) to configure custom compiler or interpreter paths and execution flags for 13+ supported languages:
+            </p>
+            <ul>
+                <li><strong>Supported Presets:</strong> Python, Go, C, C++, Rust, Node.js, Julia, Fortran, Nim, Zig, Bash, Batch, and PowerShell.</li>
+                <li><strong>Executable Binary Path:</strong> Specify custom binary paths (e.g., <code>python3.13</code>, <code>g++-13</code>, <code>cargo</code>, or custom environment binaries).</li>
+                <li><strong>Flag String Variables:</strong> Customize execution parameter strings using dynamic template variables:
+                    <ul>
+                        <li><code>{file}</code> — Replaced with the full absolute path to the active code file.</li>
+                        <li><code>{file_no_ext}</code> — Replaced with the full path excluding file extension (essential for compiled binary targets like C, C++, Fortran, and Rust).</li>
+                    </ul>
+                </li>
+            </ul>
+
+            <h3>6.8. Virtual Environment (Venv) Manager (<kbd>F10</kbd>)</h3>
+            <p>
+                Press <kbd>F10</kbd> to open the Venv Manager dialog (<code>VenvManagerModal</code>) to manage isolated Python execution environments:
+            </p>
+            <ul>
+                <li><strong>Workspace Auto-Detection:</strong> Automatically scans your active project directory for local <code>.venv</code> or <code>venv/</code> folders and lists them for instant one-click activation.</li>
+                <li><strong>Global Venvs:</strong> Lists all global virtual environments maintained inside <code>~/.federate/</code>.</li>
+                <li><strong>Direct Path Activation:</strong> Enter any custom absolute path to an existing virtual environment on your system to activate it immediately.</li>
+                <li><strong>Custom Venv Creation:</strong> Create brand new virtual environments using <code>uv venv</code> by specifying a name, an optional target Python version (e.g. <code>3.11</code> or <code>3.13</code>), and a custom installation path.</li>
+            </ul>
         </section>
 
         <!-- SECTION 7 -->
@@ -819,33 +929,48 @@ pip install "federaide[all]"</code></pre>
 
             <h3>7.1. Passive Skills vs. Active Skills</h3>
             <ul>
-                <li><strong>Passive Skills (Playbooks):</strong> Markdown documents containing step-by-step instructions, guidelines, or rules for agents to follow when performing specific tasks.</li>
-                <li><strong>Active Skills (Executable Tools):</strong> Actual standalone programs (Python scripts, shell scripts, binaries) stored in your skills library that agents can run as custom tools on demand.</li>
+                <li><strong>Passive Skills (Playbooks):</strong> Markdown procedural documents containing step-by-step guidelines, rules, or checklists for agents to follow when performing specific tasks.</li>
+                <li><strong>Active Skills (Executable Tools):</strong> Standalone programs (Python scripts, shell scripts, C/Rust binaries, or compiled CLI utilities) stored in your agent's skills library that agents execute directly as custom tools on demand.</li>
             </ul>
 
             <h3>7.2. Creating Passive Playbooks</h3>
             <p>
-                Agents can automatically save playbooks when they complete complex workflows using the <code>distill_journey</code> tool. You can also ask an agent to save a playbook manually, or read existing playbooks using the <code>read_skill</code> tool.
+                Agents automatically save playbooks when they complete complex workflows using the <code>distill_journey</code> tool. You can also ask an agent to save a playbook manually, read existing playbooks using <code>read_skill</code>, or delete old playbooks using <code>delete_passive_skill</code>.
             </p>
 
-            <h3>7.3. Creating Active Executable Skills</h3>
-            <p>FEDERaiDE allows agents to write, test, and register their own active executable tools in a 2-stage process:</p>
+            <h3>7.3. How Active Skills Are Authored &amp; Installed</h3>
+            <p>
+                Active skills do not have to be written exclusively by AI agents. FEDERaiDE strongly encourages users to <strong>write custom programs themselves</strong> or <strong>download and audit useful CLI scripts and utilities from GitHub or community repositories</strong>!
+            </p>
+            <p>
+                Active skills can originate from three sources:
+            </p>
+            <ul>
+                <li><strong>User-Authored Programs:</strong> You write custom Python scripts, shell tools, or C/Rust/Go binaries in your workspace.</li>
+                <li><strong>Audited Open-Source Utilities:</strong> You (or your agent) fetch and audit open-source CLI scripts, libraries, or tools from GitHub or external repositories.</li>
+                <li><strong>Agent-Authored Code:</strong> Your AI agent writes new script logic autonomously to automate repeated or complex workflows.</li>
+            </ul>
+            <p>
+                <strong>The Unified Agent Installation Pipeline:</strong> Regardless of who wrote or downloaded the code, you do not need to manually format JSON schemas or configure internal skill folders. Simply point your agent to the script files in your workspace and pass any accompanying instructions or documentation. The agent then runs <code>prepare_active_skill</code> (to set up an isolated virtual environment, build dependencies, and execute a live validation test) followed by <code>finalize_active_skill</code> (to automatically generate the tool schema, create the usage manual playbook, initialize Git version control, and register the tool into its permanent library).
+            </p>
+
+            <h3>7.4. Staging &amp; Registering Active Skills</h3>
+            <p>FEDERaiDE manages active skill installation in a 2-stage automated pipeline:</p>
             <ol>
                 <li>
-                    <strong>Write Logic:</strong> The agent creates the script files in your workspace (e.g., a Python script that resizes images or queries a custom API).
+                    <strong>Stage &amp; Test (<code>prepare_active_skill</code>):</strong> Takes the script files, entry point, sample test inputs, PyPI dependencies, custom build commands (<code>pre_install_commands</code>), and optional argument order (<code>arg_order</code>). It creates a dedicated virtual environment in an isolated staging folder, builds and installs all dependencies, and runs a live validation test.
                 </li>
                 <li>
-                    <strong>Stage &amp; Test (<code>prepare_active_skill</code>):</strong> The agent stages the tool in an isolated environment, automatically creates a dedicated virtual environment, installs any required PyPI or custom dependencies, and runs a test validation execution with test inputs.
-                </li>
-                <li>
-                    <strong>Finalize &amp; Register (<code>finalize_active_skill</code>):</strong> Once the test run succeeds, the agent provides a tool description and usage manual. FEDERaiDE registers the tool into the agent's permanent capabilities library.
+                    <strong>Finalize &amp; Register (<code>finalize_active_skill</code>):</strong> Once the validation test succeeds, the agent provides a tool description and usage guide. FEDERaiDE automatically generates the <code>schema.json</code> and <code>metadata.json</code>, moves the tool to the live skills library, creates an automatic usage manual playbook, and initializes Git version control.
                 </li>
             </ol>
 
-            <h4>Headless Execution Rule for Active Skills</h4>
-            <p>
-                Active skills run as background subprocesses without a GUI display. Plotting scripts (e.g. using <code>matplotlib</code>) must set a non-interactive backend (such as <code>import matplotlib; matplotlib.use('Agg')</code> BEFORE importing <code>pyplot</code>) and save plots to a file or output Base64 image tags to STDOUT. Never call interactive window functions like <code>plt.show()</code>, as they will cause execution to freeze.
-            </p>
+            <div class="callout callout-warning">
+                <h5>Hard Guardrail in Finalization</h5>
+                <p>
+                    <code>finalize_active_skill</code> enforces a strict guardrail: if a tool failed its validation test during <code>prepare_active_skill</code>, registration is blocked. The agent must fix the logic and re-run <code>prepare_active_skill</code> until it passes before registration is allowed.
+                </p>
+            </div>
 
             <h4>Positional vs. Keyword Argument Modes</h4>
             <ul>
@@ -853,15 +978,55 @@ pip install "federaide[all]"</code></pre>
                 <li><strong>Keyword Mode (Default):</strong> Omit <code>arg_order</code> if your script accepts command-line flags (e.g. <code>--param1 value</code>).</li>
             </ul>
 
-            <h4>Skill Version Control & Maintenance</h4>
+            <h3>7.5. Multimodal Active Skills: Returning Images Directly to Agents</h3>
             <p>
-                Every finalized skill folder is initialized as an independent Git repository. Use the <code>fix_active_skill</code> tool to inspect files, edit logic, or install additional pip packages into the skill's virtual environment. Changes are automatically committed with timestamped git logs. Use <code>manage_active_skill</code> to rename or delete skills.
+                One of FEDERaiDE's most powerful capabilities is that <strong>Active Skills can be fully multimodal</strong>. An active skill does not just return plain text—it can generate and return rich visual data (plots, charts, diagrams, processed images, CAD renders, or desktop screenshots) directly back into the agent's vision context!
             </p>
 
-            <div class="callout callout-info">
-                <h5>Activating New Tools</h5>
-                <p>Newly finalized active skills become available in the active session after resetting the session context (by cycling safety modes with <kbd>Ctrl + T</kbd> or pressing <kbd>Ctrl + K</kbd>).</p>
+            <div class="callout callout-tip">
+                <h5>How Active Skills Return Images to Vision Models</h5>
+                <p>An active skill script can return visual outputs using two seamless methods:</p>
+                <ul>
+                    <li>
+                        <strong>Method 1: Outputting Base64 Image Tags to STDOUT (Recommended):</strong><br>
+                        Have your script/program print a Base64-encoded image data string to STDOUT:<br>
+                        <code>[ImageBase64: data:image/png;base64,&lt;base64_encoded_png_data&gt;]</code><br>
+                        FEDERaiDE automatically intercepts this tag, truncates the giant Base64 text string in the chat log to save context tokens, and injects a native <code>image_url</code> vision payload directly into the conversation history. Vision-capable models (Gemini 2.5/3.1, Claude 3.5 Sonnet, GPT-4o) can immediately inspect, analyze, and critique the rendered graphic visually!
+                    </li>
+                    <li>
+                        <strong>Method 2: Saving Images to Disk &amp; Returning File Tags:</strong><br>
+                        Have your script save a PNG, JPG, or WebP file to disk and output or return the tag:<br>
+                        <code>[Attached Image: /absolute/path/to/rendered_chart.png]</code><br>
+                        FEDERaiDE reads the local image file and converts it into a visual payload for the agent to inspect.
+                    </li>
+                </ul>
             </div>
+
+            <h4>Headless Execution Rule for Active Skills</h4>
+            <p>
+                Active skills run as background subprocesses without an interactive GUI display window. Plotting scripts (e.g. using <code>matplotlib</code>) <strong>must set a non-interactive backend</strong> BEFORE importing <code>pyplot</code>:
+            </p>
+            <pre><code>import matplotlib
+matplotlib.use('Agg')  # REQUIRED: Set non-interactive backend FIRST
+import matplotlib.pyplot as plt
+
+# Generate plot and save or output Base64
+plt.figure()
+plt.plot([1, 2, 3], [4, 5, 6])
+plt.savefig('/path/to/plot.png')
+# Never call plt.show() as it will freeze the background execution thread!</code></pre>
+
+            <h3>7.6. Skill Version Control &amp; Maintenance</h3>
+            <p>
+                Every finalized skill folder is initialized as an independent Git repository. Use the <code>fix_active_skill</code> tool to maintain your tools:
+            </p>
+            <ul>
+                <li><strong>File Inspection &amp; Reading:</strong> Action <code>list</code> enumerates files in the skill folder; action <code>read</code> prints code with line numbers.</li>
+                <li><strong>Line-Range Editing:</strong> Action <code>edit</code> replaces lines from <code>start_line</code> to <code>end_line</code> and returns a 20-line surrounding snippet for visual verification.</li>
+                <li><strong>Dependency Updates:</strong> Action <code>install</code> installs new PyPI packages directly into the skill's virtual environment.</li>
+                <li><strong>Automatic Git Commits:</strong> Every edit or dependency update is automatically committed with timestamped git logs.</li>
+                <li><strong>Management &amp; Deletion:</strong> Use <code>manage_active_skill</code> to rename or delete active tools, and <code>delete_passive_skill</code> to delete playbook manuals.</li>
+            </ul>
         </section>
 
         <!-- SECTION 8 -->
@@ -914,9 +1079,11 @@ pip install "federaide[all]"</code></pre>
             </div>
 
             <h3>8.5. Global Settings & PDF Styling Customization (<kbd>F3</kbd> / `/settings`)</h3>
-            <p>Press <kbd>F3</kbd> or type <code>/settings</code> to customize research limits and PDF styling:</p>
+            <p>Press <kbd>F3</kbd> or type <code>/settings</code> to customize global harness parameters:</p>
             <ul>
+                <li><strong>Tool Result Availability:</strong> Choose between <code>Private</code> (default: tool outputs in multi-agent discussions are hidden behind <code>[Tool Output Hidden - Result ID: X]</code> stubs to save context tokens; agents fetch them via <code>get_toolresult(ids=[X])</code>) or <code>Public</code> (broadcasts full outputs immediately).</li>
                 <li><strong>Search Pacing Delay:</strong> Set global search pacing delay (default: 65 seconds with random jitter) to prevent DuckDuckGo rate-limiting.</li>
+                <li><strong>Auto-Update on Launch:</strong> Automatically query PyPI for new releases when starting FEDERaiDE.</li>
                 <li><strong>Research Limits:</strong> Configure maximum parallel sub-agents (1–10), target context token limit (default: 28,000 tokens), and minimum report token length.</li>
                 <li><strong>PDF Customization:</strong> Adjust rendering DPI (or use <code>/dpi &lt;number&gt;</code>), change footer text, and select custom body, heading, or code font families and sizes.</li>
             </ul>
@@ -966,6 +1133,7 @@ pip install "federaide[all]"</code></pre>
             <ol>
                 <li>Type <code>/telegram</code> to open the Telegram Bot Configuration modal.</li>
                 <li>Check <em>Enable Telegram Bot</em>.</li>
+                <li>Configure file permissions: check <em>Allow File Reception</em> (Telegram ➔ Workspace) and/or <em>Allow Sending Files</em> (Workspace ➔ Telegram).</li>
                 <li>Enter your Bot Token obtained from <code>@BotFather</code> on Telegram.</li>
                 <li>Enter your Telegram username or ID in <em>Allowed Users</em>.</li>
                 <li>Click <em>Save &amp; Connect</em>.</li>
@@ -983,10 +1151,14 @@ pip install "federaide[all]"</code></pre>
                 </ul>
             </div>
 
-            <h3>10.2. Messaging Your AI Team From Your Phone</h3>
+            <h3>10.2. Messaging Your AI Team & Sending Files</h3>
             <p>
-                Once connected, you can message your bot on Telegram while away from your computer. You can use standard prompts, mentions (e.g., <code>@Rita</code>), and commands. Your agents will process the request on your computer and text the response back to your phone.
+                Once connected, you can message your bot on Telegram while away from your computer. You can use standard prompts, mentions (e.g., <code>@Rita</code>), and team broadcasts. 
             </p>
+            <ul>
+                <li><strong>Sending Files to Computer:</strong> When <em>Allow File Reception</em> is checked, you can send documents, code files, or photos directly to your Telegram bot. FEDERaiDE automatically downloads them into your workspace (applying an extension whitelist) and formats them into context as text attachments or visual payloads.</li>
+                <li><strong>Requesting Files from Computer:</strong> When <em>Allow Sending Files</em> is checked, agents can use the <code>send_file_to_telegram</code> tool to deliver workspace files, code scripts, datasets, or images directly to your phone.</li>
+            </ul>
 
             <h3>10.3. Mobile Voice Notes & Automatic PDF Deliveries</h3>
             <p>
@@ -1014,7 +1186,7 @@ pip install "federaide[all]"</code></pre>
 
             <h3>11.3. Task Due Alert & Offline Catch-Up Logic</h3>
             <p>
-                When a task becomes due, FEDERaiDE presents a 60-second countdown alert modal offering three choices: <strong>Run Now</strong>, <strong>Defer 15 Min</strong>, or <strong>Skip</strong>. If no action is taken before the countdown expires, the task executes automatically.
+                When a task becomes due, FEDERaiDE presents a 60-second countdown alert modal offering three choices: <strong>Run Now</strong>, <strong>Defer 15 Min</strong>, or <strong>Skip</strong>. If no action is taken before the countdown expires, the task executes automatically. Click <strong>Edit</strong> next to any saved task in the Scheduled Tasks modal to reload its parameters for modification.
             </p>
             <p>
                 If your computer or phone was off or asleep when a task was scheduled to run, FEDERaiDE detects the missed run and prompts you to execute or defer it upon the next application launch.
@@ -1049,6 +1221,12 @@ pip install "federaide[all]"</code></pre>
             <ul>
                 <li><strong>Verbatim Message Retention:</strong> You can configure how many recent messages remain untouched at the end of the history via <strong>Verbatim Messages to Keep</strong> in Global Settings (<kbd>F3</kbd> / `/settings`, default: 2).</li>
                 <li><strong>Multimodal Preservation:</strong> Generated or attached images in the compressed history are automatically saved as persistent file references, ensuring visual context survives compression.</li>
+            </ul>
+
+            <h3>12.4. Memory Consolidation (`/consolidate`) &amp; Backstory Sync (`/backstory`)</h3>
+            <ul>
+                <li><strong>Manual Memory Consolidation (<code>/consolidate</code>):</strong> Instructs the active agent to review its <code>MEMORY.json</code> store, combine related memorylets, prune obsolete entries, resolve contradictions (retaining newer data), and split clumped memorylets into individual atomic facts.</li>
+                <li><strong>Backstory Synchronization (<code>/backstory</code>):</strong> Forces an immediate translation and update of all agent backstories across your team into 3rd-person format for multi-agent intercom routing.</li>
             </ul>
         </section>
 
@@ -1085,6 +1263,8 @@ pip install "federaide[all]"</code></pre>
                     <tr><td><code>/schedule</code></td><td>Opens the Scheduled Task Routines manager.</td></tr>
                     <tr><td><code>/dpi &lt;number&gt;</code></td><td>Sets the image DPI resolution for generated research PDF documents.</td></tr>
                     <tr><td><code>/settings</code></td><td>Opens global harness settings (search pacing, retries, research token limits).</td></tr>
+                    <tr><td><code>/backstory</code></td><td>Forces an immediate 3rd-person translation and update of all agent backstories.</td></tr>
+                    <tr><td><code>/consolidate</code></td><td>Consolidates, unifies, and prunes core memorylets in <code>MEMORY.json</code>.</td></tr>
                     <tr><td><code>/update</code></td><td>Checks PyPI for software updates and displays release notes.</td></tr>
                     <tr><td><code>/version</code></td><td>Displays the currently installed version of FEDERaiDE.</td></tr>
                 </tbody>
@@ -1092,10 +1272,91 @@ pip install "federaide[all]"</code></pre>
         </section>
 
         <!-- SECTION 14 -->
-        <section id="troubleshooting">
-            <h2>14. Troubleshooting & Frequently Asked Questions</h2>
+        <section id="cli-reference">
+            <h2>14. Command-Line (CLI) Reference</h2>
 
-            <h3>14.1. Common Issues & Solutions</h3>
+            <h3>14.1. Executable Launch Commands</h3>
+            <p>FEDERaiDE provides two distinct executable launch entry points depending on your desired interface layout:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Description &amp; Interface Layout</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>federaide</code></td>
+                        <td>Launches the <strong>Full TUI Workspace</strong>. Includes Multi-Agent Chat, Tabbed Code Editor, Live Executions Dashboard, Workspace File Explorer, and Real-time Structure Outline.</td>
+                    </tr>
+                    <tr>
+                        <td><code>federate</code></td>
+                        <td>Launches the streamlined <strong>Chat-Only View</strong>. Focused purely on multi-agent conversation, voice dictation/TTS, and background tool execution without code editor panels.</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>14.2. Command-Line Arguments & Flags</h3>
+            <p>Both <code>federaide</code> and <code>federate</code> accept optional command-line flags and positional arguments:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Argument / Flag</th>
+                        <th>Description &amp; Example Usage</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>[path]</code></td>
+                        <td>
+                            <strong>Positional Path Argument:</strong> Specify a starting file or directory path.<br>
+                            <code>federaide ./my_project</code> — Boots FEDERaiDE with <code>./my_project</code> set as the active workspace root.<br>
+                            <code>federaide src/app.py</code> — Opens <code>src/app.py</code> directly in an editor tab and sets <code>src/</code> as workspace root.
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>-r</code> / <code>--resume</code></td>
+                        <td>
+                            <strong>Resume Session:</strong> Resumes the most recent chat session (1 step ago).<br>
+                            <code>federaide -r</code> or <code>federate --resume</code>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>-r=&lt;n&gt;</code> / <code>--resume=&lt;n&gt;</code></td>
+                        <td>
+                            <strong>Resume Session Offset:</strong> Resumes the historical session modified <code>n</code> steps ago.<br>
+                            <code>federaide -r 2</code> — Resumes the 2nd most recent chat session.<br>
+                            <code>federaide -r=3</code> — Resumes the 3rd most recent chat session.
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><code>-record</code> / <code>-rec</code></td>
+                        <td>
+                            <strong>Session Recording (asciinema):</strong> Records your terminal TUI session to an <code>asciinema</code> <code>.cast</code> file (e.g., <code>footage.cast</code>) in the active workspace directory.<br>
+                            <code>federaide -record</code>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+
+            
+        </section>
+
+        <!-- SECTION 15 -->
+        <section id="troubleshooting">
+            <h2>15. Troubleshooting & Frequently Asked Questions</h2>
+
+            <h3>15.1. Common Issues & Solutions</h3>
+
+            <h4>Q: How do I use my ChatGPT Plus/Pro subscription instead of pay-per-token API keys?</h4>
+            <p>
+                <strong>Solution:</strong> In the Onboarding Wizard or Agent Editor (<kbd>F4</kbd>), set the Base URL Preset to <em>ChatGPT Subscription (OAuth)</em> and click <strong>Authenticate with OAuth</strong>. Complete the browser sign-in prompt to authorize your account. FEDERaiDE will securely store your OAuth tokens in your OS keyring and refresh them automatically.
+            </p>
+
+            <h4>Q: Why are tool results showing as "[Tool Output Hidden - Result ID: X]" in multi-agent chat?</h4>
+            <p>
+                <strong>Solution:</strong> FEDERaiDE defaults to <code>Private</code> tool result availability to conserve context tokens during multi-agent discussions. Agents can retrieve hidden outputs on demand using <code>get_toolresult(ids=[X])</code>. To broadcast full tool outputs immediately to all agents, open Global Settings (<kbd>F3</kbd>) and change <strong>Tool Result Availability</strong> to <em>Public</em>.
+            </p>
 
             <h4>Q: My agent says "Tool is unauthorized" when trying to run a script.</h4>
             <p>
@@ -1122,7 +1383,7 @@ pip install "federaide[all]"</code></pre>
                 <strong>Solution:</strong> Launch the application using the <code>federate</code> command instead of <code>federaide</code>.
             </p>
 
-            <h3>14.2. Software Updates (`/update`)</h3>
+            <h3>15.2. Software Updates (`/update`)</h3>
             <p>
                 Type <code>/update</code> or <code>/version</code> to check for new releases. FEDERaiDE queries PyPI and displays cumulative release notes for new versions. Click <strong>Update Now</strong> to launch the automated updater script, exit the app, update dependencies, and restart FEDERaiDE automatically. You can also select <em>Skip Version</em> or <em>Remind Later</em>.
             </p>
