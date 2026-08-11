@@ -85,7 +85,7 @@ DEFAULT_GLOBAL_SETTINGS = {
     "keep_verbatim_count": 2,
     "research_image_system_enabled": False,
     "research_images_max": 10,
-    "research_image_retries": 1,
+    "research_image_retries": 3,
     "research_images_as_links": False,
     "autoupdate_on_launch": False,
     "tool_result_visibility": "private",
