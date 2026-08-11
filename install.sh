@@ -249,7 +249,7 @@ EOF
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to installation using local dummy wheels..."
-            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]" || uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" federaide
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[ide]" || uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" federaide
         fi
 
     else
