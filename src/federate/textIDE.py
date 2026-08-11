@@ -465,9 +465,9 @@ class FEDERaiDE(App):
     CSS = """
     #main_switcher { height: 1fr; width: 100%; }
     #code_view { height: 100%; width: 100%; }
-    #explorer_pane { width: 22%; height: 100%; }
-    #editor_pane { width: 56%; height: 100%; }
-    #outline_pane { width: 22%; height: 100%; }
+    #explorer_pane { width: 22fr; height: 100%; }
+    #editor_pane { width: 56fr; height: 100%; display: none; }
+    #outline_pane { width: 22fr; height: 100%; display: none; }
 
     #dir_tree, #editor_tabs TextArea, #outline_tree {
         border: round transparent;
@@ -717,6 +717,8 @@ class FEDERaiDE(App):
             del self.open_files[path_to_remove]
             tabs.remove_pane(tabs.active)
             if not self.open_files:
+                self.query_one("#editor_pane").styles.display = "none"
+                self.query_one("#outline_pane").styles.display = "none"
                 self.query_one("#outline_tree").clear()
                 self.query_one("#outline_tree").root.set_label("Outline")
                 self.query_one("#dir_tree").focus()
@@ -910,6 +912,7 @@ class FEDERaiDE(App):
 
     def open_file(self, path: Path):
         str_path = str(path.absolute())
+        self.query_one("#editor_pane").styles.display = "block"
         tabs = self.query_one("#editor_tabs", TabbedContent)
         
         if str_path in self.open_files:
@@ -1066,6 +1069,9 @@ class FEDERaiDE(App):
 
     def _render_outline(self, root_label: str, virtual_nodes: list):
         """Runs on the main thread to instantly update the UI without calculations."""
+        has_nodes = bool(virtual_nodes) and bool(self.open_files)
+        self.query_one("#outline_pane").styles.display = "block" if has_nodes else "none"
+        self.query_one("#editor_pane").styles.display = "block" if self.open_files else "none"
         tree = self.query_one("#outline_tree", Tree)
         tree.clear()
         from rich.markup import escape
