@@ -324,24 +324,84 @@ else:
 
 install_federaide
 
-# 10. Ensure ~/.local/bin is permanently added to user's shell configuration
-for rc_file in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile"; do
-    if [ -f "$rc_file" ]; then
-        if ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
-            echo '' >> "$rc_file"
-            echo '# FEDERaiDE binary path' >> "$rc_file"
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
+# 10. Multi-Tier PATH Persistence & Universal Executable Symlinking
+setup_path_and_symlinks() {
+    echo "[*] Setting up universal PATH configurations and executable symlinks..."
+
+    # A. System-wide /etc/profile.d integration
+    if [ "$(id -u)" -eq 0 ] || command -v sudo >/dev/null 2>&1 || command -v doas >/dev/null 2>&1; then
+        run_root mkdir -p /etc/profile.d 2>/dev/null || true
+        
+        TMP_PROFILE="${TMPDIR:-/tmp}/federaide_profile.sh"
+        cat << 'EOF' > "$TMP_PROFILE"
+# FEDERaiDE System-wide PATH configuration
+case ":$PATH:" in
+    *:"$HOME/.local/bin":*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+EOF
+        run_root cp "$TMP_PROFILE" /etc/profile.d/federaide.sh 2>/dev/null || true
+        run_root chmod 644 /etc/profile.d/federaide.sh 2>/dev/null || true
+        rm -f "$TMP_PROFILE"
+    fi
+
+    # B. User-level shell configuration files
+    for rc_file in \
+        "$HOME/.profile" \
+        "$HOME/.bashrc" \
+        "$HOME/.zshrc" \
+        "$HOME/.bash_profile" \
+        "$HOME/.ashrc" \
+        "$HOME/.shellrc"
+    do
+        if [ -f "$rc_file" ] || [ "${rc_file##*/}" = ".profile" ] || [ "${rc_file##*/}" = ".bashrc" ]; then
+            touch "$rc_file" 2>/dev/null || true
+            if ! grep -q '\.local/bin' "$rc_file" 2>/dev/null; then
+                echo '' >> "$rc_file"
+                echo '# FEDERaiDE binary path' >> "$rc_file"
+                echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$rc_file"
+            fi
+        fi
+    done
+
+    # Fish shell configuration
+    if [ -d "$HOME/.config/fish" ]; then
+        fish_config="$HOME/.config/fish/config.fish"
+        touch "$fish_config" 2>/dev/null || true
+        if ! grep -q '\.local/bin' "$fish_config" 2>/dev/null; then
+            echo '' >> "$fish_config"
+            echo '# FEDERaiDE binary path' >> "$fish_config"
+            echo 'fish_add_path "$HOME/.local/bin"' >> "$fish_config"
         fi
     fi
-done
+
+    # C. System-wide symlinks to /usr/local/bin or /usr/bin (Guarantees immediate execution on ALL distros)
+    for bin_name in "federaide" "federate"; do
+        TARGET_BIN=""
+        if [ -x "$HOME/.local/bin/$bin_name" ]; then
+            TARGET_BIN="$HOME/.local/bin/$bin_name"
+        elif [ -x "$HOME/.cargo/bin/$bin_name" ]; then
+            TARGET_BIN="$HOME/.cargo/bin/$bin_name"
+        else
+            TARGET_BIN="$(find "$HOME/.local" "$HOME/.uv" -name "$bin_name" -type f 2>/dev/null | head -n 1)"
+        fi
+
+        if [ -n "$TARGET_BIN" ] && [ -x "$TARGET_BIN" ]; then
+            echo "    [+] Creating universal symlink for $bin_name ($TARGET_BIN)..."
+            if [ -d "/usr/local/bin" ]; then
+                run_root ln -sf "$TARGET_BIN" "/usr/local/bin/$bin_name" 2>/dev/null || true
+            elif [ -d "/usr/bin" ]; then
+                run_root ln -sf "$TARGET_BIN" "/usr/bin/$bin_name" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+setup_path_and_symlinks
 
 echo "======================================================================"
 echo " 🎉 FEDERaiDE POSIX installation complete!"
 echo "======================================================================"
-echo " To ensure both 'uv' and 'federaide' are on your active shell PATH,"
-echo " please restart your terminal or run:"
-echo "     source ~/.profile  (or ~/.bashrc / ~/.zshrc)"
-echo ""
 echo " To launch the application:"
 echo "     federaide"
 echo "======================================================================"
