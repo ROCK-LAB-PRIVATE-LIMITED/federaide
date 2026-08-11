@@ -184,7 +184,7 @@ ensure_uv() {
 
 ensure_uv
 
-# 8. Dummy sqlite-vec Wheel Generator (Bypasses compilation crashes on musl/Alpine/Termux)
+# 8. Dummy sqlite-vec Wheel Generator (Bypasses C compilation crashes on musl/Alpine/Termux)
 build_dummy_sqlite_vec() {
     tyres_target_dir="$1"
     echo "    [*] Building dummy sqlite-vec wheel to bypass C-extension compilation on musl/mobile..."
@@ -228,6 +228,14 @@ install_federaide() {
         build_dummy_sqlite_vec "$TYRES_DIR"
     fi
 
+    # Determine extras based on musl libc compatibility (onnxruntime does not support musl)
+    if is_musl; then
+        echo "[*] musl-based C library detected (e.g. Alpine). Targeting federaide[ide,vision,pdf] (omitting audio/onnxruntime)..."
+        TARGET_EXTRAS="federaide[ide,vision,pdf]"
+    else
+        TARGET_EXTRAS="federaide[all]"
+    fi
+
     if [ "$IS_TERMUX" = true ]; then
         echo "[*] Configuring Termux installation..."
         unset UV_FIND_LINKS
@@ -260,11 +268,11 @@ install_federaide() {
         done
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
-            echo "[*] Installing FEDERaiDE [all] on Python 3.13 using cached wheels..."
-            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+            echo "[*] Installing $TARGET_EXTRAS on Python 3.13 using cached wheels..."
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "$TARGET_EXTRAS"
         else
             echo "[*] Installing FEDERaiDE on Python 3.13..."
-            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]" || \
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "$TARGET_EXTRAS" || \
             uv tool install --force --refresh --python 3.13 federaide
         fi
 
@@ -299,15 +307,15 @@ else:
     print('')
 " 2>/dev/null || echo "")
 
-        echo "[*] Installing FEDERaiDE with all features on standardized Python 3.13 environment..."
+        echo "[*] Installing $TARGET_EXTRAS on standardized Python 3.13 environment..."
         if [ -n "$LATEST_VER" ]; then
             echo "[*] Target version resolved: v$LATEST_VER"
-            if ! uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]==$LATEST_VER"; then
+            if ! uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "${TARGET_EXTRAS}==$LATEST_VER"; then
                 echo "[!] Explicit version install failed. Falling back to standard resolution..."
-                uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+                uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "$TARGET_EXTRAS"
             fi
         else
-            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "$TARGET_EXTRAS"
         fi
     fi
 
