@@ -2595,7 +2595,12 @@ class AIAgentView(Vertical):
         self.schedule_manager = ScheduleManager()
         self.current_batch_id = 0
         
-        # STARTUP: Handle Termux/EncryptedKeyring blocking BEFORE selecting agents/checking OAuth
+        # STARTUP: Select default agent upfront so self.active_agent exists immediately
+        default_name = self.agent_manager.get_default_agent_name()
+        initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+        self.select_agent(initial_agent.name)
+
+        # Handle Termux/EncryptedKeyring blocking
         from toolbox import is_keyring_locked, unlock_keyring
         if is_keyring_locked():
             def handle_initial_unlock(result):
@@ -2604,9 +2609,6 @@ class AIAgentView(Vertical):
                     if action == "unlock" and password:
                         if unlock_keyring(password):
                             self.notify("Keyring unlocked.", severity="information")
-                            default_name = self.agent_manager.get_default_agent_name()
-                            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
-                            self.select_agent(initial_agent.name)
                             self.update_status_bar()
                             # Reload Telegram config now that keyring is unlocked
                             if hasattr(self, "telegram_manager"):
@@ -2630,9 +2632,6 @@ class AIAgentView(Vertical):
                                     b.__dict__['keyring_key'] = password
                             
                             self.notify("Keyring initialized successfully. New password established.", severity="warning")
-                            default_name = self.agent_manager.get_default_agent_name()
-                            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
-                            self.select_agent(initial_agent.name)
                             self.update_status_bar()
                             self.check_onboarding()
                         except Exception as e:
@@ -2640,9 +2639,6 @@ class AIAgentView(Vertical):
             
             self.app.push_screen(KeyringUnlockModal(), handle_initial_unlock)
         else:
-            default_name = self.agent_manager.get_default_agent_name()
-            initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
-            self.select_agent(initial_agent.name)
             self.check_onboarding()
 
         
@@ -2826,8 +2822,9 @@ class AIAgentView(Vertical):
         if 0 <= idx < len(sorted_sessions):
             target_files = sorted_sessions[idx][1]
             target_file = target_files[0]
+            active = getattr(self, "active_agent", None)
             for f in target_files:
-                if self.active_agent and self.active_agent.name.lower() in os.path.basename(f).lower():
+                if active and active.name.lower() in os.path.basename(f).lower():
                     target_file = f
                     break
             self.load_chat_file(target_file)
