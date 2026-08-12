@@ -143,6 +143,7 @@ To protect your workspace, the system boots in **SAFE** mode. You can use /tools
   * Image generation (much requested feature)
   * Email integration (check inbox/read email/write email)
   * Integrated Secrets Management for Active Skills
+  * Seperate package for nightlies
   
 ## Why We Built FEDERaiDE
 
