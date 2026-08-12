@@ -139,6 +139,11 @@ To protect your workspace, the system boots in **SAFE** mode. You can use /tools
 ### Disclaimer
 * All AI systems inherently navigate a trade-off between capability and safety; **FEDERaiDE leans heavily toward the capability aspect.** For safe and secure coding with AI assistance, please consider using [***KittySuite IDE***](https://www.rocklab.in/kittysuite), where the AI does not have the capability to execute code, run commands, or read files you don't explicitly share.
 
+## Roadmap/Upcoming festures:
+  * Image generation (much requested feature)
+  * Email integration (check inbox/read email/write email)
+  * Integrated Secrets Management for Active Tools
+  
 ## Why We Built FEDERaiDE
 
 In many regions of the developing world, owning a desktop computer is often a luxury, a lot more people have access to smartphones. FEDERaiDE is written to bring the joy of programming to as many people as possible, by being as device agnostic as possible. It is designed to run natively and comfortably inside **Termux on Android**, transforming a spare smartphone into a fully capable engineering workstation.
