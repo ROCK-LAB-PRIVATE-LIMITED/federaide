@@ -615,6 +615,12 @@ pip install "federaide[all]"</code></pre>
             </div>
 
             <h3>3.2. Essential Keyboard Shortcuts & Hotkeys</h3>
+            <div class="callout callout-tip">
+                <h5>No Need to Memorize Shortcuts!</h5>
+                <p>
+                    You do not need to memorize these hotkeys—all primary shortcuts are conveniently displayed on the interactive <strong>footer ribbon</strong> at the bottom of the screen. You can simply click any key on the ribbon with your mouse to execute it. If the entire ribbon isn't visible on smaller screens, simply hover your cursor over the ribbon and scroll (vertical scroll) to reveal the rest of the buttons.
+                </p>
+            </div>
             <table>
                 <thead>
                     <tr>
@@ -1001,20 +1007,6 @@ pip install "federaide[all]"</code></pre>
                     </li>
                 </ul>
             </div>
-
-            <h4>Headless Execution Rule for Active Skills</h4>
-            <p>
-                Active skills run as background subprocesses without an interactive GUI display window. Plotting scripts (e.g. using <code>matplotlib</code>) <strong>must set a non-interactive backend</strong> BEFORE importing <code>pyplot</code>:
-            </p>
-            <pre><code>import matplotlib
-matplotlib.use('Agg')  # REQUIRED: Set non-interactive backend FIRST
-import matplotlib.pyplot as plt
-
-# Generate plot and save or output Base64
-plt.figure()
-plt.plot([1, 2, 3], [4, 5, 6])
-plt.savefig('/path/to/plot.png')
-# Never call plt.show() as it will freeze the background execution thread!</code></pre>
 
             <h3>7.6. Skill Version Control &amp; Maintenance</h3>
             <p>
