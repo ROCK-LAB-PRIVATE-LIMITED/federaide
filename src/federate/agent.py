@@ -2614,6 +2614,7 @@ class AIAgentView(Vertical):
                             if hasattr(self, "telegram_manager"):
                                 self.telegram_manager.reload_config()
                             self.check_onboarding()
+                            self.check_chatgpt_oauth_status()
                         else:
                             self.notify("Unlock failed. Stored keys may be unavailable.", severity="error")
                             self.check_onboarding()
@@ -2634,6 +2635,7 @@ class AIAgentView(Vertical):
                             self.notify("Keyring initialized successfully. New password established.", severity="warning")
                             self.update_status_bar()
                             self.check_onboarding()
+                            self.check_chatgpt_oauth_status()
                         except Exception as e:
                             self.notify(f"Reset failed: {e}", severity="error")
             
@@ -2685,6 +2687,9 @@ class AIAgentView(Vertical):
 
     def check_chatgpt_oauth_status(self, agent=None):
         if getattr(self, "_chatgpt_auth_modal_open", False):
+            return
+        from toolbox import is_keyring_locked
+        if is_keyring_locked():
             return
         target_agent = agent or getattr(self, "active_agent", None)
         if target_agent and is_chatgpt_oauth_agent(target_agent) and not has_valid_chatgpt_token():
