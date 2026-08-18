@@ -178,7 +178,7 @@ from langchain_core.runnables import RunnableConfig
 try:
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
-except ImportError:
+except:
     WEASYPRINT_AVAILABLE = False
 
 
