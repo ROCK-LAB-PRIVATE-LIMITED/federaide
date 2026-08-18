@@ -459,8 +459,8 @@ class ChatGPTAuthModal(ModalScreen[bool]):
                 return
 
             def update_ui():
-                self.query_one("#url_display", TextArea).text = f"{verification_uri} (Code: {user_code})"
-                self.query_one("#status_label", Label).update(f"[bold cyan]Code: {user_code} | Waiting for approval in browser...[/bold cyan]")
+                self.query_one("#url_display", Input).value = f"{verification_uri} (Code: {user_code})"
+                self.query_one("#status_label", Label).update(f"[bold cyan]Code: {user_code} | Waiting for approval in browser...[/bold cyan]") 
             
             self.app.call_from_thread(update_ui)
             self.authorize_url = verification_uri
