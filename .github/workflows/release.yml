@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - Dev
+      - dev
     paths:
       - 'pyproject.toml'
 
@@ -56,7 +56,7 @@ jobs:
           is_dispatch = "${{ github.event_name }}" == "workflow_dispatch"
 
           # Determine Package Name and Tag format based on branch
-          if ref_name == "Dev":
+          if ref_name == "dev":
               pkg_name = "federaide-dev-nightly"
               tag_suffix = "-dev"
           else:
