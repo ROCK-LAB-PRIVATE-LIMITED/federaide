@@ -513,17 +513,19 @@ class UpdateModal(ModalScreen[str]):
             print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
             
             if os.name == "nt" or sys.platform == "win32":
-                # Windows PowerShell execution pointing to federate.ai repository
+                # Windows PowerShell execution directly in the active console
                 ps_cmd = (
+                    "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host 'Update process finished. Restarting...'; "
-                    "Start-Sleep -Seconds 2; "
+                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green; "
                     "federaide"
                 )
-                cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
-                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                os._exit(0)
+                try:
+                    os.execvp("powershell.exe", ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                except Exception:
+                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                    os._exit(0)
             else:
                 # Unix Bash execution pointing to federaide repository
                 sh_cmd = (
@@ -740,7 +742,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         with self.prevent(Checkbox.Changed):
             self.query_one("#research_image_system_enabled", Checkbox).value = config.get("research_image_system_enabled", False)
             self.query_one("#research_images_as_links", Checkbox).value = not config.get("research_images_as_links", False)
-            self.query_one("#autoupdate_on_launch", Checkbox).value = config.get("autoupdate_on_launch", False)
+            self.query_one("#autoupdate_on_launch", Checkbox).value = config.get("autoupdate_on_launch", True)
 
     @on(Checkbox.Changed, "#research_images_as_links")
     def on_as_links_changed(self, event: Checkbox.Changed):
@@ -2684,7 +2686,7 @@ class AIAgentView(Vertical):
         self.spinner_idx = 0
         self.set_interval(0.1, self.tick_spinners)
         self.set_interval(60.0, self.tick_scheduler)
-        if load_global_settings().get("autoupdate_on_launch", False):
+        if load_global_settings().get("autoupdate_on_launch", True):
             self.check_for_updates_bg(manual=False)
         #self.consolidate_memories(manual=False)
 
