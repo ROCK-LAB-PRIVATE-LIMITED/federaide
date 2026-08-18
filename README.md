@@ -1,6 +1,5 @@
 # FEDERaiDE
 
-This is the Dev Branch.
 FEDERaiDE is a cross-platform, terminal-based **peer to peer** AI orchestration harness and universal automation system. 
 
 It turns your terminal into an interactive workbench where you can run a specialized team of AI agents who talk to and collaborate with each other, use voice input and output, execute desktop automation commands, and much more.
