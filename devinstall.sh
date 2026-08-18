@@ -55,7 +55,7 @@ if [ "$IS_WINDOWS_BASH" = true ]; then
             \$env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
         }
         Write-Host '[*] Installing FEDERaiDE on standardized Python 3.13 environment...' -ForegroundColor Cyan
-        uv tool install --force --refresh --python 3.13 'federaide[all]'
+        uv tool install --force --refresh --python 3.13 'federaide-dev-nightly[all]'
     "
     echo "======================================================================"
     echo " 🎉 Windows installation complete!"
@@ -104,7 +104,7 @@ ensure_uv_unix() {
     if ! command -v uv &> /dev/null; then
         echo "[!] uv installation could not be verified automatically."
         echo "[*] Please install uv manually (https://docs.astral.sh/uv/) and run:"
-        echo "    uv tool install --force --refresh federaide[all]"
+        echo "    uv tool install --force --refresh federaide-dev-nightly[all]"
         return 1
     fi
 
@@ -112,14 +112,14 @@ ensure_uv_unix() {
 }
 
 # 5. Perform Unix-Based Installation using uv tool
-install_federaide_unix() {
+install_federaide-dev-nightly_unix() {
     # GitHub repository config parameters for pre-compiled "Tyre" wheels
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"  # <-- CHANGE THIS to your GitHub organization/username
     REPO_NAME="FEDERaiDE"       # <-- CHANGE THIS to your repository name
     BRANCH="main"
 
     # Use Termux/Android writable temp directory variable if defined, falling back to /tmp
-    TYRES_DIR="${TMPDIR:-/tmp}/federaide_tyres"
+    TYRES_DIR="${TMPDIR:-/tmp}/federaide-dev-nightly_tyres"
     rm -rf "$TYRES_DIR" && mkdir -p "$TYRES_DIR"
     RAW_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${BRANCH}/tyres"
 
@@ -174,7 +174,7 @@ EOF
                 --with tree-sitter \
                 --with keyrings.alt \
                 --with weasyprint \
-                "federaide"
+                "federaide-dev-nightly"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
@@ -186,7 +186,7 @@ EOF
                 --with tree-sitter-c \
                 --with keyrings.alt \
                 --with weasyprint \
-                federaide
+                federaide-dev-nightly
         fi
         
         # Ensure the executable directory is added to the Termux path permanently
@@ -216,11 +216,11 @@ EOF
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
-            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide[all]"
+            uv tool install --force --refresh --python 3.13 --find-links "$TYRES_DIR" "federaide-dev-nightly[all]"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
-            uv tool install --force --refresh --python 3.13 federaide
+            uv tool install --force --refresh --python 3.13 federaide-dev-nightly
         fi
 
     else
@@ -228,16 +228,9 @@ EOF
         echo "[*] Desktop/Server environment detected."
         if [ "$OS_NAME" = "Darwin" ]; then
             echo "[*] macOS environment detected. Checking for Homebrew..."
-            # Check standard Homebrew locations first to make brew available in subshells
-            if [ -f /opt/homebrew/bin/brew ]; then
-                eval "$(/opt/homebrew/bin/brew shellenv)"
-            elif [ -f /usr/local/bin/brew ]; then
-                eval "$(/usr/local/bin/brew shellenv)"
-            fi
-
             if ! command -v brew &> /dev/null; then
                 echo "[*] Homebrew not found. Attempting to install Homebrew..."
-                NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null || true
+                /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null || true
                 if [ -f /opt/homebrew/bin/brew ]; then
                     eval "$(/opt/homebrew/bin/brew shellenv)"
                 elif [ -f /usr/local/bin/brew ]; then
@@ -246,18 +239,18 @@ EOF
             fi
             
             if command -v brew &> /dev/null; then
-                echo "[*] Installing Pango, Cairo, Glib, Fontconfig, and dependencies via Homebrew..."
-                brew install pango cairo libffi glib gobject-introspection fontconfig harfbuzz
+                echo "[*] Installing Pango, Cairo, Glib, and Gobject-Introspection via Homebrew..."
+                brew install pango cairo glib gobject-introspection
                 
                 BREW_LIB_DIR="$(brew --prefix)/lib"
                 export DYLD_FALLBACK_LIBRARY_PATH="$BREW_LIB_DIR:$DYLD_FALLBACK_LIBRARY_PATH"
                 
-                for profile in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.zprofile"; do
+                for profile in "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.bashrc"; do
                     if [ -f "$profile" ] || [ "${profile##*/}" = ".zshrc" -a "$SHELL" = "/bin/zsh" ] || [ "${profile##*/}" = ".bash_profile" -a "$SHELL" = "/bin/bash" ]; then
                         touch "$profile"
                         if ! grep -q "DYLD_FALLBACK_LIBRARY_PATH" "$profile"; then
                             echo "" >> "$profile"
-                            echo "# FEDERaiDE WeasyPrint library path" >> "$profile"
+                            echo "# FEDERaiDE.AI WeasyPrint library path" >> "$profile"
                             echo "export DYLD_FALLBACK_LIBRARY_PATH=\"$BREW_LIB_DIR:\$DYLD_FALLBACK_LIBRARY_PATH\"" >> "$profile"
                             echo "[*] Configured DYLD_FALLBACK_LIBRARY_PATH in $profile"
                         fi
@@ -265,7 +258,7 @@ EOF
                 done
             else
                 echo "[!] Homebrew could not be verified. Please install Homebrew manually and run:"
-                echo "    brew install pango cairo libffi glib gobject-introspection fontconfig harfbuzz"
+                echo "    brew install pango cairo glib gobject-introspection"
             fi
         fi
 
@@ -274,7 +267,7 @@ EOF
 import urllib.request, json, time, random
 def get_pypi_version():
     try:
-        url = f'https://pypi.org/pypi/federaide/json?cb={random.randint(1, 1000000)}'
+        url = f'https://pypi.org/pypi/federaide-dev-nightly/json?cb={random.randint(1, 1000000)}'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode('utf-8'))
@@ -302,12 +295,12 @@ else:
         echo "[*] Installing FEDERaiDE with all features on standardized Python 3.13 environment..."
         if [ -n "$LATEST_VER" ]; then
             echo "[*] Target version resolved: v$LATEST_VER"
-            if ! uv tool install --force --refresh --python 3.13 "federaide[all]==$LATEST_VER"; then
+            if ! uv tool install --force --refresh --python 3.13 "federaide-dev-nightly[all]==$LATEST_VER"; then
                 echo "[!] Explicit installation of v$LATEST_VER failed. Falling back to standard resolution..."
-                uv tool install --force --refresh --python 3.13 "federaide[all]"
+                uv tool install --force --refresh --python 3.13 "federaide-dev-nightly[all]"
             fi
         else
-            uv tool install --force --refresh --python 3.13 "federaide[all]"
+            uv tool install --force --refresh --python 3.13 "federaide-dev-nightly[all]"
         fi
     fi
 
@@ -317,17 +310,17 @@ else:
 
 # Execute Unix sequence
 if ensure_uv_unix; then
-    install_federaide_unix
+    install_federaide-dev-nightly_unix
     echo "======================================================================"
     echo " 🎉 Installation finished successfully!"
     echo "======================================================================"
-    echo " To ensure both 'uv' and 'federaide' are on your shell's PATH, "
+    echo " To ensure both 'uv' and 'federaide-dev-nightly' are on your shell's PATH, "
     echo " please restart your terminal or run:"
     echo "     source \$HOME/.local/bin/env"
     echo "     source ~/.bashrc  (or ~/.zshrc if using Zsh)"
     echo ""
     echo " To run the application:"
-    echo "     federaide"
+    echo "     federaide-dev-nightly"
     echo "======================================================================"
 else
     echo "[!] Installation could not be completed."

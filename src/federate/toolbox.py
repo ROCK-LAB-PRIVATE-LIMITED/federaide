@@ -87,7 +87,7 @@ DEFAULT_GLOBAL_SETTINGS = {
     "research_images_max": 10,
     "research_image_retries": 3,
     "research_images_as_links": False,
-    "autoupdate_on_launch": False,
+    "autoupdate_on_launch": True,
     "tool_result_visibility": "private",
 }
 
@@ -178,7 +178,7 @@ from langchain_core.runnables import RunnableConfig
 try:
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
-except ImportError:
+except:
     WEASYPRINT_AVAILABLE = False
 
 
