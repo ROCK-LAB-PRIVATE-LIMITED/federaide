@@ -1,9 +1,9 @@
-name: Build and Publish Wheels
+name: Build and Publish Dev Nightly Wheels
 
 on:
   push:
     branches:
-      - main
+      - dev
     paths:
       - 'pyproject.toml'
 
@@ -51,8 +51,8 @@ jobs:
           is_dispatch = "${{ github.event_name }}" == "workflow_dispatch"
 
           if curr and (curr != prev or is_dispatch):
-              tag = f"v{curr}"
-              print(f"🎉 New release detected: {tag}")
+              tag = f"v{curr}-dev"
+              print(f"🎉 New dev release detected: {tag}")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f"bumped=true\n")
                   f.write(f"version={curr}\n")
@@ -138,7 +138,6 @@ jobs:
             os: ubuntu-latest
             goos: android
             goarch: arm64
-            # Termux python expects the standard linux_aarch64 wheel tag
             plat_name: android_24_arm64_v8a 
             suffix: ""
 
@@ -156,6 +155,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Patch Package Name to federaide-dev-nightly
+        run: |
+          python - << 'EOF'
+          import re
+          with open("pyproject.toml", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          updated = re.sub(
+              r'^(name\s*=\s*")[^"]+(")',
+              r'\g<1>federaide-dev-nightly\g<2>',
+              content,
+              flags=re.MULTILINE
+          )
+
+          with open("pyproject.toml", "w", encoding="utf-8") as f:
+              f.write(updated)
+
+          print("Updated package name in pyproject.toml to federaide-dev-nightly")
+          EOF
 
       - name: Install Build Dependencies
         run: |
@@ -199,7 +218,6 @@ jobs:
           CGO_ENABLED: 1
           GOOS: android
           GOARCH: arm64
-          # Point CGO directly to the NDK clang compiler for API Level 24 (Standard Termux Base)
           CC: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           CXX: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
         run: |
@@ -227,14 +245,38 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Patch Package Name to federaide-dev-nightly
+        run: |
+          python - << 'EOF'
+          import re
+          with open("pyproject.toml", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          updated = re.sub(
+              r'^(name\s*=\s*")[^"]+(")',
+              r'\g<1>federaide-dev-nightly\g<2>',
+              content,
+              flags=re.MULTILINE
+          )
+
+          with open("pyproject.toml", "w", encoding="utf-8") as f:
+              f.write(updated)
+
+          print("Updated package name in pyproject.toml to federaide-dev-nightly")
+          EOF
+
       - name: Install Build Dependencies
         run: pip install build
+
       - name: Build sdist
         run: python -m build --sdist
+
       - name: Upload sdist Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -269,91 +311,3 @@ jobs:
           files: dist/*
           body: ${{ github.event.head_commit.message }}
           generate_release_notes: true
-
-  # --- NEW JOB: Update Landing Page Version & Deploy to GitHub Pages ---
-  deploy_landing:
-    name: Update & Deploy Landing Page
-    needs: [check_version, publish]
-    runs-on: ubuntu-latest
-    if: needs.check_version.outputs.bumped == 'true'
-    permissions:
-      contents: write
-      pages: write
-      id-token: write
-
-    steps:
-      - name: Checkout Main Branch
-        uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Inject pyproject.toml Version into Landing Page & Sitemap
-        run: |
-          python - << 'EOF'
-          import re, tomllib, datetime
-
-          # 1. Read version from pyproject.toml
-          with open("pyproject.toml", "rb") as f:
-              data = tomllib.load(f)
-              version = data.get("project", {}).get("version")
-              if not version:
-                  version = data.get("tool", {}).get("poetry", {}).get("version")
-
-          if not version:
-              raise ValueError("Could not extract version from pyproject.toml")
-
-          print(f" Extracted version from pyproject.toml: {version}")
-
-          # 2. Update softwareVersion in landing/index.html
-          with open("landing/index.html", "r", encoding="utf-8") as f:
-              html = f.read()
-
-          html_updated = re.sub(
-              r'("softwareVersion":\s*")[^"]+(")',
-              rf'\g<1>{version}\g<2>',
-              html
-          )
-
-          with open("landing/index.html", "w", encoding="utf-8") as f:
-              f.write(html_updated)
-
-          print(f" Updated softwareVersion to {version} in landing/index.html")
-
-          # 3. Update <lastmod> in landing/sitemap.xml
-          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-          try:
-              with open("landing/sitemap.xml", "r", encoding="utf-8") as f:
-                  sitemap = f.read()
-
-              sitemap_updated = re.sub(
-                  r'(<lastmod>)[^<]+(</lastmod>)',
-                  rf'\g<1>{today}\g<2>',
-                  sitemap
-              )
-
-              with open("landing/sitemap.xml", "w", encoding="utf-8") as f:
-                  f.write(sitemap_updated)
-
-              print(f" Updated sitemap <lastmod> to {today} in landing/sitemap.xml")
-          except FileNotFoundError:
-              print("ℹ️ landing/sitemap.xml not found, skipping sitemap update.")
-
-          EOF
-
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload Pages Artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: 'landing'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
