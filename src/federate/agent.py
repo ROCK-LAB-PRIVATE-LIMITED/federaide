@@ -1051,6 +1051,7 @@ class OnboardingModal(ModalScreen[dict]):
         def on_auth_done(success: bool):
             if success:
                 self.query_one("#onboard_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.query_one("#onboard_api_key", Input).value = "CHATGPT_OAUTH_ACTIVE"
                 self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
         self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
@@ -1308,6 +1309,7 @@ class ConfigModal(ModalScreen[str]):
         def on_auth_done(success: bool):
             if success:
                 self.query_one("#ai_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.query_one("#ai_api_key", Input).value = "CHATGPT_OAUTH_ACTIVE"
                 self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
         self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
@@ -1345,8 +1347,9 @@ class ConfigModal(ModalScreen[str]):
             temp = 1.0
 
         preset_val = self.query_one("#ai_base_url_preset", Select).value
+        base_url_val = self.query_one("#ai_base_url", Input).value.strip()
         api_key_val = self.query_one("#ai_api_key", Input).value.strip()
-        if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key_val:
+        if (preset_val == "https://chatgpt.com/backend-api/codex" or base_url_val == "https://chatgpt.com/backend-api/codex") and not api_key_val:
             api_key_val = "CHATGPT_OAUTH_ACTIVE"
 
         return {

@@ -84,7 +84,7 @@ def _extract_claims(id_token: Optional[str]) -> dict:
         out["user_id"] = auth.get("chatgpt_user_id")
     return out
 
-def _token_from_response(payload: dict, fallback_refresh: str = None) -> _ChatGPTToken:
+def _token_from_response(payload: dict, fallback_refresh: str = None, fallback_account_id: str = None) -> _ChatGPTToken:
     if not payload.get("access_token"):
         raise RuntimeError("OAuth response missing access_token.")
     id_token = payload.get("id_token")
@@ -92,41 +92,91 @@ def _token_from_response(payload: dict, fallback_refresh: str = None) -> _ChatGP
     refresh_token = payload.get("refresh_token") or fallback_refresh
     if not refresh_token:
         raise RuntimeError("OAuth response missing refresh_token.")
+    account_id = claims.get("account_id") or fallback_account_id
     expires_in = int(payload.get("expires_in", 3600))
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
     return _ChatGPTToken(
         access_token=payload["access_token"],
         refresh_token=refresh_token,
         expires_at=expires_at,
-        account_id=claims["account_id"],
-        plan_type=claims["plan_type"],
-        user_id=claims["user_id"],
+        account_id=account_id,
+        plan_type=claims.get("plan_type"),
+        user_id=claims.get("user_id"),
         id_token=id_token
     )
+
+CHUNK_SIZE = 256
+KEYRING_SERVICE = "Federate"
+CHUNK_COUNT_KEY = "chatgpt_token_chunk_count"
+CHUNK_PREFIX = "chatgpt_token_chunk_"
+LEGACY_KEY = "chatgpt_oauth_token"
 
 class _FileChatGPTOAuthTokenProvider:
     def __init__(self, path: Path = DEFAULT_STORE_PATH):
         self.path = path
         self._lock = threading.Lock()
 
+    def _clear_chunks_unlocked(self, keyring_mod):
+        try:
+            count_str = keyring_mod.get_password(KEYRING_SERVICE, CHUNK_COUNT_KEY)
+            max_chunks = int(count_str) if (count_str and count_str.isdigit()) else 32
+            for idx in range(max_chunks):
+                try:
+                    keyring_mod.delete_password(KEYRING_SERVICE, f"{CHUNK_PREFIX}{idx}")
+                except Exception:
+                    pass
+            try:
+                keyring_mod.delete_password(KEYRING_SERVICE, CHUNK_COUNT_KEY)
+            except Exception:
+                pass
+            try:
+                keyring_mod.delete_password(KEYRING_SERVICE, LEGACY_KEY)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def get_token(self) -> _ChatGPTToken:
         with self._lock:
+            from toolbox import is_keyring_locked
+            if is_keyring_locked():
+                raise RuntimeError("Keyring is locked. Please unlock keyring first.")
+
+            import keyring
             data = None
+
+            # 1. Try reading chunked token (256-byte chunks)
             try:
-                from toolbox import is_keyring_locked
-                if not is_keyring_locked():
-                    import keyring
-                    raw = keyring.get_password("Federate", "chatgpt_oauth_token")
-                    if raw:
-                        data = json.loads(raw)
+                count_str = keyring.get_password(KEYRING_SERVICE, CHUNK_COUNT_KEY)
+                if count_str and count_str.isdigit():
+                    total_chunks = int(count_str)
+                    parts = []
+                    for idx in range(total_chunks):
+                        part = keyring.get_password(KEYRING_SERVICE, f"{CHUNK_PREFIX}{idx}")
+                        if part is None:
+                            parts = []
+                            break
+                        parts.append(part)
+                    if parts and len(parts) == total_chunks:
+                        data = json.loads("".join(parts))
             except Exception:
                 data = None
+
+            # 2. Backward-compatible check for legacy single entry
+            if not data:
+                try:
+                    raw = keyring.get_password(KEYRING_SERVICE, LEGACY_KEY)
+                    if raw:
+                        data = json.loads(raw)
+                except Exception:
+                    data = None
 
             if not data:
                 raise FileNotFoundError("No ChatGPT OAuth token found in keyring.")
 
             expires_at = datetime.fromisoformat(data["expires_at"])
-            if expires_at.tzinfo is None: expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             
             token = _ChatGPTToken(
                 access_token=data["access_token"],
@@ -161,26 +211,30 @@ class _FileChatGPTOAuthTokenProvider:
                 "expires_at": token.expires_at.astimezone(timezone.utc).isoformat(),
                 "account_id": token.account_id,
                 "plan_type": token.plan_type,
-                "user_id": token.user_id,
-                "id_token": token.id_token
+                "user_id": token.user_id
             }
-            try:
-                from toolbox import is_keyring_locked
-                if not is_keyring_locked():
-                    import keyring
-                    keyring.set_password("Federate", "chatgpt_oauth_token", json.dumps(data, indent=2))
-            except Exception:
-                pass
+            raw_json = json.dumps(data, separators=(',', ':'))
+
+            from toolbox import is_keyring_locked
+            if is_keyring_locked():
+                raise RuntimeError("Keyring is locked. Please unlock keyring before saving credentials.")
+
+            import keyring
+            # Clear old chunks first
+            self._clear_chunks_unlocked(keyring)
+
+            # Save in 256-character chunks
+            chunks = [raw_json[i:i + CHUNK_SIZE] for i in range(0, len(raw_json), CHUNK_SIZE)]
+            for idx, chunk in enumerate(chunks):
+                keyring.set_password(KEYRING_SERVICE, f"{CHUNK_PREFIX}{idx}", chunk)
+            keyring.set_password(KEYRING_SERVICE, CHUNK_COUNT_KEY, str(len(chunks)))
 
     def clear(self):
         with self._lock:
-            try:
-                from toolbox import is_keyring_locked
-                if not is_keyring_locked():
-                    import keyring
-                    keyring.delete_password("Federate", "chatgpt_oauth_token")
-            except Exception:
-                pass
+            from toolbox import is_keyring_locked
+            if not is_keyring_locked():
+                import keyring
+                self._clear_chunks_unlocked(keyring)
 
 def is_chatgpt_oauth_agent(agent: Any) -> bool:
     if not agent: return False
@@ -305,8 +359,11 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
         Handler.authorize_url = authorize_url
 
+        class _ReusableHTTPServer(http.server.HTTPServer):
+            allow_reuse_address = True
+
         try:
-            server = http.server.HTTPServer((host, port), Handler)
+            server = _ReusableHTTPServer((host, port), Handler)
             server.timeout = 1.0
         except Exception:
             self.start_device_flow()
@@ -402,7 +459,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
                 return
 
             def update_ui():
-                self.query_one("#url_display", TextArea).text = f"{verification_uri} (Code: {user_code})"
+                self.query_one("#url_display", Input).value = f"{verification_uri} (Code: {user_code})"
                 self.query_one("#status_label", Label).update(f"[bold cyan]Code: {user_code} | Waiting for approval in browser...[/bold cyan]")
             
             self.app.call_from_thread(update_ui)
