@@ -1,9 +1,10 @@
-name: Build and Publish Wheels
+name: Build and Publish Release
 
 on:
   push:
     branches:
       - main
+      - Dev
     paths:
       - 'pyproject.toml'
 
@@ -15,6 +16,7 @@ jobs:
       bumped: ${{ steps.check.outputs.bumped }}
       version: ${{ steps.check.outputs.version }}
       tag_name: ${{ steps.check.outputs.tag_name }}
+      pkg_name: ${{ steps.check.outputs.pkg_name }}
     permissions:
       contents: write
 
@@ -24,39 +26,51 @@ jobs:
         with:
           fetch-depth: 2 # Fetches HEAD and HEAD~1
 
-      - name: Check for Version Bump
+      - name: Check for Version Bump & Target Branch
         id: check
         run: |
           python - << 'EOF'
           import subprocess, tomllib, os
 
-          def get_version(ref):
+          def get_project_data(ref):
               try:
                   content = subprocess.check_output(
                       ["git", "show", f"{ref}:pyproject.toml"],
                       text=True,
                       stderr=subprocess.DEVNULL
                   )
-                  data = tomllib.loads(content)
-                  return data.get("project", {}).get("version") or data.get("tool", {}).get("poetry", {}).get("version")
+                  return tomllib.loads(content)
               except Exception:
-                  return None
+                  return {}
 
-          curr = get_version("HEAD")
-          prev = get_version("HEAD~1")
+          curr_data = get_project_data("HEAD")
+          prev_data = get_project_data("HEAD~1")
+
+          curr = curr_data.get("project", {}).get("version") or curr_data.get("tool", {}).get("poetry", {}).get("version")
+          prev = prev_data.get("project", {}).get("version") or prev_data.get("tool", {}).get("poetry", {}).get("version")
 
           print(f"Previous version (HEAD~1): {prev}")
           print(f"Current version  (HEAD)  : {curr}")
 
+          ref_name = "${{ github.ref_name }}"
           is_dispatch = "${{ github.event_name }}" == "workflow_dispatch"
 
+          # Determine Package Name and Tag format based on branch
+          if ref_name == "Dev":
+              pkg_name = "federaide-dev-nightly"
+              tag_suffix = "-dev"
+          else:
+              pkg_name = curr_data.get("project", {}).get("name") or curr_data.get("tool", {}).get("poetry", {}).get("name") or "federaide"
+              tag_suffix = ""
+
           if curr and (curr != prev or is_dispatch):
-              tag = f"v{curr}"
-              print(f"🎉 New release detected: {tag}")
+              tag = f"v{curr}{tag_suffix}"
+              print(f"🎉 New release detected on branch [{ref_name}]: {tag} (Package: {pkg_name})")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f"bumped=true\n")
                   f.write(f"version={curr}\n")
                   f.write(f"tag_name={tag}\n")
+                  f.write(f"pkg_name={pkg_name}\n")
           else:
               print("ℹ️ Version did not change. Skipping build.")
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -138,7 +152,6 @@ jobs:
             os: ubuntu-latest
             goos: android
             goarch: arm64
-            # Termux python expects the standard linux_aarch64 wheel tag
             plat_name: android_24_arm64_v8a 
             suffix: ""
 
@@ -156,6 +169,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Sync Package Name in pyproject.toml
+        run: |
+          python - << 'EOF'
+          import re
+          pkg_name = "${{ needs.check_version.outputs.pkg_name }}"
+          with open("pyproject.toml", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          updated = re.sub(
+              r'^(name\s*=\s*")[^"]+(")',
+              rf'\g<1>{pkg_name}\g<2>',
+              content,
+              flags=re.MULTILINE
+          )
+
+          with open("pyproject.toml", "w", encoding="utf-8") as f:
+              f.write(updated)
+
+          print(f"Set package name in pyproject.toml to: {pkg_name}")
+          EOF
 
       - name: Install Build Dependencies
         run: |
@@ -199,7 +233,6 @@ jobs:
           CGO_ENABLED: 1
           GOOS: android
           GOARCH: arm64
-          # Point CGO directly to the NDK clang compiler for API Level 24 (Standard Termux Base)
           CC: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
           CXX: ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++
         run: |
@@ -227,14 +260,39 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Sync Package Name in pyproject.toml
+        run: |
+          python - << 'EOF'
+          import re
+          pkg_name = "${{ needs.check_version.outputs.pkg_name }}"
+          with open("pyproject.toml", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          updated = re.sub(
+              r'^(name\s*=\s*")[^"]+(")',
+              rf'\g<1>{pkg_name}\g<2>',
+              content,
+              flags=re.MULTILINE
+          )
+
+          with open("pyproject.toml", "w", encoding="utf-8") as f:
+              f.write(updated)
+
+          print(f"Set package name in pyproject.toml to: {pkg_name}")
+          EOF
+
       - name: Install Build Dependencies
         run: pip install build
+
       - name: Build sdist
         run: python -m build --sdist
+
       - name: Upload sdist Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -270,12 +328,12 @@ jobs:
           body: ${{ github.event.head_commit.message }}
           generate_release_notes: true
 
-  # --- NEW JOB: Update Landing Page Version & Deploy to GitHub Pages ---
   deploy_landing:
     name: Update & Deploy Landing Page
     needs: [check_version, publish]
     runs-on: ubuntu-latest
-    if: needs.check_version.outputs.bumped == 'true'
+    # Only run for main branch release
+    if: needs.check_version.outputs.bumped == 'true' && github.ref_name == 'main'
     permissions:
       contents: write
       pages: write
@@ -300,14 +358,12 @@ jobs:
           # 1. Read version from pyproject.toml
           with open("pyproject.toml", "rb") as f:
               data = tomllib.load(f)
-              version = data.get("project", {}).get("version")
-              if not version:
-                  version = data.get("tool", {}).get("poetry", {}).get("version")
+              version = data.get("project", {}).get("version") or data.get("tool", {}).get("poetry", {}).get("version")
 
           if not version:
               raise ValueError("Could not extract version from pyproject.toml")
 
-          print(f" Extracted version from pyproject.toml: {version}")
+          print(f"Extracted version from pyproject.toml: {version}")
 
           # 2. Update softwareVersion in landing/index.html
           with open("landing/index.html", "r", encoding="utf-8") as f:
@@ -322,7 +378,7 @@ jobs:
           with open("landing/index.html", "w", encoding="utf-8") as f:
               f.write(html_updated)
 
-          print(f" Updated softwareVersion to {version} in landing/index.html")
+          print(f"Updated softwareVersion to {version} in landing/index.html")
 
           # 3. Update <lastmod> in landing/sitemap.xml
           today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -339,12 +395,10 @@ jobs:
               with open("landing/sitemap.xml", "w", encoding="utf-8") as f:
                   f.write(sitemap_updated)
 
-              print(f" Updated sitemap <lastmod> to {today} in landing/sitemap.xml")
+              print(f"Updated sitemap <lastmod> to {today} in landing/sitemap.xml")
           except FileNotFoundError:
               print("ℹ️ landing/sitemap.xml not found, skipping sitemap update.")
-
           EOF
-
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
