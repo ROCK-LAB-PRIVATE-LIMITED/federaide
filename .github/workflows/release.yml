@@ -3,7 +3,7 @@ name: Build and Publish Dev Nightly Wheels
 on:
   push:
     branches:
-      - dev
+      - Dev
     paths:
       - 'pyproject.toml'
 
