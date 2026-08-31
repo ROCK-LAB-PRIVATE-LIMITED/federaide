@@ -126,29 +126,97 @@ SLASH_COMMAND_DESCS = {
 
 class ToolConfirmationModal(ModalScreen[str]):
     DEFAULT_CSS = """
-    ToolConfirmationModal { align: center middle; background: $background 60%; }
-    #confirm_dialog { width: 70; height: 75%; border: thick $warning; background: $surface; padding: 1 2; }
-    #args_scroll { margin: 1 0; height: 1fr; border: round $primary; background: $boost; padding: 1 2; }
-    .buttons { height: auto; align: right middle; margin-top: 0; }
-    .buttons Button { margin-left: 1; }
+    ToolConfirmationModal { 
+        align: center middle; 
+        background: $background 70%; 
+    }
+    #confirm_dialog { 
+        width: 85; 
+        height: auto; 
+        max-height: 85%; 
+        border: thick $primary; 
+        background: $surface; 
+        padding: 1 2; 
+    }
+    .modal_header_bar {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+        text-align: center;
+        width: 100%;
+        height: 1;
+        margin-bottom: 1;
+    }
+    .modal_subtitle {
+        color: $text-muted;
+        margin-bottom: 0;
+    }
+    #args_scroll { 
+        margin: 1 0; 
+        height: auto; 
+        max-height: 20; 
+        border: round $accent; 
+        background: $boost; 
+        padding: 1 2; 
+    }
+    .buttons { 
+        height: auto; 
+        align: right middle; 
+        margin-top: 1; 
+    }
+    .buttons Button { 
+        margin-left: 1; 
+    }
     """
-    def __init__(self, tool_name: str, arguments: dict, agent_name: str = "Agent"):
+    def __init__(self, tool_name: str, arguments: dict, agent_name: str = "Agent", diff: Optional[str] = None):
         super().__init__()
         self.tool_name = tool_name
         self.arguments = arguments
         self.agent_name = agent_name
+        self.diff = diff
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm_dialog"):
-            yield Label(f" Tool Authorization: [bold yellow]{self.tool_name}[/] requested by [bold cyan]{self.agent_name}[/]", classes="pane_title")
-            yield Label("[dim]Verify the requested arguments before executing:[/dim]")
+            yield Label(f"Tool Authorization: {self.tool_name} ({self.agent_name})", classes="modal_header_bar")
+            if self.diff:
+                yield Label("Review proposed file modifications (diff):", classes="modal_subtitle")
+            else:
+                yield Label("Verify the requested arguments before executing:", classes="modal_subtitle")
             
             with VerticalScroll(id="args_scroll"):
-                try:
-                    formatted_args = json.dumps(self.arguments, indent=4)
-                except Exception:
-                    formatted_args = str(self.arguments)
-                yield Static(formatted_args, markup=False)
+                if self.diff:
+                    # Dynamically load user-configured diff colors with safety fallback
+                    from toolbox import load_global_settings
+                    from rich.style import Style
+                    cfg = load_global_settings()
+                    add_color = cfg.get("diff_addition_color", "green") or "green"
+                    del_color = cfg.get("diff_deletion_color", "red") or "red"
+                    try: Style.parse(add_color)
+                    except Exception: add_color = "green"
+                    try: Style.parse(del_color)
+                    except Exception: del_color = "red"
+
+                    diff_text = Text()
+                    for line in self.diff.splitlines():
+                        if line.startswith("+++"):
+                            diff_text.append(line + "\n", style=f"bold {add_color}")
+                        elif line.startswith("---"):
+                            diff_text.append(line + "\n", style=f"bold {del_color}")
+                        elif line.startswith("+"):
+                            diff_text.append(line + "\n", style=f"bold {add_color}")
+                        elif line.startswith("-"):
+                            diff_text.append(line + "\n", style=f"bold {del_color}")
+                        elif line.startswith("@@"):
+                            diff_text.append(line + "\n", style="bold cyan")
+                        else:
+                            diff_text.append(line + "\n")
+                    yield Static(diff_text, markup=False)
+                else:
+                    try:
+                        formatted_args = json.dumps(self.arguments, indent=4)
+                    except Exception:
+                        formatted_args = str(self.arguments)
+                    yield Static(formatted_args, markup=False)
                 
             with Horizontal(classes="buttons"):
                 yield Button("Approve (Execute)", id="approve", variant="success")
@@ -463,28 +531,17 @@ class UpdateModal(ModalScreen[str]):
             print('\033[?25h\033[0m', end='', flush=True)  # Restore cursor and clear formatting
             
             if os.name == "nt" or sys.platform == "win32":
-                # 1. Explicitly restore standard Windows Console Input Mode
-                try:
-                    import ctypes
-                    kernel32 = ctypes.windll.kernel32
-                    h_in = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE (-10)
-                    # 0x01E7: Standard processed input, line input, echo, and quick-edit mode
-                    kernel32.SetConsoleMode(h_in, 0x01E7)
-                except Exception:
-                    pass
-
-                # 2. Run update in PowerShell, exit PowerShell cleanly, then launch federaide via cmd.exe
+                # Run the update in PowerShell directly in the console and exit cleanly back to shell prompt
                 ps_script = (
                     "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green"
+                    "Write-Host '`n[+] Update complete! Please run federaide to start.`n' -ForegroundColor Green"
                 )
-                cmd = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "{ps_script}" && cls && federaide'
                 try:
-                    os.execvp("cmd.exe", ["cmd.exe", "/c", cmd])
+                    os.execvp("powershell.exe", ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script])
                 except Exception:
-                    subprocess.run(["cmd.exe", "/c", cmd])
+                    subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script])
                     os._exit(0)
             else:
                 # Unix Bash execution pointing to federaide repository
@@ -535,6 +592,16 @@ class GlobalSettingsModal(ModalScreen[str]):
                     yield Label("Model Name Color", classes="field_label")
                     yield Label("Color formatting for active model names in the bottom status bar (e.g. #ffd700, yellow, orange, green).", classes="field_help")
                     yield Input(id="model_color", placeholder="#ffd700")
+
+                with Vertical(classes="field_container"):
+                    yield Label("Diff Addition Color (+)", classes="field_label")
+                    yield Label("Color formatting for added lines in tool approval diffs (e.g. green, #8cc84b, #00ff00).", classes="field_help")
+                    yield Input(id="diff_addition_color", placeholder="green")
+
+                with Vertical(classes="field_container"):
+                    yield Label("Diff Deletion Color (-)", classes="field_label")
+                    yield Label("Color formatting for deleted lines in tool approval diffs (e.g. red, #da6057, #ff5555).", classes="field_help")
+                    yield Input(id="diff_deletion_color", placeholder="red")
 
                 yield Label("Search & Scraping Parameters", classes="section_label")
                 
@@ -681,6 +748,8 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#user_name", Input).value = str(config.get("user_name", "User"))
         self.query_one("#user_color", Input).value = str(config.get("user_color", "#dda0dd"))
         self.query_one("#model_color", Input).value = str(config.get("model_color", "#ffd700"))
+        self.query_one("#diff_addition_color", Input).value = str(config.get("diff_addition_color", "green"))
+        self.query_one("#diff_deletion_color", Input).value = str(config.get("diff_deletion_color", "red"))
         self.query_one("#search_pacing_delay", Input).value = str(config.get("search_pacing_delay", 65.0))
         self.query_one("#max_search_results", Input).value = str(config.get("max_search_results", 10))
         self.query_one("#scraper_max_bytes", Input).value = str(config.get("scraper_max_bytes", 1000000))
@@ -736,6 +805,8 @@ class GlobalSettingsModal(ModalScreen[str]):
         user_name = self.query_one("#user_name", Input).value.strip() or "User"
         user_color = self.query_one("#user_color", Input).value.strip() or "#dda0dd"
         model_color = self.query_one("#model_color", Input).value.strip() or "#ffd700"
+        diff_addition_color = self.query_one("#diff_addition_color", Input).value.strip() or "green"
+        diff_deletion_color = self.query_one("#diff_deletion_color", Input).value.strip() or "red"
 
         # Validate color syntax with Rich
         from rich.style import Style
@@ -749,6 +820,18 @@ class GlobalSettingsModal(ModalScreen[str]):
             Style.parse(user_color)
         except Exception:
             self.notify(f"Invalid User Color '{user_color}'. Use a standard name or hex (e.g. #dda0dd, purple).", severity="error")
+            return
+
+        try:
+            Style.parse(diff_addition_color)
+        except Exception:
+            self.notify(f"Invalid Diff Addition Color '{diff_addition_color}'. Use a standard name or hex (e.g. green, #8cc84b).", severity="error")
+            return
+
+        try:
+            Style.parse(diff_deletion_color)
+        except Exception:
+            self.notify(f"Invalid Diff Deletion Color '{diff_deletion_color}'. Use a standard name or hex (e.g. red, #da6057).", severity="error")
             return
         
         try: pacing = float(self.query_one("#search_pacing_delay", Input).value.strip())
@@ -823,6 +906,8 @@ class GlobalSettingsModal(ModalScreen[str]):
             "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
             "model_color": model_color,
+            "diff_addition_color": diff_addition_color,
+            "diff_deletion_color": diff_deletion_color,
             "search_pacing_delay": pacing,
             "max_search_results": max_results,
             "scraper_max_bytes": max_bytes,
@@ -2671,6 +2756,74 @@ class AIAgentView(Vertical):
             return True
         return False
     
+    def _compute_diff(self, tool_name: str, arguments: dict) -> Optional[str]:
+        if tool_name in ("edit_file", "save_file", "fix_active_skill"):
+            try:
+                import difflib
+                from toolbox import get_safe_path
+
+                fp = arguments.get("filepath") or arguments.get("file_path") or arguments.get("path") or ""
+                if not fp:
+                    return None
+                safe_path, display_path = get_safe_path(fp)
+
+                orig_content = ""
+                if os.path.exists(safe_path):
+                    with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
+                        orig_content = f.read()
+
+                new_content = None
+                search = arguments.get("search") or arguments.get("old_str") or arguments.get("old_content")
+                replace = arguments.get("replace") or arguments.get("new_str")
+                new_content_arg = arguments.get("new_content") or arguments.get("content")
+                start_line = arguments.get("start_line")
+                end_line = arguments.get("end_line")
+
+                # 1. Search & Replace mode
+                if search is not None and replace is not None:
+                    norm_orig = orig_content.replace("\r\n", "\n")
+                    norm_search = search.replace("\r\n", "\n")
+                    norm_replace = replace.replace("\r\n", "\n")
+                    if norm_search in norm_orig:
+                        new_content = norm_orig.replace(norm_search, norm_replace, 1)
+                        orig_content = norm_orig
+
+                # 2. Line-range edit mode
+                elif start_line is not None and end_line is not None and (new_content_arg is not None or replace is not None):
+                    raw_rep = new_content_arg if new_content_arg is not None else replace
+                    clean_lines = [re.sub(r'^\s*\d+:\s?', '', l) for l in str(raw_rep).splitlines()]
+                    clean_rep = "\n".join(clean_lines)
+
+                    orig_lines = orig_content.splitlines(keepends=True)
+                    s_idx = max(0, int(start_line) - 1)
+                    e_idx = max(s_idx, min(len(orig_lines), int(end_line)))
+
+                    rep_lines = [l + "\n" for l in clean_rep.splitlines()] if clean_rep else []
+                    new_lines = orig_lines[:s_idx] + rep_lines + orig_lines[e_idx:]
+                    new_content = "".join(new_lines)
+
+                # 3. Direct full-content overwrite / save_file mode
+                elif new_content_arg is not None:
+                    new_content = str(new_content_arg)
+
+                if new_content is not None and new_content != orig_content:
+                    # Guarantee every line has a trailing newline to prevent difflib from smashing lines together
+                    orig_lines = [l + "\n" for l in orig_content.splitlines()]
+                    new_lines = [l + "\n" for l in new_content.splitlines()]
+                    from_label = f"a/{display_path}" if os.path.exists(safe_path) else "/dev/null"
+                    diff_lines = list(difflib.unified_diff(
+                        orig_lines,
+                        new_lines,
+                        fromfile=from_label,
+                        tofile=f"b/{display_path}",
+                        n=3
+                    ))
+                    if diff_lines:
+                        return "".join(diff_lines)
+            except Exception:
+                pass
+        return None
+
     def confirm_tool_execution(self, tool_name: str, arguments: dict, agent_name: str = "Agent") -> bool:
         result_event = threading.Event()
         final_result = [False]
@@ -2683,8 +2836,10 @@ class AIAgentView(Vertical):
                 final_result[0] = (res == "approve")
             result_event.set()
 
+        diff_text = self._compute_diff(tool_name, arguments)
+
         def push_modal():
-            modal = ToolConfirmationModal(tool_name, arguments, agent_name=agent_name)
+            modal = ToolConfirmationModal(tool_name, arguments, agent_name=agent_name, diff=diff_text)
             self.app.push_screen(modal, handle_result)
 
         self.app.call_from_thread(push_modal)
@@ -2879,8 +3034,8 @@ class AIAgentView(Vertical):
                     for tc in hm.tool_calls:
                         tc_name = tc.get("name", "tool")
                         tc_args = str(tc.get("args", {}))
-                        call_text = f"[#808080]Calling Tool: {escape(tc_name)} with args: {escape(tc_args)}[/#808080]"
-                        self._write_message_block(f"[bold {color}]{owner_name} (Tool Call):[/bold {color}]", call_text, color, is_markdown=False)
+                        call_text = f"Calling Tool: {tc_name} with args: {tc_args}"
+                        self._write_message_block(f"[bold {color}]{owner_name} (Tool Call):[/bold {color}]", call_text, "#808080", is_markdown=False)
 
                 if hm.tool_outputs:
                     for out in hm.tool_outputs:
@@ -2893,8 +3048,9 @@ class AIAgentView(Vertical):
                             summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
                             summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
 
-                        box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{escape(summary)}"
-                        box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                        header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
+                        body_text = Text(summary)
+                        box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
                         box_widget.styles.border = ("round", color)
                         self._write_log(box_widget)
             else: 
@@ -3112,7 +3268,8 @@ class AIAgentView(Vertical):
                 msg_to_render = render_latex_to_unicode(content)
                 content_widget = Static(Markdown(msg_to_render), classes="chat_msg")
             else:
-                content_widget = Static(Text.from_markup(content), classes="chat_msg", markup=False)
+                # Apply style directly to a pure Text object to prevent arbitrary brackets in code from being parsed as markup
+                content_widget = Static(Text(str(content), style=color), classes="chat_msg", markup=False)
                 
             bottom_rule = Static(Rule(style=color))
             
@@ -3132,8 +3289,9 @@ class AIAgentView(Vertical):
 
     def render_tool_result_box(self, owner_name, color, summary):
         try:
-            box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{escape(summary)}"
-            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+            header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
+            body_text = Text(str(summary))
+            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
             box_widget.styles.border = ("round", color)
             self._write_log(box_widget)
         except Exception:
@@ -3141,8 +3299,9 @@ class AIAgentView(Vertical):
             
     def render_tool_error_box(self, owner_name, color, summary):
         try:
-            box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{summary}"
-            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+            header_text = Text(f"Tool Error ({owner_name}):\n", style="bold red")
+            body_text = Text(str(summary), style="red")
+            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
             box_widget.styles.border = ("round", color)
             self._write_log(box_widget)
         except Exception:
