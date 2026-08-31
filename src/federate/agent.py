@@ -105,6 +105,7 @@ SLASH_COMMAND_DESCS = {
     "/copy": "Copy last AI response to system clipboard",
     "/directory": "Open interactive directory picker",
     "/dir": "Open interactive directory picker",
+    "/theme": "Set UI theme (e.g. /theme tokyo-night, /theme nord, /theme monokai)",
     "/tts": "Toggle Text-to-Speech (TTS) voice output",
     "/stt": "Toggle Speech-to-Text (STT) hotword listening",
     "/readback": "Read back the last AI response with TTS",
@@ -311,58 +312,6 @@ class ChatManagerModal(ModalScreen[str]):
     @on(Button.Pressed)
     def handle_click(self, event: Button.Pressed): self.dismiss(event.button.id)
 
-class MasterPasswordModal(ModalScreen[bool]):
-    DEFAULT_CSS = """
-    MasterPasswordModal { align: center middle; background: $background 60%; }
-    #master_auth_dialog { width: 60; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
-    #master_auth_dialog .pane_title { background: $primary; color: $text; padding: 0 1; margin-bottom: 1; text-style: bold; width: 100%; text-align: center; }
-    #master_auth_dialog Input { margin-bottom: 1; border: round $accent; }
-    .auth_err_msg { color: $error; margin-bottom: 1; text-style: bold; }
-    .modal_buttons { layout: horizontal; height: auto; margin-top: 1; align: right middle; }
-    .modal_buttons Button { margin-left: 1; }
-    """
-
-    def __init__(self, is_setup: bool = False, **kwargs):
-        super().__init__(**kwargs)
-        self.is_setup = is_setup
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="master_auth_dialog"):
-            title = "Set Master Password" if self.is_setup else "Federaide Core Locked"
-            yield Label(f" {title}", classes="pane_title")
-            desc = "Create a Master Password to lock and protect Federaide Core:" if self.is_setup else "Enter your Master Password to unlock Federaide Core:"
-            yield Label(desc)
-            yield Input(placeholder="Master Password", id="pwd_input", password=True)
-            yield Label("", id="pwd_error", classes="auth_err_msg")
-            with Horizontal(classes="modal_buttons"):
-                btn_text = "Set & Unlock" if self.is_setup else "Unlock"
-                yield Button(btn_text, id="submit_pwd_btn", variant="success")
-                yield Button("Exit", id="exit_app_btn", variant="error")
-
-    def on_mount(self):
-        self.query_one("#pwd_input").focus()
-
-    @on(Input.Submitted, "#pwd_input")
-    @on(Button.Pressed, "#submit_pwd_btn")
-    def submit_pwd(self):
-        pwd = self.query_one("#pwd_input", Input).value.strip()
-        if not pwd or len(pwd) < 4:
-            self.query_one("#pwd_error", Label).update("Password must be at least 4 characters.")
-            return
-
-        if self.is_setup:
-            agent_core.set_master_password(pwd)
-            self.dismiss(True)
-        else:
-            if agent_core.unlock_core(pwd):
-                self.dismiss(True)
-            else:
-                self.query_one("#pwd_error", Label).update("Incorrect password. Please try again.")
-
-    @on(Button.Pressed, "#exit_app_btn")
-    def exit_app(self):
-        self.app.exit()
-
 class KeyringUnlockModal(ModalScreen[tuple]):
     DEFAULT_CSS = """
     KeyringUnlockModal { align: center middle; background: $background 60%; }
@@ -565,6 +514,11 @@ class GlobalSettingsModal(ModalScreen[str]):
                     yield Label("Color formatting for user label in the chat panel (e.g. #dda0dd, purple).", classes="field_help")
                     yield Input(id="user_color", placeholder="#dda0dd")
 
+                with Vertical(classes="field_container"):
+                    yield Label("Model Name Color", classes="field_label")
+                    yield Label("Color formatting for active model names in the bottom status bar (e.g. #ffd700, yellow, orange, green).", classes="field_help")
+                    yield Input(id="model_color", placeholder="#ffd700")
+
                 yield Label("Search & Scraping Parameters", classes="section_label")
                 
                 with Vertical(classes="field_container"):
@@ -709,6 +663,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         config = toolbox.load_global_settings()
         self.query_one("#user_name", Input).value = str(config.get("user_name", "User"))
         self.query_one("#user_color", Input).value = str(config.get("user_color", "#dda0dd"))
+        self.query_one("#model_color", Input).value = str(config.get("model_color", "#ffd700"))
         self.query_one("#search_pacing_delay", Input).value = str(config.get("search_pacing_delay", 65.0))
         self.query_one("#max_search_results", Input).value = str(config.get("max_search_results", 10))
         self.query_one("#scraper_max_bytes", Input).value = str(config.get("scraper_max_bytes", 1000000))
@@ -763,6 +718,21 @@ class GlobalSettingsModal(ModalScreen[str]):
     def save_btn(self):
         user_name = self.query_one("#user_name", Input).value.strip() or "User"
         user_color = self.query_one("#user_color", Input).value.strip() or "#dda0dd"
+        model_color = self.query_one("#model_color", Input).value.strip() or "#ffd700"
+
+        # Validate color syntax with Rich
+        from rich.style import Style
+        try:
+            Style.parse(model_color)
+        except Exception:
+            self.notify(f"Invalid Model Name Color '{model_color}'. Use a standard name or hex (e.g. yellow, #ffd700).", severity="error")
+            return
+
+        try:
+            Style.parse(user_color)
+        except Exception:
+            self.notify(f"Invalid User Color '{user_color}'. Use a standard name or hex (e.g. #dda0dd, purple).", severity="error")
+            return
         
         try: pacing = float(self.query_one("#search_pacing_delay", Input).value.strip())
         except ValueError: pacing = 65.0
@@ -835,6 +805,7 @@ class GlobalSettingsModal(ModalScreen[str]):
             "user_name": user_name,
             "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
+            "model_color": model_color,
             "search_pacing_delay": pacing,
             "max_search_results": max_results,
             "scraper_max_bytes": max_bytes,
@@ -1723,6 +1694,31 @@ class ChatInput(TextArea):
     def handle_text_changed(self) -> None:
         val = self.text
         
+        # Handle /theme suggestions
+        if val.startswith("/theme"):
+            if val.startswith("/theme ") or val == "/theme":
+                partial_theme = val[len("/theme "):].strip().lower() if val.startswith("/theme ") else ""
+                try:
+                    available = list(getattr(self.app, "available_themes", {}).keys())
+                except Exception:
+                    available = []
+                if not available:
+                    try:
+                        from textual.theme import BUILTIN_THEMES
+                        available = list(BUILTIN_THEMES.keys())
+                    except Exception:
+                        available = ["tokyo-night", "monokai", "nord", "dracula", "gruvbox", "solarized-dark", "solarized-light", "textual-dark", "textual-light"]
+
+                matches = [t for t in available if t.lower().startswith(partial_theme)]
+                matches.sort()
+                self._suggestion_matches = matches
+                self._suggestion_index = 0
+                self._base_val = "/theme "
+                self._mode = "theme"
+                self.update_suggestions_ui()
+                return
+
+        # Handle / for general slash commands
         if val.startswith("/"):
             from commands import SLASH_COMMANDS
             matches = [cmd for cmd in SLASH_COMMANDS if cmd.startswith(val)]
@@ -1778,6 +1774,14 @@ class ChatInput(TextArea):
     def _get_suggestion_desc(self, match: str, mode: str) -> str:
         if mode == "command":
             return SLASH_COMMAND_DESCS.get(match, "Slash Command")
+        elif mode == "theme":
+            try:
+                theme_obj = getattr(self.app, "available_themes", {}).get(match)
+                if theme_obj:
+                    return f"{'Dark' if getattr(theme_obj, 'dark', True) else 'Light'} Theme"
+            except Exception:
+                pass
+            return "Textual Theme"
         elif mode == "agent":
             if match == "team":
                 return "Broadcast message to all registered agents"
@@ -2420,15 +2424,32 @@ class AIAgentView(Vertical):
         padding: 0 1;
         margin-top: 0;
     }
-    #status_bar { height: auto; min-height: 1; width: 100%; layout: grid; grid-size: 3; }
-    .status_left { color: #87cefa; }
+    #status_bar { 
+        height: auto; 
+        min-height: 1; 
+        width: 100%; 
+        layout: grid; 
+        grid-size: 3;
+        grid-columns: 1fr 1fr 1fr;
+    }
+    .status_left { 
+        width: 100%;
+        color: #87cefa; 
+        text-align: left;
+        content-align: left top;
+    }
     .status_center { 
         width: 100%;
         color: $text;
-        content-align: center middle; 
+        content-align: center top; 
         text-align: center;
     }
-    .status_right { color: #dda0dd; text-align: right; }
+    .status_right { 
+        width: 100%;
+        color: #dda0dd; 
+        text-align: right;
+        content-align: right top;
+    }
     .message_block {
         height: auto;
         width: 100%;
@@ -2483,20 +2504,6 @@ class AIAgentView(Vertical):
         default_name = self.agent_manager.get_default_agent_name()
         initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
         self.select_agent(initial_agent.name)
-
-        # Enforce Master Password Authentication before allowing any agent work
-        if not agent_core.is_master_password_set():
-            def on_setup(success):
-                if success:
-                    self.notify("Master password created. Core unlocked!", severity="information")
-                    self.check_onboarding()
-            self.call_after_refresh(lambda: self.app.push_screen(MasterPasswordModal(is_setup=True), on_setup))
-        elif not agent_core.is_core_unlocked():
-            def on_unlock(success):
-                if success:
-                    self.notify("Federaide Core unlocked successfully.", severity="information")
-                    self.check_onboarding()
-            self.call_after_refresh(lambda: self.app.push_screen(MasterPasswordModal(is_setup=False), on_unlock))
 
         if toolbox.is_keyring_locked():
             def handle_initial_unlock(result):
@@ -2776,23 +2783,60 @@ class AIAgentView(Vertical):
 
     
     def load_chat_file(self, filepath: str):
-        if not filepath: return
+        if not filepath or not os.path.exists(filepath): return
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            messages = [HistoryMessage(**m) for m in data]
-            
             base = os.path.basename(filepath).replace(".json", "")
-            agent_name = base.split("_")[-1]
-            sess_id = "_".join(base.split("_")[:-1])
+            parts = base.split("_")
+            if len(parts) < 2: return
+            sess_id = f"{parts[0]}_{parts[1]}"
+            owner_raw = "_".join(parts[2:]) if len(parts) >= 3 else parts[-1]
+            
+            matched_owner = self.agent_manager.get_agent(owner_raw) or self.agent_manager.get_agent(owner_raw.replace("_", " "))
+            owner_name = matched_owner.name if matched_owner else owner_raw.replace("_", " ")
+
+            # 1. Abort background jobs and cleanly purge the previous session memory
+            self.action_abort()
+            self.session_manager.active_sessions.clear()
+            self.agent_executors.clear()
+            with self.turn_lock:
+                self.turn_queue.clear()
+                self.paused_queue.clear()
 
             self.session_manager.current_session_id = sess_id
-            self.session_manager.active_sessions[agent_name] = messages
-            
-            if self.select_agent(agent_name):
-                self.replay_chat(messages, agent_name)
-                self.log_to_ui(f"[bold green]Restored Session: {sess_id} (agent: {agent_name})[/bold green]")
+
+            # 2. Discover and load ONLY the agents that participated in this saved session on disk
+            matching_files = glob.glob(os.path.join(self.session_manager.sessions_dir, f"{sess_id}_*.json"))
+            if not matching_files:
+                matching_files = [filepath]
+
+            for sf in matching_files:
+                sf_base = os.path.basename(sf).replace(".json", "")
+                sf_parts = sf_base.split("_")
+                sf_owner_raw = "_".join(sf_parts[2:]) if len(sf_parts) >= 3 else sf_parts[-1]
+                sf_matched = self.agent_manager.get_agent(sf_owner_raw) or self.agent_manager.get_agent(sf_owner_raw.replace("_", " "))
+                sf_agent_name = sf_matched.name if sf_matched else sf_owner_raw.replace("_", " ")
+
+                try:
+                    with open(sf, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    valid_msgs = []
+                    for m in data:
+                        if isinstance(m, dict):
+                            clean_m = {k: v for k, v in m.items() if k in HistoryMessage.__dataclass_fields__}
+                            valid_msgs.append(HistoryMessage(**clean_m))
+                    self.session_manager.active_sessions[sf_agent_name] = valid_msgs
+                except Exception:
+                    pass
+
+            # 3. Ensure the primary agent of the loaded file is selected
+            if owner_name not in self.session_manager.active_sessions and self.session_manager.active_sessions:
+                owner_name = list(self.session_manager.active_sessions.keys())[0]
+
+            self.select_agent(owner_name)
+            owner_history = self.session_manager.active_sessions.get(owner_name, [])
+            self.replay_chat(owner_history, owner_name)
+            self.log_to_ui(f"[bold green]Restored Session: {sess_id} (agent: {owner_name})[/bold green]")
+            self.update_status_bar()
         except Exception as e:
             self.log_to_ui(f"[bold red]Load Error:[/bold red] {e}")
 
@@ -3019,6 +3063,7 @@ class AIAgentView(Vertical):
         def handle_global_config(result):
             if result == "update":
                 self.log_to_ui("[bold green] Global settings successfully updated.[/bold green]")
+                self.update_status_bar()
                 
         self.app.push_screen(GlobalSettingsModal(), handle_global_config)
     
@@ -3172,9 +3217,45 @@ class AIAgentView(Vertical):
                 mode_str = "[bold tomato]SEMI-AUTO[/bold tomato]"
             else:
                 mode_str = "[bold red]FULL-AUTO[/bold red]"
-                
-            backup_str = " [bold yellow][B][/]" if self.active_agent.use_backup else ""
-            agent_info = f"[bold {self.active_agent.color}]{self.active_agent.name}{backup_str}[/] ({self.active_agent.model}) [bold magenta]({self.current_tokens})[/bold magenta]"
+
+            user_cfg = toolbox.load_global_settings()
+            raw_model_color = user_cfg.get("model_color", "#ffd700") or "#ffd700"
+
+            # Safe validation fallback for model color
+            from rich.style import Style
+            try:
+                Style.parse(raw_model_color)
+                model_color = raw_model_color
+            except Exception:
+                model_color = "#ffd700"
+
+            # Collect all active agents participating in the current session
+            active_names = list(self.session_manager.active_sessions.keys()) if hasattr(self, "session_manager") else []
+            if not active_names and hasattr(self, "active_agent") and self.active_agent:
+                active_names = [self.active_agent.name]
+            elif hasattr(self, "active_agent") and self.active_agent and self.active_agent.name not in active_names:
+                active_names.insert(0, self.active_agent.name)
+
+            agent_lines = []
+            for a_name in active_names:
+                a_cfg = self.agent_manager.get_agent(a_name)
+                if a_cfg:
+                    raw_color = a_cfg.color or "#00FFFF"
+                    try:
+                        Style.parse(raw_color)
+                        color = raw_color
+                    except Exception:
+                        color = "#00FFFF"
+
+                    model = (a_cfg.backup_model if (a_cfg.use_backup and a_cfg.backup_model) else a_cfg.model) or "unknown"
+                    agent_lines.append(
+                        f"[bold {color}]{a_cfg.name}[/bold {color}] "
+                        f"[{color}]([/][{model_color}]{model}[/{model_color}][{color}])[/]"
+                    )
+                else:
+                    agent_lines.append(f"[bold cyan]{a_name}[/bold cyan]")
+
+            agent_info = "\n".join(agent_lines)
             
             try:
                 app = self.app
@@ -3190,12 +3271,11 @@ class AIAgentView(Vertical):
     def update_prompt_label(self):
         try:
             label = self.query_one("#prompt_label", Label)
-            backup_str = " [B]" if self.active_agent.use_backup else ""
             if self.shell_mode:
                 folder = os.path.basename(os.getcwd()) or os.getcwd()
                 label.update(Text.from_markup(f"[bold red]shell@{escape(folder)} %[/bold red]"))
             else:
-                label.update(f"[bold {self.active_agent.color}]{self.active_agent.name}{backup_str}>[/bold {self.active_agent.color}]")
+                label.update(f"[bold {self.active_agent.color}]{self.active_agent.name}>[/bold {self.active_agent.color}]")
         except Exception: pass
 
     def action_cycle_arm_mode(self):
@@ -3576,45 +3656,6 @@ class AIAgentView(Vertical):
     
     def update_tokens(self):
         try:
-            if not hasattr(self, "_tiktoken_encoding"):
-                self._tiktoken_encoding = None
-            if not hasattr(self, "_tiktoken_loading"):
-                self._tiktoken_loading = False
-
-            history = self.session_manager.active_sessions.get(self.active_agent.name, [])
-            text = "".join((m.content or "") + "".join(str(out.get("content", "")) for out in (m.tool_outputs or [])) for m in history)
-            count = 0
-            
-            if HAS_TIKTOKEN:
-                if self._tiktoken_encoding is not None:
-                    try:
-                        count = len(self._tiktoken_encoding.encode(text))
-                    except Exception:
-                        count = len(text) // 4
-                else:
-                    count = len(text) // 4
-                    if not self._tiktoken_loading:
-                        self._tiktoken_loading = True
-                        
-                        def bg_load_tiktoken():
-                            try:
-                                import tiktoken
-                                self._tiktoken_encoding = tiktoken.get_encoding("cl100k_base")
-                            except Exception:
-                                pass
-                            finally:
-                                self._tiktoken_loading = False
-                                try:
-                                    self.app.call_from_thread(self.update_tokens)
-                                except Exception:
-                                    pass
-                                    
-                        import threading
-                        threading.Thread(target=bg_load_tiktoken, daemon=True).start()
-            else:
-                count = len(text) // 4
-                
-            self.current_tokens = count
             self.update_status_bar()
         except Exception:
             pass

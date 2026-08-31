@@ -244,7 +244,8 @@ class Federate(App):
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
     
     def on_mount(self):
-        self.theme = "tokyo-night"
+        settings = toolbox.load_global_settings()
+        self.theme = settings.get("theme", "tokyo-night")
         if self.initial_path:
             path = Path(self.initial_path).resolve()
             if path.exists() and path.is_dir():

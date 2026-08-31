@@ -30,6 +30,7 @@ SLASH_COMMANDS =[
     "/compress",
     "/copy",
     "/directory", "/dir",
+    "/theme",
     "/tts", "/stt", "/readback", "/speech",
     "/mictest",
     "/telegram",
@@ -461,6 +462,44 @@ def process_slash_command(command: str, agent_view):
         except AttributeError:
             agent_view.log_to_ui("[bold red]Directory picker not supported in this context.[/bold red]")
 
+    elif cmd == "/theme":
+        try:
+            available_themes = list(getattr(agent_view.app, "available_themes", {}).keys())
+        except Exception:
+            available_themes = []
+        if not available_themes:
+            try:
+                from textual.theme import BUILTIN_THEMES
+                available_themes = list(BUILTIN_THEMES.keys())
+            except Exception:
+                available_themes = ["tokyo-night", "monokai", "nord", "dracula", "gruvbox", "solarized-dark", "solarized-light", "textual-dark", "textual-light"]
+
+        if not args:
+            current_theme = getattr(agent_view.app, "theme", "unknown")
+            theme_list_str = "\n".join(f"  - {t}" for t in sorted(available_themes))
+            msg = (
+                f"[bold cyan]Current Active Theme:[/] [bold green]{current_theme}[/]\n\n"
+                f"[bold]Usage:[/] `/theme <theme_name>`\n\n"
+                f"[dim]Available Themes:[/dim]\n{theme_list_str}"
+            )
+            agent_view.log_to_ui(msg)
+            return
+
+        target_theme = args[0].strip().lower()
+        matched = next((t for t in available_themes if t.lower() == target_theme), None)
+        if matched:
+            try:
+                agent_view.app.theme = matched
+                from toolbox import load_global_settings, save_global_settings
+                settings = load_global_settings()
+                settings["theme"] = matched
+                save_global_settings(settings)
+                agent_view.log_to_ui(f"[bold green]Theme successfully set and persisted to:[/] [bold cyan]{matched}[/]")
+            except Exception as e:
+                agent_view.log_to_ui(f"[bold red]Failed to apply theme '{matched}':[/bold red] {e}")
+        else:
+            agent_view.log_to_ui(f"[bold red]Invalid theme '{args[0]}'.[/bold red] Type `/theme` to view all available themes.")
+
     elif cmd == "/readback":
         last_ai_msg = ""
         history = agent_view.session_manager.active_sessions.get(agent_view.active_agent.name,[])
@@ -634,6 +673,7 @@ def process_slash_command(command: str, agent_view):
 | `/safe` | Takes the system into `PLAN` (Read-Only) mode. |
 | `/directory` or `/dir` | Open the interactive workspace directory picker. |
 | `/tools` | List all currently available AI tools. |
+| `/theme <name>` | Set and persist the application color theme (e.g. `/theme nord`). |
 | `/init` | Initialize a base `Federate.md` project context file in the active workspace. |
 | `/compress` | Compress the current chat history to save tokens while retaining key context. |
 | `/copy` | Copy the last AI message directly to your system clipboard. |
