@@ -1,3 +1,21 @@
+"""
+    FEDERaiDE is a multi-agent multi-modal automation and orchestration harness.
+    Copyright (C) 2026  ROCK LAB PRIVATE LIMITED
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+"""
+
 import os
 import sys
 import platform
@@ -815,44 +833,44 @@ def save_file(filepath: str, content: str) -> str:
         return f"Error saving file: {e}"
 
 @tool
-def edit_file(filepath: str, start_line: int, end_line: int, new_content: str) -> str:
-    """Replaces lines from start_line to end_line (inclusive, 1-indexed) in the given file with new_content."""
+def edit_file(filepath: str, search: str, replace: str) -> str:
+    """Replaces a unique multiline block of text (`search`) with `replace` in the specified file."""
     try:
         safe_path, display_path = get_safe_path(filepath)
-        log_tool(f"Editing file:[cyan] {display_path} (lines {start_line}-{end_line})[/cyan]")
+        log_tool(f"Editing file:[cyan] {display_path}[/cyan]")
         
+        if not os.path.exists(safe_path):
+            return f"Error editing file: File '{display_path}' does not exist."
+
         with open(safe_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
+            content = f.read()
 
-        # Sanitize boundary inputs
-        start_idx = max(0, start_line - 1)
-        end_idx = max(start_idx, end_line) # Ensure end_idx >= start_idx
+        count = content.count(search)
+        if count == 0:
+            return "Error: No match found"
+        if count > 1:
+            return "Error: Multiple matches found, this is not allowed, be more specific"
 
-        # Calculate edit position in updated list
-        edit_pos = min(start_idx, len(lines))
-        
-        # Prepare replacement lines
-        replacement = [line + "\n" for line in new_content.splitlines()]
-        
-        # Apply edit
-        lines = lines[:start_idx] + replacement + lines[end_idx:]
-        
-        # Write back to disk
+        new_file_content = content.replace(search, replace, 1)
+
         with open(safe_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+            f.write(new_file_content)
 
+        lines = new_file_content.splitlines()
         total_lines = len(lines)
         if total_lines == 0:
             return f"Successfully edited {display_path} (file is now empty)."
 
-        # Calculate snippet range in the POST-EDIT file
-        snippet_start_idx = max(0, edit_pos - 20)
-        last_edited_idx = edit_pos + max(0, len(replacement) - 1)
-        snippet_end_idx = min(total_lines, last_edited_idx + 1 + 20)
+        # Calculate line position of the edit for snippet preview
+        match_idx = content.find(search)
+        start_line_idx = content[:match_idx].count('\n')
+        replacement_lines = replace.splitlines()
+        num_replaced = len(replacement_lines) if replacement_lines else 1
 
+        snippet_start_idx = max(0, start_line_idx - 10)
+        snippet_end_idx = min(total_lines, start_line_idx + num_replaced + 10)
         snippet_lines = lines[snippet_start_idx:snippet_end_idx]
-        
-        # Format snippet with rstrip('\r\n') to prevent terminal rendering bugs
+
         snippet = format_numbered_lines(
             snippet_lines,
             start_line_num=snippet_start_idx + 1,
