@@ -488,13 +488,47 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             "send_file_to_telegram": toolbox.send_file_to_telegram
         }
 
+        _SERIAL_TOOL_LOCK = threading.Lock()
+
         def make_wrapped_tool(t_obj):
             def wrapped_func(*args, **kwargs):
                 agent_name = agent_config.name
-                confirmed = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
-                if not confirmed:
-                    return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
-                return t_obj.func(*args, **kwargs)
+                
+                # Acquire serial lock so simultaneous tool calls are evaluated strictly in series
+                with _SERIAL_TOOL_LOCK:
+                    # Check for abort before evaluating
+                    if toolbox.ABORT_EVENT.is_set():
+                        return "Error: Tool execution aborted by user."
+
+                    # Pre-validate file operations before bothering the user with a confirmation popup
+                    if t_obj.name == "edit_file":
+                        from toolbox import get_safe_path
+                        fp = kwargs.get("filepath") or kwargs.get("file_path") or kwargs.get("path") or ""
+                        search = kwargs.get("search") or kwargs.get("old_str") or kwargs.get("old_content")
+                        if not fp:
+                            return "Error editing file: No filepath provided."
+                        try:
+                            safe_path, display_path = get_safe_path(fp)
+                            if not os.path.exists(safe_path):
+                                return f"Error editing file: File '{display_path}' does not exist."
+                            with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
+                                content = f.read()
+                            if search is not None:
+                                norm_content = content.replace("\r\n", "\n")
+                                norm_search = search.replace("\r\n", "\n")
+                                count = norm_content.count(norm_search)
+                                if count == 0:
+                                    return f"Error editing file: No match found for the search block in '{display_path}'. Please re-read the file with read_file to get exact indentation/content and retry."
+                                if count > 1:
+                                    return f"Error editing file: Multiple matches ({count}) found for the search block in '{display_path}'. Please provide more surrounding context."
+                        except Exception as pre_err:
+                            return f"Error pre-validating edit: {pre_err}"
+
+                    confirmed = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
+                    if not confirmed:
+                        return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
+                    return t_obj.func(*args, **kwargs)
+
             return StructuredTool(
                 name=t_obj.name,
                 description=t_obj.description,
@@ -852,8 +886,8 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                         if hasattr(msg, "tool_calls") and msg.tool_calls:
                                             for tc in msg.tool_calls:
                                                 tool_calls.append(tc)
-                                                call_text = f"[#808080]Calling Tool: {tc['name']} with args: {str(tc['args'])}[/#808080]"
-                                                agent_view.write_message_block(f"[bold {agent.color}]{agent.name} (Tool Call):[/bold {agent.color}]", call_text, agent.color, is_markdown=False)
+                                                call_text = f"Calling Tool: {tc['name']} with args: {str(tc['args'])}"
+                                                agent_view.write_message_block(f"[bold {agent.color}]{agent.name} (Tool Call):[/bold {agent.color}]", call_text, "#808080", is_markdown=False)
 
                                         if getattr(agent_view, "tts_enabled", False):
                                             agent_view.tts_manager.flush_stream(agent_name=agent.name, voice=agent.tts_voice)

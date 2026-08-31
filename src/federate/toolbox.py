@@ -81,6 +81,8 @@ DEFAULT_GLOBAL_SETTINGS = {
     "user_name": "User",
     "user_color": "#dda0dd",
     "model_color": "#ffd700",
+    "diff_addition_color": "green",
+    "diff_deletion_color": "red",
     "skipped_version": "",
     "search_pacing_delay": 65.0,
     "max_search_results": 10,
