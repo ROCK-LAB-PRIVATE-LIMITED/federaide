@@ -460,21 +460,31 @@ class UpdateModal(ModalScreen[str]):
         def _run_external_update():
             import time, os, sys, subprocess
             time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
-            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
+            print('\033[?25h\033[0m', end='', flush=True)  # Restore cursor and clear formatting
             
             if os.name == "nt" or sys.platform == "win32":
-                # Windows PowerShell execution directly in the active console
-                ps_cmd = (
+                # 1. Explicitly restore standard Windows Console Input Mode
+                try:
+                    import ctypes
+                    kernel32 = ctypes.windll.kernel32
+                    h_in = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE (-10)
+                    # 0x01E7: Standard processed input, line input, echo, and quick-edit mode
+                    kernel32.SetConsoleMode(h_in, 0x01E7)
+                except Exception:
+                    pass
+
+                # 2. Run update in PowerShell, exit PowerShell cleanly, then launch federaide via cmd.exe
+                ps_script = (
                     "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green; "
-                    "federaide"
+                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green"
                 )
+                cmd = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "{ps_script}" && cls && federaide'
                 try:
-                    os.execvp("powershell.exe", ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                    os.execvp("cmd.exe", ["cmd.exe", "/c", cmd])
                 except Exception:
-                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                    subprocess.run(["cmd.exe", "/c", cmd])
                     os._exit(0)
             else:
                 # Unix Bash execution pointing to federaide repository
