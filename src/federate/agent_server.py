@@ -1051,7 +1051,7 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
     return AgentRequestHandler
 
 # --- SERVER BOOTSTRAP ---
-def main():
+def main(cli_args=None):
     parser = argparse.ArgumentParser(description="FEDERaiDE Authenticated HTTP/HTTPS Agent Server")
     parser.add_argument("--host", default="0.0.0.0", help="Host address to bind (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8443, help="Port to listen on (default: 8443)")
@@ -1059,7 +1059,7 @@ def main():
     parser.add_argument("--password", default=None, help="Password for API authentication")
     parser.add_argument("--cert", default=None, help="Path to SSL certificate (.pem or .crt)")
     parser.add_argument("--key", default=None, help="Path to SSL private key (.key)")
-    args = parser.parse_args()
+    args = parser.parse_args(cli_args)
 
     valid_tokens = set()
     valid_passwords = set()

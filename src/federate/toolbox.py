@@ -80,6 +80,7 @@ GLOBAL_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".federate", "globa
 DEFAULT_GLOBAL_SETTINGS = {
     "user_name": "User",
     "user_color": "#dda0dd",
+    "model_color": "#ffd700",
     "skipped_version": "",
     "search_pacing_delay": 65.0,
     "max_search_results": 10,

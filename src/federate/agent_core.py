@@ -585,6 +585,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
         toolbox.thread_context.agent_name = agent.name    
         toolbox.thread_context.batch_id = batch_id
         agent_view.app.call_from_thread(agent_view._toggle_spinner, True, agent.name, agent.color)
+        agent_view.app.call_from_thread(agent_view.update_tokens)
         if getattr(agent_view, "tts_enabled", False):
             agent_view.tts_manager.start_stream(voice=agent.tts_voice, agent_name=agent.name)
         thread_id = override_thread_id or f"{agent_view.session_manager.current_session_id}_{agent.name}"

@@ -69,6 +69,7 @@ from textual.widgets import (
 )
 from textual.widgets.text_area import Selection
 from textual.message import Message
+import toolbox
 from execution import ExecutionManager, SettingsModal, DEFAULT_RUN_CONFIGS
 
 try:
@@ -620,7 +621,8 @@ class FEDERaiDE(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.theme = "monokai"
+        settings = toolbox.load_global_settings()
+        self.theme = settings.get("theme", "monokai")
         tabs_widget = self.query_one("#editor_tabs", TabbedContent).query_one(Tabs)
         tabs_widget.can_focus = False
         
