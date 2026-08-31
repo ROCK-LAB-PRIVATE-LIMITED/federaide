@@ -456,22 +456,28 @@ class UpdateModal(ModalScreen[str]):
         except Exception:
             pass
             
+        import threading
         def _run_external_update():
-            time.sleep(1.0)  
-            print('\033[?25h', end='', flush=True) 
+            import time, os, sys, subprocess
+            time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
+            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
             
             if os.name == "nt" or sys.platform == "win32":
+                # Windows PowerShell execution directly in the active console
                 ps_cmd = (
+                    "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host 'Update process finished. Restarting...'; "
-                    "Start-Sleep -Seconds 2; "
+                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green; "
                     "federaide"
                 )
-                cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
-                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                os._exit(0)
+                try:
+                    os.execvp("powershell.exe", ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                except Exception:
+                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                    os._exit(0)
             else:
+                # Unix Bash execution pointing to federaide repository
                 sh_cmd = (
                     "echo -e '\\n\\033[1;36m[ FEDERaiDE Updater ]\\033[0m Starting system update...\\n'; "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.sh | bash) || "
@@ -480,6 +486,7 @@ class UpdateModal(ModalScreen[str]):
                 )
                 os.execvp("bash", ["bash", "-c", sh_cmd])
 
+        # Run in a non-daemon thread so it survives the main thread exit long enough to trigger execvp/Popen
         threading.Thread(target=_run_external_update, daemon=False).start()
         self.app.exit()
 
