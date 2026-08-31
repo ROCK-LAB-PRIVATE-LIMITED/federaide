@@ -24,11 +24,6 @@ import subprocess
 import requests
 import fnmatch
 import re
-import json
-import time
-from datetime import datetime
-from pathlib import Path
-
 from markdownify import markdownify as md
 
 from textual.app import ComposeResult
@@ -40,6 +35,60 @@ from textual import work, on
 from textual.message import Message
 from textual import events
 
+from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands
+
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk, ToolMessage, messages_to_dict, messages_from_dict
+# --- GEMINI THOUGHT SIGNATURE MONKEY-PATCH FOR OPENAI COMPATIBILITY ---
+try:
+    import langchain_openai.chat_models.base as langchain_openai_base
+    
+    _orig_convert_message_to_dict = langchain_openai_base._convert_message_to_dict
+
+    def _patched_convert_message_to_dict(message, *args, **kwargs):
+        msg_dict = _orig_convert_message_to_dict(message, *args, **kwargs)
+        
+        # 1. Sanitize Tool Response Messages (function_response name cannot be empty)
+        if msg_dict.get("role") == "tool" and not msg_dict.get("name"):
+            msg_dict["name"] = "unknown_tool"
+            
+        # 2. Sanitize Assistant Tool Call Messages (function_call name cannot be empty)
+        elif msg_dict.get("role") == "assistant" and msg_dict.get("tool_calls"):
+            for tc in msg_dict["tool_calls"]:
+                func = tc.get("function")
+                if func and not func.get("name"):
+                    func["name"] = "unknown_tool"
+
+        if isinstance(message, AIMessage) or msg_dict.get("role") == "assistant":
+            tool_calls = msg_dict.get("tool_calls")
+            if tool_calls:
+                sig_map = {}
+                raw_tool_calls = message.additional_kwargs.get("tool_calls", [])
+                for rtc in raw_tool_calls:
+                    rtc_id = rtc.get("id")
+                    extra = rtc.get("extra_content") or {}
+                    google = extra.get("google") or {}
+                    sig = google.get("thought_signature")
+                    if sig and rtc_id:
+                        sig_map[rtc_id] = sig
+                
+                for tc in tool_calls:
+                    tc_id = tc.get("id")
+                    sig = sig_map.get(tc_id) or "skip_thought_signature_validator"
+                    tc["extra_content"] = {
+                        "google": {
+                            "thought_signature": sig
+                        }
+                    }
+        return msg_dict
+
+    langchain_openai_base._convert_message_to_dict = _patched_convert_message_to_dict
+except Exception:
+    pass
+# ----------------------------------------------------------------------------
+from langchain_core.tools import tool
+from langgraph.prebuilt import create_react_agent
+
 from rich.markup import escape
 from rich.markdown import Markdown
 from rich.text import Text
@@ -48,21 +97,61 @@ from rich.spinner import Spinner
 
 from typing import Any, List, Dict, Optional
 
+from pathlib import Path
+
+import json
+import glob
+from datetime import datetime
+
 try:
     import tiktoken
     HAS_TIKTOKEN = True
 except ImportError:
     HAS_TIKTOKEN = False
 
+from toolbox import (
+    get_storage_path,
+    load_global_settings,
+    save_global_settings,
+    read_file,
+    save_file, 
+    edit_file, 
+    list_files, 
+    run_terminal_command, 
+    fetch_url, 
+    search_web,
+    perform_research,
+    render_pdf,
+    manage_agenda,
+    get_user_clarification,
+    search_episodic_memory,
+    retrieve_episodic_memory,
+    get_toolresult,
+    set_toolresult,
+    load_dynamic_tools,
+    prepare_active_skill,
+    finalize_active_skill,
+    manage_active_skill,
+    fix_active_skill,
+    take_screenshot,
+    click_at_current_location,
+    move_cursor_absolute,
+    move_cursor_relative,
+    send_scroll,
+    inject_keyboard_input,
+    send_file_to_telegram
+)
+from toolbox import shared_memory, update_core_memory, save_skill, read_skill, distill_journey, mark_quagmire, delete_passive_skill, list_skills, is_keyring_locked, unlock_keyring, get_locked_keyring
+import time
 import toolbox
-import agent_core
-from commands import ChatSuggester, process_shell_command, process_slash_command, handle_ampersand_commands
+from subagents import dispatch_coding_subagent
 
 from audio_handler import TTSManager, STTManager, AudioConfigModal
+
+_BACKSTORY_LOCK = threading.Lock()
 from chatgpt_auth import is_chatgpt_oauth_agent, has_valid_chatgpt_token, ChatGPTAuthModal
 from telegram_handler import TelegramManager
 from orchestration import AgentManager, SessionManager, AgentConfig, HistoryMessage, ScheduleManager
-
 
 def parse_resume_index(argv=None) -> Optional[int]:
     if argv is None:
@@ -82,47 +171,26 @@ def parse_resume_index(argv=None) -> Optional[int]:
         i += 1
     return None
 
-def get_installed_version() -> str:
-    try:
-        import importlib.metadata
-        return importlib.metadata.version("federaide")
-    except Exception:
-        try:
-            import federate
-            return getattr(federate, "__version__", "1.2.9")
-        except Exception:
-            return "1.2.9"
 
-SLASH_COMMAND_DESCS = {
-    "/tools": "List status of all available AI tools",
-    "/update": "Check for software updates and view release notes",
-    "/version": "Show currently installed Federate version",
-    "/arm": "Toggle ARM/SAFE (Execute/Plan) mode",
-    "/config": "Open active agent configuration",
-    "/safe": "Lock system to SAFE (Plan, read-only) mode",
-    "/init": "Create Federate.md project instructions file",
-    "/compress": "Compress chat context to save tokens",
-    "/copy": "Copy last AI response to system clipboard",
-    "/directory": "Open interactive directory picker",
-    "/dir": "Open interactive directory picker",
-    "/tts": "Toggle Text-to-Speech (TTS) voice output",
-    "/stt": "Toggle Speech-to-Text (STT) hotword listening",
-    "/readback": "Read back the last AI response with TTS",
-    "/speech": "Open Audio/Voice configuration modal",
-    "/telegram": "Configure Telegram Bot integration",
-    "/select_agent": "Switch the active host agent",
-    "/clear_all": "Wipe memory and history of all agents",
-    "/skills": "List all passive and active skills for the active agent",
-    "/settings": "Open global harness settings modal",
-    "/help": "Show this detailed help menu",
-    "/backstory": "Force update and translate all agent backstories",
-    "/consolidate": "Consolidate, summarize, and prune core memorylets",
-    "/schedule": "Open the automated daily task scheduler menu",
-    "/dpi": "Set the image DPI resolution for generated PDF documents"
-}
+def get_session_name_map() -> dict:
+    path = os.path.join(toolbox.FEDERATE_DIR, "session_names.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_session_name_map(m: dict):
+    path = os.path.join(toolbox.FEDERATE_DIR, "session_names.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(m, f, indent=4)
+    except Exception:
+        pass
 
 # --- MODAL SCREENS ---
-
 class ToolConfirmationModal(ModalScreen[str]):
     DEFAULT_CSS = """
     ToolConfirmationModal { align: center middle; background: $background 60%; }
@@ -235,8 +303,8 @@ class ChatLoadModal(ModalScreen[str]):
             self.query_one("#cancel").focus()
 
     def compose(self) -> ComposeResult:
-        files = sorted(glob.glob(toolbox.get_storage_path("sessions", "*.json")), key=os.path.getmtime, reverse=True)
-        name_map = agent_core.get_session_name_map()
+        files = sorted(glob.glob(get_storage_path("sessions", "*.json")), key=os.path.getmtime, reverse=True)
+        name_map = get_session_name_map()
         files = [
             f for f in files 
             if (parts := os.path.basename(f).replace(".json", "").split("_")) 
@@ -311,57 +379,6 @@ class ChatManagerModal(ModalScreen[str]):
     @on(Button.Pressed)
     def handle_click(self, event: Button.Pressed): self.dismiss(event.button.id)
 
-class MasterPasswordModal(ModalScreen[bool]):
-    DEFAULT_CSS = """
-    MasterPasswordModal { align: center middle; background: $background 60%; }
-    #master_auth_dialog { width: 60; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
-    #master_auth_dialog .pane_title { background: $primary; color: $text; padding: 0 1; margin-bottom: 1; text-style: bold; width: 100%; text-align: center; }
-    #master_auth_dialog Input { margin-bottom: 1; border: round $accent; }
-    .auth_err_msg { color: $error; margin-bottom: 1; text-style: bold; }
-    .modal_buttons { layout: horizontal; height: auto; margin-top: 1; align: right middle; }
-    .modal_buttons Button { margin-left: 1; }
-    """
-
-    def __init__(self, is_setup: bool = False, **kwargs):
-        super().__init__(**kwargs)
-        self.is_setup = is_setup
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="master_auth_dialog"):
-            title = "Set Master Password" if self.is_setup else "Federaide Core Locked"
-            yield Label(f" {title}", classes="pane_title")
-            desc = "Create a Master Password to lock and protect Federaide Core:" if self.is_setup else "Enter your Master Password to unlock Federaide Core:"
-            yield Label(desc)
-            yield Input(placeholder="Master Password", id="pwd_input", password=True)
-            yield Label("", id="pwd_error", classes="auth_err_msg")
-            with Horizontal(classes="modal_buttons"):
-                btn_text = "Set & Unlock" if self.is_setup else "Unlock"
-                yield Button(btn_text, id="submit_pwd_btn", variant="success")
-                yield Button("Exit", id="exit_app_btn", variant="error")
-
-    def on_mount(self):
-        self.query_one("#pwd_input").focus()
-
-    @on(Input.Submitted, "#pwd_input")
-    @on(Button.Pressed, "#submit_pwd_btn")
-    def submit_pwd(self):
-        pwd = self.query_one("#pwd_input", Input).value.strip()
-        if not pwd or len(pwd) < 4:
-            self.query_one("#pwd_error", Label).update("Password must be at least 4 characters.")
-            return
-
-        if self.is_setup:
-            agent_core.set_master_password(pwd)
-            self.dismiss(True)
-        else:
-            if agent_core.unlock_core(pwd):
-                self.dismiss(True)
-            else:
-                self.query_one("#pwd_error", Label).update("Incorrect password. Please try again.")
-
-    @on(Button.Pressed, "#exit_app_btn")
-    def exit_app(self):
-        self.app.exit()
 
 class KeyringUnlockModal(ModalScreen[tuple]):
     DEFAULT_CSS = """
@@ -507,22 +524,28 @@ class UpdateModal(ModalScreen[str]):
         except Exception:
             pass
             
+        import threading
         def _run_external_update():
-            time.sleep(1.0)  
-            print('\033[?25h', end='', flush=True) 
+            import time, os, sys, subprocess
+            time.sleep(1.0)  # Give Textual 1s to fully tear down the TUI and restore the terminal
+            print('\033[?25h', end='', flush=True)  # Ensure cursor is visible
             
             if os.name == "nt" or sys.platform == "win32":
+                # Windows PowerShell execution directly in the active console
                 ps_cmd = (
+                    "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host 'Update process finished. Restarting...'; "
-                    "Start-Sleep -Seconds 2; "
+                    "Write-Host '`nUpdate process finished. Restarting...`n' -ForegroundColor Green; "
                     "federaide"
                 )
-                cmd = f'cmd.exe /c "ping 127.0.0.1 -n 2 > nul & powershell.exe -ExecutionPolicy Bypass -Command \"{ps_cmd}\"'
-                subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                os._exit(0)
+                try:
+                    os.execvp("powershell.exe", ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                except Exception:
+                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd])
+                    os._exit(0)
             else:
+                # Unix Bash execution pointing to federaide repository
                 sh_cmd = (
                     "echo -e '\\n\\033[1;36m[ FEDERaiDE Updater ]\\033[0m Starting system update...\\n'; "
                     "(curl -LsSf https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.sh | bash) || "
@@ -531,6 +554,7 @@ class UpdateModal(ModalScreen[str]):
                 )
                 os.execvp("bash", ["bash", "-c", sh_cmd])
 
+        # Run in a non-daemon thread so it survives the main thread exit long enough to trigger execvp/Popen
         threading.Thread(target=_run_external_update, daemon=False).start()
         self.app.exit()
 
@@ -706,7 +730,7 @@ class GlobalSettingsModal(ModalScreen[str]):
                 yield Button("Cancel", id="cancel_global_btn", variant="error")
 
     def on_mount(self):
-        config = toolbox.load_global_settings()
+        config = load_global_settings()
         self.query_one("#user_name", Input).value = str(config.get("user_name", "User"))
         self.query_one("#user_color", Input).value = str(config.get("user_color", "#dda0dd"))
         self.query_one("#search_pacing_delay", Input).value = str(config.get("search_pacing_delay", 65.0))
@@ -736,16 +760,16 @@ class GlobalSettingsModal(ModalScreen[str]):
         with self.prevent(Checkbox.Changed):
             self.query_one("#research_image_system_enabled", Checkbox).value = config.get("research_image_system_enabled", False)
             self.query_one("#research_images_as_links", Checkbox).value = not config.get("research_images_as_links", False)
-            self.query_one("#autoupdate_on_launch", Checkbox).value = config.get("autoupdate_on_launch", False)
+            self.query_one("#autoupdate_on_launch", Checkbox).value = config.get("autoupdate_on_launch", True)
 
     @on(Checkbox.Changed, "#research_images_as_links")
     def on_as_links_changed(self, event: Checkbox.Changed):
-        if event.value:  
+        if event.value:  # If checked (meaning Embed images directly is enabled)
             self.check_and_trigger_warning("research_images_as_links")
 
     @on(Checkbox.Changed, "#research_image_system_enabled")
     def on_system_enabled_changed(self, event: Checkbox.Changed):
-        if event.value:  
+        if event.value:  # If checked (meaning Image subsystem master switch is enabled)
             self.check_and_trigger_warning("research_image_system_enabled")
 
     def check_and_trigger_warning(self, changed_checkbox_id: str):
@@ -813,6 +837,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         try: keep_verbatim = int(self.query_one("#keep_verbatim_count", Input).value.strip())
         except ValueError: keep_verbatim = 1
 
+        # Enforce that at least 1 message is kept verbatim
         if keep_verbatim < 1:
             self.notify("Invalid: Verbatim Messages to Keep must be at least 1.", severity="error")
             return
@@ -860,8 +885,10 @@ class GlobalSettingsModal(ModalScreen[str]):
             "research_image_retries": img_retries,
             "research_images_as_links": images_as_links
         }
-        toolbox.save_global_settings(config)
+        save_global_settings(config)
         
+        # Dynamically sync the baseline variables in toolbox.py and the active view
+        import toolbox
         toolbox._DYNAMIC_PACING_DELAY = pacing
         
         try:
@@ -875,6 +902,8 @@ class GlobalSettingsModal(ModalScreen[str]):
     @on(Button.Pressed, "#cancel_global_btn")
     def cancel_btn(self):
         self.dismiss("cancel")
+
+
 
 VOICE_OPTIONS = [
     # American English
@@ -1038,9 +1067,11 @@ class OnboardingModal(ModalScreen[dict]):
 
     @on(Button.Pressed, "#onboard_chatgpt_auth_btn")
     def on_onboard_chatgpt_auth(self):
+        from chatgpt_auth import ChatGPTAuthModal
         def on_auth_done(success: bool):
             if success:
                 self.query_one("#onboard_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.query_one("#onboard_api_key", Input).value = "CHATGPT_OAUTH_ACTIVE"
                 self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
         self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
@@ -1232,19 +1263,20 @@ class ConfigModal(ModalScreen[str]):
                     yield Button("Authenticate with OAuth", id="ai_chatgpt_auth_btn", variant="primary")
                     yield Label("Agent Color (Hex):")
                     yield Input(value=self.agent_config.color, id="ai_color")
-                    yield Label("TTS Voice:") 
+                    yield Label("TTS Voice:") # <-- NEW
                     
+                    # Prepare list options dynamically based on the current assigned voice
                     current_voice = self.agent_config.tts_voice or "af_sarah"
                     voice_options = VOICE_OPTIONS.copy()
                     if not any(opt[1] == current_voice for opt in voice_options):
                         voice_options.insert(0, (f"{current_voice} (Custom)", current_voice))
                         
-                    yield Select(voice_options, value=current_voice, id="ai_tts_voice", allow_blank=False) 
-                    yield Label("Pronouns:") 
-                    yield Select([("He/Him", "he/him"), ("She/Her", "she/her"), ("Neither", "neither")], value=self.agent_config.pronouns or "neither", id="ai_pronouns", allow_blank=False) 
+                    yield Select(voice_options, value=current_voice, id="ai_tts_voice", allow_blank=False) # <-- NEW
+                    yield Label("Pronouns:") # <-- NEW
+                    yield Select([("He/Him", "he/him"), ("She/Her", "she/her"), ("Neither", "neither")], value=self.agent_config.pronouns or "neither", id="ai_pronouns", allow_blank=False) # <-- NEW
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
-                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools) 
+                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools) # <-- NEW
 
                     yield Label("Agent Abilities", classes="section_label")
                     yield Button("Manage Agent Abilities...", id="ai_abilities_btn", variant="primary")
@@ -1293,9 +1325,11 @@ class ConfigModal(ModalScreen[str]):
 
     @on(Button.Pressed, "#ai_chatgpt_auth_btn")
     def on_config_chatgpt_auth(self):
+        from chatgpt_auth import ChatGPTAuthModal
         def on_auth_done(success: bool):
             if success:
                 self.query_one("#ai_base_url", Input).value = "https://chatgpt.com/backend-api/codex"
+                self.query_one("#ai_api_key", Input).value = "CHATGPT_OAUTH_ACTIVE"
                 self.notify("ChatGPT Subscription authenticated successfully!", severity="information")
         self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
 
@@ -1333,8 +1367,9 @@ class ConfigModal(ModalScreen[str]):
             temp = 1.0
 
         preset_val = self.query_one("#ai_base_url_preset", Select).value
+        base_url_val = self.query_one("#ai_base_url", Input).value.strip()
         api_key_val = self.query_one("#ai_api_key", Input).value.strip()
-        if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key_val:
+        if (preset_val == "https://chatgpt.com/backend-api/codex" or base_url_val == "https://chatgpt.com/backend-api/codex") and not api_key_val:
             api_key_val = "CHATGPT_OAUTH_ACTIVE"
 
         return {
@@ -1364,12 +1399,14 @@ class ConfigModal(ModalScreen[str]):
             self.notify("Agent name cannot be empty.", severity="error")
             return
 
+        # 1. Prevent duplicate agent names
         existing_names = [a.lower() for a in self.agent_manager.agents.keys()]
         if is_new or fields["name"].lower() != self.agent_config.name.lower():
             if fields["name"].lower() in existing_names:
                 self.notify(f"An agent named '{fields['name']}' already exists.", severity="error")
                 return
 
+        # 2. Accidental Overwrite Protection (both name and backstory changed on 'Update Active')
         if not is_new and fields["name"] != self.agent_config.name and fields["backstory"] != self.agent_config.backstory:
             is_new = True
 
@@ -1378,7 +1415,7 @@ class ConfigModal(ModalScreen[str]):
                 return
             action, password = result
             if action == "unlock" and password:
-                if toolbox.unlock_keyring(password):
+                if unlock_keyring(password):
                     self.notify("Keyring unlocked. Saving...", severity="information")
                     self._apply_save(is_new)
                 else:
@@ -1400,29 +1437,50 @@ class ConfigModal(ModalScreen[str]):
                 except Exception as e:
                     self.notify(f"Reset failed: {e}", severity="error")
 
-        locked_keyring = toolbox.get_locked_keyring()
+        locked_keyring = get_locked_keyring()
         if locked_keyring:
             self.app.push_screen(KeyringUnlockModal(), handle_unlock)
             return
 
-        clean_fields = {k:v for k,v in fields.items() if k not in ["api_key", "backup_api_key"]}
-        new_config = AgentConfig(**clean_fields)
+        new_config = AgentConfig(
+            name=fields["name"],
+            backstory=fields["backstory"],
+            model=fields["model"],
+            base_url=fields["base_url"],
+            is_capable_vision=fields["is_capable_vision"],
+            color=fields["color"],
+            backup_model=fields["backup_model"],
+            backup_base_url=fields["backup_base_url"],
+            use_backup=fields["use_backup"],
+            enabled_tools=fields["enabled_tools"],
+            disabled_tools=fields["disabled_tools"],
+            tts_voice=fields["tts_voice"],
+            pronouns=fields["pronouns"],
+            disable_all_tools=fields["disable_all_tools"],
+            reasoning_effort=fields["reasoning_effort"],
+            temperature=fields["temperature"]
+        )
 
+        # Save keys to keyring
         self._update_env(new_config.name, fields["api_key"], fields["backup_api_key"])
 
+        # Disable buttons and show loading status in modal
         for btn in self.query("#actions_container Button"):
             btn.disabled = True
         self.query_one("#ai_modal_status", Label).update(f"[bold yellow] Verifying API & backstory for '{new_config.name}'...[/bold yellow]")
 
+        # Delegate validation and saving to agent_view
         agent_view = self.app.query_one("AIAgentView")
         agent_view.process_agent_save(new_config, is_new, self.agent_config.name, modal=self)
 
     def _update_env(self, agent_name: str, primary_key: str, backup_key: str):
+        # We keep the function name '_update_env' to avoid changing other callers
         import keyring
         primary_user = f"agent_key_{agent_name.lower().replace(' ', '_')}"
         backup_user = f"agent_backup_key_{agent_name.lower().replace(' ', '_')}"
 
         try:
+            # 1. Update Primary Credential
             if primary_key:
                 keyring.set_password("Federate", primary_user, primary_key)
                 os.environ[f"AGENT_KEY_{agent_name.upper().replace(' ', '_')}"] = primary_key
@@ -1430,6 +1488,7 @@ class ConfigModal(ModalScreen[str]):
                 try: keyring.delete_password("Federate", primary_user)
                 except Exception: pass
 
+            # 2. Update Backup Credential
             if backup_key:
                 keyring.set_password("Federate", backup_user, backup_key)
                 os.environ[f"AGENT_BACKUP_KEY_{agent_name.upper().replace(' ', '_')}"] = backup_key
@@ -1438,6 +1497,7 @@ class ConfigModal(ModalScreen[str]):
                 except Exception: pass
 
         except Exception as e:
+            # Gracefully fail and natively notify the user that storage was rejected
             self.notify(
                 f"Storage Error: Could not save credentials securely to OS Keyring.\nDetail: {e}",
                 severity="error", 
@@ -1459,6 +1519,46 @@ class ConfigModal(ModalScreen[str]):
     @on(Button.Pressed, "#ai_cancel_btn")
     def cancel_btn(self):
         self.dismiss(("cancel", None))
+
+# --- TEXTUAL AI UI WIDGET ---
+
+# Mapping of slash command descriptions for the table
+def get_installed_version() -> str:
+    try:
+        import importlib.metadata
+        return importlib.metadata.version("federaide")
+    except Exception:
+        try:
+            import federate
+            return getattr(federate, "__version__", "0.9.27")
+        except Exception:
+            return "0.9.27"
+
+SLASH_COMMAND_DESCS = {
+    "/tools": "List status of all available AI tools",
+    "/update": "Check for software updates and view release notes",
+    "/version": "Show currently installed Federate version",
+    "/arm": "Toggle ARM/SAFE (Execute/Plan) mode",
+    "/config": "Open active agent configuration",
+    "/safe": "Lock system to SAFE (Plan, read-only) mode",
+    "/init": "Create Federate.md project instructions file",
+    "/compress": "Compress chat context to save tokens",
+    "/copy": "Copy last AI response to system clipboard",
+    "/directory": "Open interactive directory picker",
+    "/dir": "Open interactive directory picker",
+    "/tts": "Toggle Text-to-Speech (TTS) voice output",
+    "/stt": "Toggle Speech-to-Text (STT) hotword listening",
+    "/readback": "Read back the last AI response with TTS",
+    "/speech": "Open Audio/Voice configuration modal",
+    "/telegram": "Configure Telegram Bot integration",
+    "/select_agent": "Switch the active host agent",
+    "/clear_all": "Wipe memory and history of all agents",
+    "/skills": "List all passive and active skills for the active agent",
+    "/settings": "Open global harness settings modal",
+    "/help": "Show this detailed help menu",
+    "/backstory": "Force update and translate all agent backstories",
+    "/consolidate": "Consolidate, summarize, and prune core memorylets"
+}
 
 class ScheduleModal(ModalScreen[None]):
     DEFAULT_CSS = """
@@ -1486,6 +1586,7 @@ class ScheduleModal(ModalScreen[None]):
         self.agent_view = agent_view
         
     def _get_next_run(self, task):
+        from datetime import datetime, timedelta
         import calendar
         now = datetime.now()
         try:
@@ -1496,7 +1597,6 @@ class ScheduleModal(ModalScreen[None]):
             return None
 
         repeat_mode = getattr(task, "repeat", "daily")
-        from datetime import timedelta
         while candidate <= now or (getattr(task, "last_run_date", "").startswith(now.strftime("%Y-%m-%d")) and candidate.date() <= now.date()):
             if repeat_mode == "daily":
                 candidate += timedelta(days=1)
@@ -1529,7 +1629,6 @@ class ScheduleModal(ModalScreen[None]):
                         yield Input(placeholder="YYYY-MM-DD (e.g., 2026-07-16, optional)", id="new_date")
                         repeats = [("Daily", "daily"), ("Weekly", "weekly"), ("Monthly", "monthly"), ("Annually", "annually")]
                         yield Select(repeats, value="daily", id="new_repeat", allow_blank=False)
-                        
                     yield TextArea(id="new_prompt", show_line_numbers=False)
                 
                 yield Label("Saved Tasks:", classes="section_label")
@@ -1574,17 +1673,22 @@ class ScheduleModal(ModalScreen[None]):
             repeat = str(repeat_val) if repeat_val != Select.BLANK else "daily"
             
             if agent and Select.BLANK != agent and time_str and prompt:
+                # Strict regex validation for 24-hour HH:MM format (00:00 to 23:59)
+                import re
                 if not re.match(r"^(?:[01]\d|2[0-3]):[0-5]\d$", time_str):
                     self.notify("Time must be a valid 24-hour time in HH:MM format (e.g., 14:30)", severity="error")
                     return
                 
+                # Strict calendar validation for YYYY-MM-DD if provided
                 if date_str:
                     try:
+                        from datetime import datetime
                         datetime.strptime(date_str, "%Y-%m-%d")
                     except ValueError:
                         self.notify("Date must be a valid calendar date in YYYY-MM-DD format (e.g., 2026-07-16)", severity="error")
                         return
                 
+                # Sanitize the prompt input by stripping leading/trailing whitespace
                 prompt = prompt.strip()
                 
                 self.agent_view.schedule_manager.add_task(agent, time_str, prompt, date_str=date_str, repeat=repeat)
@@ -1593,20 +1697,20 @@ class ScheduleModal(ModalScreen[None]):
                 self.query_one("#new_prompt", TextArea).text = ""
                 self.refresh_list()
                 self.notify("Task added successfully.", severity="information")
-                
         elif btn_id and btn_id.startswith("del_"):
             task_id = btn_id[4:]
             self.agent_view.schedule_manager.delete_task(task_id)
             self.refresh_list()
-            
         elif btn_id and btn_id.startswith("edit_"):
             task_id = btn_id[5:]
             task = next((t for t in self.agent_view.schedule_manager.tasks if t.id == task_id), None)
             if task:
+                # 1. Populate the input widgets with the existing properties
                 self.query_one("#new_agent", Select).value = task.agent_name
                 self.query_one("#new_time", Input).value = task.time_str
                 self.query_one("#new_prompt", TextArea).text = task.prompt
                 
+                # 2. Delete the old task and update the list
                 self.agent_view.schedule_manager.delete_task(task_id)
                 self.refresh_list()
                 self.notify("Loaded task into inputs for modification.", severity="information")
@@ -1661,6 +1765,8 @@ class ScheduledTaskPromptModal(ModalScreen[str]):
         self.dismiss(event.button.id)
 
 class ChatInput(TextArea):
+    """Custom Multiline TextArea that supports cycling suggestions and Enter-to-submit."""
+    
     BINDINGS = [
         Binding("ctrl+a", "abort", "Abort", show=True, priority=True),
     ]
@@ -1669,6 +1775,7 @@ class ChatInput(TextArea):
         pass
 
     class Submitted(Message):
+        """Internal message to trigger chat submission."""
         def __init__(self, input_widget, value: str):
             super().__init__()
             self.input = input_widget
@@ -1678,6 +1785,7 @@ class ChatInput(TextArea):
         self.post_message(self.AbortRequest())
 
     def __init__(self, *args, **kwargs):
+        # TextArea doesn't use the suggester or placeholder kwargs, so we pop them
         kwargs.pop("suggester", None)
         kwargs.pop("placeholder", None)
         super().__init__(*args, **kwargs)
@@ -1688,32 +1796,38 @@ class ChatInput(TextArea):
         self._mode = "file"
 
     async def _on_message(self, message: Message) -> None:
+        """Low-level message listener to reliably capture changes on self."""
         await super()._on_message(message)
         if message.__class__.__name__ == "Changed":
             self.handle_text_changed()
 
     def on_key(self, event: events.Key) -> None:
+        """Raw keyboard intercept to override Textual's stubborn TextArea defaults."""
+        
+        # 1. If we have active suggestions, hijack Up/Down/Right arrows completely
         if self._suggestion_matches:
             if event.key == "up":
                 event.prevent_default()
-                event.stop() 
+                event.stop() # Stops the cursor_up action from firing
                 self.cycle_suggestions(-1)
                 return
             elif event.key == "down":
                 event.prevent_default()
-                event.stop() 
+                event.stop() # Stops the cursor_down action from firing
                 self.cycle_suggestions(1)
                 return
             elif event.key == "right":
                 event.prevent_default()
-                event.stop() 
+                event.stop() # Stops cursor movement after inserting
                 self.commit_suggestion()
                 return
         
+        # 2. Check for Newline combos FIRST
         if event.key in ("shift+enter", "alt+enter", "ctrl+j"):
             event.prevent_default()
             self.insert("\n")
             
+        # 3. Check for standard Enter LAST to send the message
         elif event.key == "enter":
             event.prevent_default()
             event.stop()
@@ -1721,8 +1835,10 @@ class ChatInput(TextArea):
             self.post_message(self.Submitted(self, val))
 
     def handle_text_changed(self) -> None:
+        """Processes text changes to find autocompletion matches."""
         val = self.text
         
+        # Handle / for slash commands
         if val.startswith("/"):
             from commands import SLASH_COMMANDS
             matches = [cmd for cmd in SLASH_COMMANDS if cmd.startswith(val)]
@@ -1734,6 +1850,7 @@ class ChatInput(TextArea):
             self.update_suggestions_ui()
             return
 
+        # Handle & for files
         last_amp = val.rfind("&")
         if last_amp != -1:
             partial_path = val[last_amp + 1:]
@@ -1754,7 +1871,7 @@ class ChatInput(TextArea):
                 self._mode = "file"
                 self.update_suggestions_ui()
                 return
-                
+        # Handle @ for agents
         last_at = val.rfind("@")
         if last_at != -1:
             partial_agent = val[last_at + 1:]
@@ -1776,6 +1893,7 @@ class ChatInput(TextArea):
         self.update_suggestions_ui()
 
     def _get_suggestion_desc(self, match: str, mode: str) -> str:
+        """Retrieves helpful contextual info for each completion choice."""
         if mode == "command":
             return SLASH_COMMAND_DESCS.get(match, "Slash Command")
         elif mode == "agent":
@@ -1808,11 +1926,13 @@ class ChatInput(TextArea):
         return ""
 
     def update_suggestions_ui(self) -> None:
+        """Visual table displaying scrollable suggestions below the input widget."""
         try:
             preview = self.app.query_one("#ai_suggestions_preview")
             if self._suggestion_matches:
                 preview.styles.display = "block"
                 
+                # Sliding 4-item scroll window centered around selection
                 total = len(self._suggestion_matches)
                 curr = self._suggestion_index
                 if total <= 4:
@@ -1849,6 +1969,7 @@ class ChatInput(TextArea):
         self.update_suggestions_ui()
 
     def commit_suggestion(self) -> None:
+        """Commits the highlighted suggestion when pressing the Right Arrow."""
         if not self._suggestion_matches:
             return
             
@@ -1871,23 +1992,26 @@ class ChatInput(TextArea):
         
         with self.prevent(TextArea.Changed):
             self.text = self._base_val + suggestion
+            # Move cursor to end of the newly completed text
             lines = self.text.split("\n")
             self.cursor_location = (len(lines)-1, len(lines[-1]))
             
+        # Wipe selection window on insert
         self._suggestion_matches = []
         self.update_suggestions_ui()
-
 
 _BANNER_STATS = None
 _STATS_LOADING = False
 _WELCOME_STATS_LOCK = threading.Lock()
 
 def invalidate_stats_cache():
+    """Wipes the cached banner statistics to force a background recalculation next time."""
     global _BANNER_STATS
     with _WELCOME_STATS_LOCK:
         _BANNER_STATS = None
 
 def calculate_stats_raw(agent_view) -> dict:
+    """Internal helper that performs the heavy session analysis and token estimation."""
     from datetime import datetime, timedelta
     import glob
     import os
@@ -1902,13 +2026,15 @@ def calculate_stats_raw(agent_view) -> dict:
                 pass
         return len(text) // 4
 
+    # 1. Determine last calendar month
     now = datetime.now()
     first_day_current_month = now.replace(day=1)
     last_day_last_month = first_day_current_month - timedelta(days=1)
     target_year = last_day_last_month.year
     target_month = last_day_last_month.month
     
-    sessions_dir = toolbox.get_storage_path("sessions")
+    # 2. Scan sessions directory
+    sessions_dir = get_storage_path("sessions")
     if not os.path.exists(sessions_dir):
         os.makedirs(sessions_dir, exist_ok=True)
         
@@ -1968,6 +2094,7 @@ def calculate_stats_raw(agent_view) -> dict:
             
             msg_tokens = estimate_tokens(content)
             
+            # Count tools called and inputs/outputs in target month
             if is_target_month:
                 total_conversations_target_month.add(session_id)
                 t_calls = msg.get("tool_calls") or []
@@ -1997,6 +2124,7 @@ def calculate_stats_raw(agent_view) -> dict:
                             if m != matched_agent:
                                 agent_collabs[matched_agent].add(m)
 
+    # Fallback logic if last calendar month had no activity
     used_month_name = last_day_last_month.strftime("%B")
     if not agent_input_tokens and not agent_output_tokens:
         target_year = now.year
@@ -2118,6 +2246,7 @@ def calculate_stats_raw(agent_view) -> dict:
     }
 
 def trigger_stats_loading(agent_view):
+    """Triggers background stats collection thread to avoid freezing the TUI."""
     global _BANNER_STATS, _STATS_LOADING
     with _WELCOME_STATS_LOCK:
         if _STATS_LOADING:
@@ -2130,6 +2259,7 @@ def trigger_stats_loading(agent_view):
             stats = calculate_stats_raw(agent_view)
             _BANNER_STATS = stats
             
+            # Post-completion UI update callback on TUI main event loop
             def update_ui():
                 try:
                     banners = agent_view.query(".welcome_banner_box")
@@ -2153,6 +2283,7 @@ def trigger_stats_loading(agent_view):
 def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable: bool = False):
     global _BANNER_STATS, _STATS_LOADING
     
+    # 1. Return a non-blocking loading placeholder if statistical data is not yet available
     if _BANNER_STATS is None:
         if not _STATS_LOADING:
             trigger_stats_loading(agent_view)
@@ -2188,6 +2319,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
             return renderable_group
         return Static(renderable_group, classes="welcome_banner_box")
 
+    # 2. Construct the layout instantly using cached background stats
     stats = _BANNER_STATS
     agent_input_tokens = stats["agent_input_tokens"]
     agent_output_tokens = stats["agent_output_tokens"]
@@ -2237,7 +2369,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
     collaborations = ", ".join(colored_collabs) if colored_collabs else "None"
 
     safe_name = best_agent.replace(" ", "_")
-    skills_dir = toolbox.get_storage_path("agents", "skills", safe_name)
+    skills_dir = get_storage_path("agents", "skills", safe_name)
     passive_count = 0
     active_count = 0
     if os.path.exists(skills_dir):
@@ -2253,6 +2385,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
         except Exception:
             pass
 
+    # FIXED: Compute tool stats bound directly to the shown best_agent rather than global sums
     total_tools_run = agent_total_tools.get(best_agent, 0)
     successful_tools_run = agent_successful_tools.get(best_agent, 0)
     
@@ -2308,7 +2441,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
         "  [bold #f2a813]Tips for getting started:[/bold #f2a813]\n"
         "  1. Ask questions, edit files, or run commands.\n"
         "  2. Use & to inject files. Use @ to invoke particular agents.\n"
-        "  3. Press F4 to configure the active agent.\n"
+        "  3. Press F2 to configure the active agent.\n"
         "  4. Press Ctrl+K to start a fresh conversation."
     )
 
@@ -2325,6 +2458,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
     return Static(renderable_group, classes="welcome_banner_box")
 
 def render_latex_to_unicode(text: str) -> str:
+    """Parses LaTeX math blocks into Unicode for terminal rendering."""
     if "$" not in text:
         return text
     try:
@@ -2345,7 +2479,10 @@ def render_latex_to_unicode(text: str) -> str:
     except ImportError:
         return text
 
+
 class AIAgentView(Vertical):
+    """Full-screen Chat Agent interface with Multi-Agent support."""
+    
     BINDINGS =[
         Binding("f2", "open_chat_manager", "Sessions", priority=True),
         Binding("ctrl+k", "clear_all_contexts", "New Chat", priority=True),
@@ -2416,7 +2553,7 @@ class AIAgentView(Vertical):
         background: $boost;
         border: round $primary;
         height: auto;
-        max-height: 6; 
+        max-height: 6; /* Fits up to 4 lines of suggestions + borders cleanly */
         padding: 0 1;
         margin-top: 0;
     }
@@ -2462,7 +2599,7 @@ class AIAgentView(Vertical):
             yield Label(">", id="prompt_label")
             yield ChatInput(placeholder=" Type your message, &path, or @agent", id="ai_chat_input", suggester=ChatSuggester(lambda: self.app))
             
-        yield Static(id="ai_suggestions_preview") 
+        yield Static(id="ai_suggestions_preview") # Yield the preview directly below the input
             
         with Horizontal(id="status_bar"):
             yield Label(f"{os.getcwd()}", id="ai_cwd_label", classes="status_left")
@@ -2475,37 +2612,28 @@ class AIAgentView(Vertical):
         toolbox.CURRENT_LOG_CB = self.log_to_ui
         self.current_tokens = 0
         
+        # Initialize Orchestration
         self.agent_manager = AgentManager()
         self.session_manager = SessionManager()
         self.schedule_manager = ScheduleManager()
         self.current_batch_id = 0
         
+        # STARTUP: Select default agent upfront so self.active_agent exists immediately
         default_name = self.agent_manager.get_default_agent_name()
         initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
         self.select_agent(initial_agent.name)
 
-        # Enforce Master Password Authentication before allowing any agent work
-        if not agent_core.is_master_password_set():
-            def on_setup(success):
-                if success:
-                    self.notify("Master password created. Core unlocked!", severity="information")
-                    self.check_onboarding()
-            self.call_after_refresh(lambda: self.app.push_screen(MasterPasswordModal(is_setup=True), on_setup))
-        elif not agent_core.is_core_unlocked():
-            def on_unlock(success):
-                if success:
-                    self.notify("Federaide Core unlocked successfully.", severity="information")
-                    self.check_onboarding()
-            self.call_after_refresh(lambda: self.app.push_screen(MasterPasswordModal(is_setup=False), on_unlock))
-
-        if toolbox.is_keyring_locked():
+        # Handle Termux/EncryptedKeyring blocking
+        from toolbox import is_keyring_locked, unlock_keyring
+        if is_keyring_locked():
             def handle_initial_unlock(result):
                 if result:
                     action, password = result
                     if action == "unlock" and password:
-                        if toolbox.unlock_keyring(password):
+                        if unlock_keyring(password):
                             self.notify("Keyring unlocked.", severity="information")
                             self.update_status_bar()
+                            # Reload Telegram config now that keyring is unlocked
                             if hasattr(self, "telegram_manager"):
                                 self.telegram_manager.reload_config()
                             self.check_onboarding()
@@ -2539,7 +2667,7 @@ class AIAgentView(Vertical):
             self.check_onboarding()
 
         
-        self.agent_executors = {}
+        self.agent_executors = {} # Cache for react agents
         self.shell_mode = False
         self.agent_mode = "PLAN"
         self._running_task_count = 0
@@ -2568,6 +2696,7 @@ class AIAgentView(Vertical):
         self.update_tokens()
         resume_offset = parse_resume_index()
         if resume_offset is not None:
+            # We delay the call until the UI is fully painted and stable
             self.call_after_refresh(lambda: self.action_resume_last(offset=resume_offset))
         self.query_one("#ai_chat_input").focus()
         
@@ -2575,13 +2704,15 @@ class AIAgentView(Vertical):
         self.spinner_idx = 0
         self.set_interval(0.1, self.tick_spinners)
         self.set_interval(60.0, self.tick_scheduler)
-        if toolbox.load_global_settings().get("autoupdate_on_launch", False):
+        if load_global_settings().get("autoupdate_on_launch", True):
             self.check_for_updates_bg(manual=False)
+        #self.consolidate_memories(manual=False)
 
     def check_chatgpt_oauth_status(self, agent=None):
         if getattr(self, "_chatgpt_auth_modal_open", False):
             return
-        if toolbox.is_keyring_locked():
+        from toolbox import is_keyring_locked
+        if is_keyring_locked():
             return
         target_agent = agent or getattr(self, "active_agent", None)
         if target_agent and is_chatgpt_oauth_agent(target_agent) and not has_valid_chatgpt_token():
@@ -2648,6 +2779,7 @@ class AIAgentView(Vertical):
         return False
     
     def confirm_tool_execution(self, tool_name: str, arguments: dict, agent_name: str = "Agent") -> bool:
+        """Pushes the ToolConfirmationModal and blocks the background worker thread until approved/rejected."""
         result_event = threading.Event()
         final_result = [False]
 
@@ -2659,6 +2791,7 @@ class AIAgentView(Vertical):
                 final_result[0] = (res == "approve")
             result_event.set()
 
+        # Thread-safe instantiation and push of the ModalScreen on the main event loop thread
         def push_modal():
             modal = ToolConfirmationModal(tool_name, arguments, agent_name=agent_name)
             self.app.push_screen(modal, handle_result)
@@ -2668,26 +2801,27 @@ class AIAgentView(Vertical):
         while not result_event.is_set():
             if toolbox.ABORT_EVENT.is_set():
                 return False
-            result_event.wait(0.1) 
+            result_event.wait(0.1) # Efficient wake-up with timeout (releases GIL)
             
         return final_result[0]
     
     def action_clear_all_contexts(self):
         self.action_abort() 
         self.session_manager.clear_all_contexts()
-        self.agent_executors = {} 
+        self.agent_executors = {} # Clear cached executors so updated schemas load fresh
         self.agent_mode = "PLAN"
         self.clear_chat_ui()
-        invalidate_stats_cache() 
+        invalidate_stats_cache() # Evicts old stats cache prior to rebuild
         self._write_log(Rule(title="[bold yellow]ALL CONTEXTS CLEARED", style="dim"))
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
     
     def action_resume_last(self, offset: int = 1):
+        """Finds the session modified `offset` steps ago and loads it (1-based: -r or -r 1 = last session)."""
         if offset <= 0:
-            return  
+            return  # 0 refers to the current new conversation, so do nothing
 
-        all_files = glob.glob(toolbox.get_storage_path("sessions", "*.json"))
+        all_files = glob.glob(get_storage_path("sessions", "*.json"))
         curr_sess_id = getattr(self.session_manager, "current_session_id", "")
         
         sessions_map = {}
@@ -2712,7 +2846,7 @@ class AIAgentView(Vertical):
             reverse=True
         )
 
-        idx = offset - 1
+        idx = offset - 1  # Map 1-based offset to 0-based array index
         if 0 <= idx < len(sorted_sessions):
             target_files = sorted_sessions[idx][1]
             target_file = target_files[0]
@@ -2726,11 +2860,14 @@ class AIAgentView(Vertical):
             self.log_to_ui(f"[bold red]Cannot resume session -r {offset}: only {len(sorted_sessions)} past session(s) found.[/bold red]")
         
     def action_abort(self):
+        """Interrupts current agent tasks, stops the spinner, and returns focus to input."""
         toolbox.ABORT_EVENT.set()
         
+        # Persistent Abort: Mark the current batch as dead
         if hasattr(self, "current_batch_id"):
             self.session_manager.abort_batch(self.current_batch_id)
 
+        # DROP THE HAMMER: Instantly kill all executing background agent threads
         toolbox.nuke_all_threads()
 
         self._running_agents.clear()
@@ -2738,6 +2875,7 @@ class AIAgentView(Vertical):
             self.workers.cancel_all()
             self._toggle_spinner(False)
             
+            # Ensure Research Progress UI dies
             try:
                 self.query_one("#progress_container").styles.display = "none"
             except: pass
@@ -2745,7 +2883,9 @@ class AIAgentView(Vertical):
             self.log_to_ui("[bold red] Operation Aborted by User.[/bold red]")
             self.query_one("#ai_chat_input").focus()
         
+    
     def action_open_chat_manager(self):
+        """F2 triggers the Session menu."""
         def handle_chat_mgr(action):
             if action == "new_session":
                 self.action_clear_all_contexts()
@@ -2754,6 +2894,7 @@ class AIAgentView(Vertical):
         self.app.push_screen(ChatManagerModal(), handle_chat_mgr)
 
     def action_switch_agent(self):
+        """Ctrl+M shows scrollable buttons + Default checkbox."""
         names = list(self.agent_manager.agents.keys())
         default = self.agent_manager.get_default_agent_name()
         def handle_switch(res):
@@ -2776,20 +2917,25 @@ class AIAgentView(Vertical):
 
     
     def load_chat_file(self, filepath: str):
+        """Loads a multi-agent session file and reconstructs the UI accurately."""
         if not filepath: return
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
+            # Reconstruct HistoryMessage objects
             messages = [HistoryMessage(**m) for m in data]
             
+            # Extract agent name from filename (Standard: sess_TIMESTAMP_AgentName.json)
             base = os.path.basename(filepath).replace(".json", "")
             agent_name = base.split("_")[-1]
             sess_id = "_".join(base.split("_")[:-1])
 
+            # Update the global session state
             self.session_manager.current_session_id = sess_id
             self.session_manager.active_sessions[agent_name] = messages
             
+            # Switch the UI to the agent whose file we just loaded
             if self.select_agent(agent_name):
                 self.replay_chat(messages, agent_name)
                 self.log_to_ui(f"[bold green]Restored Session: {sess_id} (agent: {agent_name})[/bold green]")
@@ -2797,6 +2943,7 @@ class AIAgentView(Vertical):
             self.log_to_ui(f"[bold red]Load Error:[/bold red] {e}")
 
     def replay_chat(self, history: List[HistoryMessage], owner_name: str):
+        """Processes tags to rename labels and clean content during UI reconstruction."""
         self.query_one("#chat_messages").query("*").remove()
         self._write_log(Rule(title=f"[bold #f2a813]SESSION RESTORED: {owner_name.upper()}", style="dim"))
 
@@ -2836,12 +2983,13 @@ class AIAgentView(Vertical):
                         box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
                         box_widget.styles.border = ("round", color)
                         self._write_log(box_widget)
-            else: 
+            else: # role == "human"
+                # Check for synced intercom tags from other agents
                 intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
                 tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
 
                 if intercom_match:
-                    label = intercom_match.group(1) 
+                    label = intercom_match.group(1) # The synced agent's name
                     synced_agent = self.agent_manager.get_agent(label)
                     color = synced_agent.color if synced_agent else "cyan"
                     content = intercom_match.group(2).strip()
@@ -2851,14 +2999,17 @@ class AIAgentView(Vertical):
                     color = synced_agent.color if synced_agent else "bright_black"
                     content = tool_match.group(3).strip()
                 else:
-                    user_cfg = toolbox.load_global_settings()
+                    # Genuine user message
+                    user_cfg = load_global_settings()
                     label = user_cfg.get("user_name", "User")
                     color = user_cfg.get("user_color", "#dda0dd")
                 
+                # Clean injected timestamp/date prefixes for UI rendering
                 content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
                 self._write_message_block(f"[bold {color}]{label}:[/bold {color}]", content, color, is_markdown=True)
     
     def action_open_active_config(self, config_override: AgentConfig = None, old_name_override: str = None):
+        """F4: Opens the editor. Distinguishes between Renaming and Cloning."""
         agent_to_edit = config_override or self.active_agent
 
         def handle_modal_result(result_tuple):
@@ -2873,9 +3024,11 @@ class AIAgentView(Vertical):
                     self.notify("Error: You cannot delete your last remaining agent.", severity="error")
                     return
                 
+                # Delete agent config and clear from executors
                 self.agent_manager.delete_agent(agent_to_delete.name)
                 self.agent_executors.pop(agent_to_delete.name, None)
                 
+                # Wipe the API keys from the OS Keyring for security
                 try:
                     import keyring
                     keyring.delete_password("Federate", f"agent_key_{agent_to_delete.name.lower().replace(' ', '_')}")
@@ -2883,14 +3036,18 @@ class AIAgentView(Vertical):
                 except Exception:
                     pass
                 
+                # Switch to the next available agent
                 next_agent_name = list(self.agent_manager.agents.keys())[0]
                 self.select_agent(next_agent_name)
                 
+                # Update default agent just in case the deleted one was the default
                 self.agent_manager.set_default_agent_name(next_agent_name)
                 
+                # Update UI
                 self.log_to_ui(f"[bold red]Agent '{agent_to_delete.name}' deleted.[/bold red] Switched to '{next_agent_name}'.")
                 self.update_status_bar()
                 
+                # Sync welcome banner
                 new_renderable = get_welcome_banner(self, specific_agent=next_agent_name, return_renderable=True)
                 banners = self.query(".welcome_banner_box")
                 if banners:
@@ -2902,7 +3059,47 @@ class AIAgentView(Vertical):
 
     @work(thread=True)
     def process_agent_save(self, new_config: AgentConfig, is_new: bool, old_name: str, modal=None, is_onboarding: bool = False, onboarding_data: dict = None):
-        translated, error_msg = agent_core.translate_backstory(new_config)
+        if new_config.use_backup and new_config.backup_model:
+            model = new_config.backup_model
+            base_url = new_config.backup_base_url or new_config.base_url
+            api_key = new_config.get_backup_api_key() or new_config.get_api_key()
+        else:
+            model = new_config.model
+            base_url = new_config.base_url
+            api_key = new_config.get_api_key()
+
+        error_msg = None
+        translated = None
+
+        if not api_key:
+            error_msg = f"API Key is missing for agent '{new_config.name}'."
+        else:
+            try:
+                from langchain_openai import ChatOpenAI
+                from langchain_core.messages import HumanMessage
+
+                effort = getattr(new_config, "reasoning_effort", "none")
+                extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+
+                llm = ChatOpenAI(
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=0,
+                    max_retries=5,
+                    timeout=150,
+                    **extra_args
+                )
+                pronoun_val = getattr(new_config, "pronouns", "neither")
+                pronoun_instruction = f" Use '{pronoun_val}' pronouns when referring to this agent." if pronoun_val != "neither" else " Use gender-neutral pronouns (they/them) when referring to this agent."
+                prompt = f"Convert the following AI agent backstory from 1st/2nd person to 3rd person. Start with '{new_config.name} is...'.{pronoun_instruction} Only return the converted backstory, nothing else.\n\nOriginal: {new_config.backstory}"
+
+                res = llm.invoke([HumanMessage(content=prompt)])
+                translated = res.content.strip() if res and res.content else None
+                if not translated:
+                    error_msg = "Model returned an empty response during backstory verification."
+            except Exception as e:
+                error_msg = str(e)
 
         if error_msg:
             def reset_modal():
@@ -2921,8 +3118,9 @@ class AIAgentView(Vertical):
             self.app.call_from_thread(reset_modal)
             return
 
+        # Save translated backstory to cache
         try:
-            cache_path = toolbox.get_storage_path("agents", "translated_backstories.json")
+            cache_path = get_storage_path("agents", "translated_backstories.json")
             cache = {}
             if os.path.exists(cache_path):
                 try:
@@ -2971,16 +3169,19 @@ class AIAgentView(Vertical):
     
     def consolidate_memories(self, manual: bool = False):
         if not manual:
-            return 
+            return  # Auto-consolidation is permanently disabled
 
+        # 1. Check for active agent and API key
         if not self.active_agent or not self.active_agent.get_api_key():
             self.log_to_ui("[bold red]Cannot consolidate memories: API Key is missing for active agent.[/bold red]")
             return
 
+        # 2. Refuse if an agent task is currently running in the background
         if getattr(self, "_running_agents", None) or getattr(self, "_running_task_count", 0) > 0:
             self.log_to_ui("[bold red]Consolidation Refused: An agent task is currently running. Please wait for it to finish or press Ctrl+A.[/bold red]")
             return
 
+        # 3. HARD GUARDRAIL: Refuse if more than one agent is active in the current room session
         active_sessions = getattr(self.session_manager, "active_sessions", {})
         if len(active_sessions) > 1:
             agent_names = ", ".join([f"'{name}'" for name in active_sessions.keys()])
@@ -2990,6 +3191,7 @@ class AIAgentView(Vertical):
             )
             return
 
+        # 4. Target ONLY the active host agent
         agent = self.active_agent
         all_agents_list = list(self.agent_manager.agents.values())
 
@@ -3016,6 +3218,7 @@ class AIAgentView(Vertical):
         self.run_agent_task(agent, processed_prompt, batch_id=self.current_batch_id)
 
     def action_open_global_settings(self):
+        """F3: Opens the global harness settings."""
         def handle_global_config(result):
             if result == "update":
                 self.log_to_ui("[bold green] Global settings successfully updated.[/bold green]")
@@ -3023,12 +3226,16 @@ class AIAgentView(Vertical):
         self.app.push_screen(GlobalSettingsModal(), handle_global_config)
     
     def action_open_config(self):
+        """Now handles F2 Chat Management."""
         def handle_chat_mgr(action):
             if action == "new_session":
                 self.action_clear_all_contexts()
             elif action == "load_chat":
+                # Re-use your existing ChatLoadModal logic
                 def handle_load(filepath):
                     if filepath:
+                        # You need to implement load_chat_file logic or 
+                        # adapt it to multi-agent sessions here
                         self.log_to_ui(f"Loading {filepath}...") 
                 self.app.push_screen(ChatLoadModal(), handle_load)
 
@@ -3068,52 +3275,6 @@ class AIAgentView(Vertical):
         except Exception:
             pass
 
-    def render_tool_result_box(self, owner_name, color, summary):
-        try:
-            box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{escape(summary)}"
-            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
-            box_widget.styles.border = ("round", color)
-            self._write_log(box_widget)
-        except Exception:
-            pass
-            
-    def render_tool_error_box(self, owner_name, color, summary):
-        try:
-            box_content = f"[bold]Tool Result ({owner_name}):[/bold]\n{summary}"
-            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
-            box_widget.styles.border = ("round", color)
-            self._write_log(box_widget)
-        except Exception:
-            pass
-
-    def mount_ai_message_box(self, agent_name, agent_color):
-        try:
-            top_rule = Static(Rule(style=agent_color))
-            header_widget = Static(Text.from_markup(f"[bold {agent_color}]{agent_name}:[/bold {agent_color}]"), classes="chat_msg", markup=False)
-            self.current_ai_widget = Static(Markdown(""), classes="chat_msg")
-            bottom_rule = Static(Rule(style=agent_color))
-            
-            ai_box = Vertical(
-                top_rule,
-                header_widget,
-                self.current_ai_widget,
-                bottom_rule,
-                classes="message_block"
-            )
-            self.query_one("#chat_messages").mount(ai_box)
-        except Exception:
-            pass
-
-    def update_ai_message(self, display_text):
-        try:
-            if hasattr(self, "current_ai_widget") and self.current_ai_widget:
-                self.current_ai_widget.update(Markdown(display_text))
-        except Exception:
-            pass
-
-    def render_latex_to_unicode_ext(self, text):
-        return render_latex_to_unicode(text)
-
     def log_to_ui(self, msg: Any, is_markdown: bool = False):
         try:
             self.app.call_from_thread(self._write_log, msg, is_markdown)
@@ -3124,12 +3285,16 @@ class AIAgentView(Vertical):
         try:
             chat_body = self.query_one("#chat_messages")
             
+            # If msg is markup like "[bold blue]User:[/bold blue]", extract label to try and find agent color
             if isinstance(msg, str) and not is_markdown:
+                # Regex matches both opening style tags and optional closing style suffixes
                 match = re.search(r'\[bold ([^\]]+)\]([^:]+):\[/bold(?:\s+[^\]]+)?\]', msg)
                 if match:
                     label_text = match.group(2).strip()
+                    # Try to find agent by name
                     agent = self.agent_manager.get_agent(label_text)
                     if agent:
+                        # Override both opening and closing tag colors to prevent mismatches
                         old_color = match.group(1)
                         msg = msg.replace(f"[bold {old_color}]", f"[bold {agent.color}]")
                         msg = msg.replace(f"[/bold {old_color}]", f"[/bold {agent.color}]")
@@ -3142,6 +3307,7 @@ class AIAgentView(Vertical):
                     try:
                         parsed_text = Text.from_markup(msg)
                         
+                        # Pre-validate all styles immediately to catch MissingStyle before the async rendering phase
                         if not hasattr(self, "_dummy_console"):
                             from rich.console import Console
                             self._dummy_console = Console()
@@ -3152,6 +3318,7 @@ class AIAgentView(Vertical):
                                 
                         widget = Static(parsed_text, classes="chat_msg", markup=False)
                     except Exception:
+                        # Universal fallback to raw string if the text contains invalid bracket markup (e.g. code arrays)
                         widget = Static(Text(msg), classes="chat_msg", markup=False)
             elif isinstance(msg, (Rule, Text, Markdown)):
                 widget = Static(msg, classes="chat_msg", markup=False)
@@ -3181,6 +3348,7 @@ class AIAgentView(Vertical):
                 base_dir = str(app.query_one("#dir_tree").path) if app else os.getcwd()
             except Exception:
                 base_dir = os.getcwd()
+            # Use Text() to entirely disable markup parsing on raw paths
             self.query_one("#ai_cwd_label", Label).update(Text(base_dir))
             self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}")
             self.query_one("#ai_token_label", Label).update(agent_info)
@@ -3199,15 +3367,17 @@ class AIAgentView(Vertical):
         except Exception: pass
 
     def action_cycle_arm_mode(self):
+        """Cycles through safety modes: PLAN -> INTERMEDIATE -> EXECUTE."""
         ARM_MODES = ["PLAN", "INTERMEDIATE", "EXECUTE"]
         current_idx = ARM_MODES.index(self.agent_mode) if self.agent_mode in ARM_MODES else 0
         next_idx = (current_idx + 1) % len(ARM_MODES)
         self.agent_mode = ARM_MODES[next_idx]
-        self.agent_executors = {}
+        self.agent_executors = {} # Force re-init of all executors
         self.log_to_ui(f"System operating mode cycled to: {self.agent_mode}")
         self.update_status_bar()
 
     def action_cycle_agents(self):
+        """Cycles the active host agent sequentially through all configured personas."""
         names = list(self.agent_manager.agents.keys())
         if not names:
             return
@@ -3232,6 +3402,7 @@ class AIAgentView(Vertical):
                 self._write_log(Static(new_renderable, classes="welcome_banner_box"))
 
     def toggle_plan_mode(self):
+        """Maintains backwards compatibility for any slash command hooks using the old toggle."""
         self.action_cycle_arm_mode()
 
     def clear_chat_ui(self):
@@ -3243,14 +3414,392 @@ class AIAgentView(Vertical):
         except Exception: pass
 
     def get_executor(self, agent_config: AgentConfig):
-        return agent_core.get_executor_core(self, agent_config)
+        if agent_config.name in self.agent_executors:
+            return self.agent_executors[agent_config.name]
+        
+        if agent_config.use_backup and agent_config.backup_model:
+            model = agent_config.backup_model
+            base_url = agent_config.backup_base_url or agent_config.base_url
+            api_key = agent_config.get_backup_api_key()
+        else:
+            model = agent_config.model
+            base_url = agent_config.base_url
+            api_key = agent_config.get_api_key()
+
+        if not api_key:
+            return None
+            
+        effort = getattr(agent_config, "reasoning_effort", "none")
+        extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+        llm = ChatOpenAI(
+            model=model, 
+            temperature=getattr(agent_config, "temperature", 1.0),
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=5,
+            timeout=120,
+            **extra_args
+        )
+
+        # Unified message pre-processor to intercept tool outputs and extract image payloads.
+        # It packages image data strictly inside companion HumanMessages immediately 
+        # following the ToolMessage, enabling real-time visual analysis while remaining 
+        # compliant with all LLM provider APIs (Gemini, Claude, OpenAI).
+        def preprocess_messages(messages):
+            if not isinstance(messages, list):
+                return messages
+            processed = []
+            for msg in messages:
+                processed.append(msg)
+                
+                # Check for image triggers within plain-text ToolMessage responses
+                if msg.__class__.__name__ == "ToolMessage" and isinstance(msg.content, str):
+                    # Guardrail: Do not extract images if viewing source code, file structures, 
+                    # or raw search results to prevent matching dummy tags or literal string variables.
+                    tool_name = getattr(msg, "name", None)
+                    if tool_name in {"edit_file", "save_file", "list_files", "search_web", "perform_research", "manage_agenda"}:
+                        continue
+                    
+                    # Case A: Local file paths - Support multiple images
+                    if "[Attached Image:" in msg.content:
+                        matches = re.finditer(r'\[Attached Image:\s*(.*?)\]', msg.content)
+                        for match in matches:
+                            filepath = match.group(1).strip()
+                            try:
+                                from toolbox import get_safe_path
+                                import base64, mimetypes
+                                resolved_path, _ = get_safe_path(filepath)
+                                if os.path.exists(resolved_path):
+                                    mime = mimetypes.guess_type(resolved_path)[0] or "image/png"
+                                    with open(resolved_path, "rb") as f:
+                                        b64 = base64.b64encode(f.read()).decode('utf-8')
+                                    
+                                    companion = HumanMessage(content=[
+                                        {"type": "text", "text": f"[Attached Image: {filepath}]"},
+                                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                                    ])
+                                    processed.append(companion)
+                            except Exception:
+                                pass
+                                
+                    # Case B: Legacy direct Base64 output streams - Support multiple images
+                    if "[ImageBase64:" in msg.content:
+                        matches = re.finditer(r'\[ImageBase64:\s*(data:image/[a-zA-Z]+;base64,[^\]]+)\]', msg.content)
+                        for match in matches:
+                            url = match.group(1).strip().replace("\n", "").replace("\r", "").replace(" ", "")
+                            # Guardrail: Ignore variables, template markers, or unfinished streams
+                            if any(marker in url for marker in ["{", "}", "<", ">", "b64_str", "base64data"]):
+                                continue
+                            # Omit the giant Base64 text wall from the ToolMessage inline to save input tokens
+                            msg.content = msg.content.replace(match.group(0), "[ImageBase64: <data_transmitted>]")
+                            companion = HumanMessage(content=[
+                                {"type": "text", "text": "[Dynamic Visual Output]:"},
+                                {"type": "image_url", "image_url": {"url": url}}
+                            ])
+                            processed.append(companion)
+            return processed
+
+        # Intercept LLM execution at the lowest level of BaseChatModel
+        orig_generate = llm._generate
+        def patched_generate(messages, stop=None, run_manager=None, **kwargs):
+            processed_messages = preprocess_messages(messages)
+            return orig_generate(processed_messages, stop=stop, run_manager=run_manager, **kwargs)
+        llm._generate = patched_generate
+
+        orig_stream = llm._stream
+        def patched_stream(messages, stop=None, run_manager=None, **kwargs):
+            processed_messages = preprocess_messages(messages)
+            return orig_stream(processed_messages, stop=stop, run_manager=run_manager, **kwargs)
+        llm._stream = patched_stream
+        
+        # --- NEW: ENFORCE DYNAMIC RESTRICTIONS ---
+        if agent_config.disable_all_tools:
+            # Only passive text-only skills, memories, and clarification remain active
+            tools = [
+                update_core_memory, save_skill, read_skill, list_skills, 
+                distill_journey, delete_passive_skill, mark_quagmire, 
+                get_user_clarification, search_episodic_memory, retrieve_episodic_memory,
+                get_toolresult
+            ]
+            allowed_names = {getattr(t, "name", t) for t in tools}
+            
+            # Map out all executable, terminal, research, active skill development, and high-privilege tools
+            other_tool_names = [
+                "list_files", "search_web", "perform_research", "manage_agenda",
+                "read_file", "fetch_url", "save_file", "edit_file", 
+                "dispatch_coding_subagent", "run_terminal_command", "take_screenshot",        
+                "click_at_current_location", "move_cursor_absolute", 
+                "move_cursor_relative", "send_scroll", "inject_keyboard_input",
+                "prepare_active_skill", "finalize_active_skill", "manage_active_skill", "fix_active_skill"
+            ]
+            try:
+                dynamic_tools = load_dynamic_tools(agent_config.name)
+                for dt in dynamic_tools:
+                    if dt.name not in other_tool_names:
+                        other_tool_names.append(dt.name)
+            except Exception:
+                pass
+                
+            # Create safe, dummy unauthorized placeholders for all executable tools
+            from langchain_core.tools import StructuredTool
+            dummy_tools = []
+            for name in other_tool_names:
+                dummy_tools.append(StructuredTool.from_function(
+                    func=lambda *args, n=name, **kwargs: f"Error: Tool '{n}' is unauthorized. All tools are disabled for this agent.",
+                    name=name,
+                    description=f"Unauthorized placeholder."
+                ))
+                
+            tools.extend(dummy_tools)
+            final_tools = tools
+            
+            # Intercept the tool-binding interface to hide restricted tools from the LLM's system prompt
+            class RestrictedModelWrapper:
+                def __init__(self, model, allowed_names):
+                    self.model = model
+                    self.allowed_names = allowed_names
+                def bind_tools(self, tools, **kwargs):
+                    allowed_bind_tools = [t for t in tools if getattr(t, "name", t) in self.allowed_names]
+                    return self.model.bind_tools(allowed_bind_tools, **kwargs)
+                def __getattr__(self, name):
+                    return getattr(self.model, name)
+                    
+            llm = RestrictedModelWrapper(llm, allowed_names)
+            
+        else:
+            disabled_tools = set(getattr(agent_config, "disabled_tools", ["visual_computer_operation", "send_file_to_telegram"]))
+
+            def is_tool_disabled(t_name: str) -> bool:
+                if t_name in disabled_tools:
+                    return True
+                computer_tools = {"take_screenshot", "click_at_current_location", "move_cursor_absolute", "move_cursor_relative", "send_scroll", "inject_keyboard_input"}
+                if t_name in computer_tools and "visual_computer_operation" in disabled_tools:
+                    return True
+                return False
+
+            raw_tools = [list_files, search_web, perform_research, render_pdf, manage_agenda, update_core_memory, save_skill, read_skill, distill_journey, delete_passive_skill, list_skills, mark_quagmire, get_user_clarification, search_episodic_memory, retrieve_episodic_memory, prepare_active_skill, finalize_active_skill, manage_active_skill, fix_active_skill, get_toolresult]
+            raw_tools.extend(load_dynamic_tools(agent_config.name))
+
+            high_priv_map = {
+                "read_file": read_file,
+                "fetch_url": fetch_url,
+                "save_file": save_file,
+                "edit_file": edit_file,
+                "dispatch_coding_subagent": dispatch_coding_subagent,
+                "run_terminal_command": run_terminal_command,
+                "take_screenshot": take_screenshot,        
+                "click_at_current_location": click_at_current_location,
+                "move_cursor_absolute": move_cursor_absolute, 
+                "move_cursor_relative": move_cursor_relative,       
+                "send_scroll": send_scroll,                    
+                "inject_keyboard_input": inject_keyboard_input,
+                "send_file_to_telegram": send_file_to_telegram
+            }
+            
+            from langchain_core.tools import StructuredTool
+
+            def make_wrapped_tool(t_obj):
+                def wrapped_func(*args, **kwargs):
+                    agent_name = agent_config.name
+                    confirmed = self.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
+                    if not confirmed:
+                        return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
+                    return t_obj.func(*args, **kwargs)
+                return StructuredTool(
+                    name=t_obj.name,
+                    description=t_obj.description,
+                    args_schema=t_obj.args_schema,
+                    func=wrapped_func
+                )
+
+            if self.agent_mode == "EXECUTE":
+                for tname, tool_obj in high_priv_map.items():
+                    raw_tools.append(tool_obj)
+            elif self.agent_mode == "INTERMEDIATE":
+                for tname, tool_obj in high_priv_map.items():
+                    raw_tools.append(make_wrapped_tool(tool_obj))
+            else: # PLAN (SAFE) Mode
+                for tname in agent_config.enabled_tools:
+                    if tname == "visual_computer_operation":
+                        for ct in ["take_screenshot", "click_at_current_location", "move_cursor_absolute", "move_cursor_relative", "send_scroll", "inject_keyboard_input"]:
+                            raw_tools.append(make_wrapped_tool(high_priv_map[ct]))
+                    elif tname in high_priv_map:
+                        raw_tools.append(make_wrapped_tool(high_priv_map[tname]))
+            
+            # Enforce hard disablers
+            final_tools = []
+            allowed_names = set()
+            for t_obj in raw_tools:
+                if is_tool_disabled(t_obj.name):
+                    dummy = StructuredTool.from_function(
+                        func=lambda *args, name=t_obj.name, **kwargs: f"Error: Tool '{name}' is UNAUTHORIZED for this agent. You are forbidden from using it.",
+                        name=t_obj.name,
+                        description="Unauthorized placeholder."
+                    )
+                    final_tools.append(dummy)
+                else:
+                    final_tools.append(t_obj)
+                    allowed_names.add(t_obj.name)
+
+            class RestrictedModelWrapper:
+                def __init__(self, model, allowed_names):
+                    self.model = model
+                    self.allowed_names = allowed_names
+                def bind_tools(self, tools, **kwargs):
+                    allowed_bind_tools = [t for t in tools if getattr(t, "name", t) in self.allowed_names]
+                    return self.model.bind_tools(allowed_bind_tools, **kwargs)
+                def __getattr__(self, name):
+                    return getattr(self.model, name)
+                    
+            llm = RestrictedModelWrapper(llm, allowed_names)
+
+        executor = create_react_agent(llm, final_tools, checkpointer=shared_memory)
+        self.agent_executors[agent_config.name] = executor
+        return executor
     
     @work(thread=True)
     def force_update_all_backstories(self):
-        agent_core.force_update_all_backstories_core(self)
+        from toolbox import get_storage_path
+        import json
+        
+        self.log_to_ui("[dim cyan]Force updating backstories for all agents...[/dim cyan]")
+        all_agents = list(self.agent_manager.agents.values())
+        
+        with _BACKSTORY_LOCK:
+            cache_path = get_storage_path("agents", "translated_backstories.json")
+            cache = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
+
+            updated = False
+            host_agent = self.active_agent
+            if host_agent.use_backup and host_agent.backup_model:
+                model = host_agent.backup_model
+                base_url = host_agent.backup_base_url or host_agent.base_url
+                api_key = host_agent.get_backup_api_key() or host_agent.get_api_key()
+            else:
+                model = host_agent.model
+                base_url = host_agent.base_url
+                api_key = host_agent.get_api_key()
+
+            if not api_key:
+                self.log_to_ui("[bold red]No API key available to translate backstories.[/bold red]")
+                return
+
+            try:
+                from langchain_openai import ChatOpenAI
+                from langchain_core.messages import HumanMessage
+                from toolbox import resilient_invoke
+                
+                llm = ChatOpenAI(
+                    model=model,
+                    api_key=api_key,
+                    base_url=base_url,
+                    temperature=0,
+                    max_retries=5,
+                )
+            except Exception as e:
+                self.log_to_ui(f"[bold red]Failed to initialize LLM: {e}[/bold red]")
+                return
+
+            for a in all_agents:
+                try:
+                    self.log_to_ui(f"[dim]Translating backstory for {a.name} to 3rd person...[/dim]")
+                    
+                    pronoun_val = getattr(a, "pronouns", "neither")
+                    pronoun_instruction = f" Use '{pronoun_val}' pronouns when referring to this agent." if pronoun_val != "neither" else " Use gender-neutral pronouns (they/them) when referring to this agent."
+                    prompt = f"Convert the following AI agent backstory from 1st/2nd person to 3rd person. Start with '{a.name} is...'.{pronoun_instruction} Only return the converted backstory, nothing else.\n\nOriginal: {a.backstory}"
+                    res = resilient_invoke(llm, [HumanMessage(content=prompt)])
+                    translated = res.content.strip()
+                    if translated:
+                        cache[a.name] = {
+                            "original": a.backstory,
+                            "translated": translated
+                        }
+                        updated = True
+                except Exception as e:
+                    self.log_to_ui(f"[dim red]Translation failed for {a.name}: {e}[/dim red]")
+
+            if updated:
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cache, f, indent=4)
+                except Exception:
+                    pass
+            self.log_to_ui("[bold green]All agent backstories have been translated and updated.[/bold green]")
 
     def translate_team_backstories(self, host_agent: AgentConfig, all_agents: List[AgentConfig]):
-        agent_core.translate_team_backstories_core(self, host_agent, all_agents)
+        from toolbox import get_storage_path
+        import json
+        
+        # Enforce strict sequential execution during team/room parallel task dispatches
+        with _BACKSTORY_LOCK:
+            cache_path = get_storage_path("agents", "translated_backstories.json")
+            cache = {}
+            if os.path.exists(cache_path):
+                try:
+                    with open(cache_path, "r", encoding="utf-8") as f:
+                        cache = json.load(f)
+                except Exception:
+                    pass
+
+            updated = False
+            for a in all_agents:
+                if a.name == host_agent.name:
+                    continue
+                
+                cached_data = cache.get(a.name, {})
+                if cached_data.get("original") == a.backstory and cached_data.get("translated"):
+                    continue
+
+                try:
+                    from langchain_openai import ChatOpenAI
+                    from langchain_core.messages import HumanMessage
+                    from toolbox import resilient_invoke
+                    
+                    if host_agent.use_backup and host_agent.backup_model:
+                        model = host_agent.backup_model
+                        base_url = host_agent.backup_base_url or host_agent.base_url
+                        api_key = host_agent.get_backup_api_key() or host_agent.get_api_key()
+                    else:
+                        model = host_agent.model
+                        base_url = host_agent.base_url
+                        api_key = host_agent.get_api_key()
+
+                    if api_key:
+                        self.log_to_ui(f"[dim]Translating backstory for {a.name} to 3rd person...[/dim]")
+                        llm = ChatOpenAI(
+                            model=model,
+                            api_key=api_key,
+                            base_url=base_url,
+                            temperature=0,
+                            max_retries=5,
+                        )
+                        
+                        pronoun_val = getattr(a, "pronouns", "neither")
+                        pronoun_instruction = f" Use '{pronoun_val}' pronouns when referring to this agent." if pronoun_val != "neither" else " Use gender-neutral pronouns (they/them) when referring to this agent."
+                        prompt = f"Convert the following AI agent backstory from 1st/2nd person to 3rd person. Start with '{a.name} is...'.{pronoun_instruction} Only return the converted backstory, nothing else.\n\nOriginal: {a.backstory}"
+                        res = resilient_invoke(llm, [HumanMessage(content=prompt)])
+                        translated = res.content.strip()
+                        if translated:
+                            cache[a.name] = {
+                                "original": a.backstory,
+                                "translated": translated
+                            }
+                            updated = True
+                except Exception as e:
+                    self.log_to_ui(f"[dim red]Translation failed for {a.name}: {e}[/dim red]")
+
+            if updated:
+                try:
+                    with open(cache_path, "w", encoding="utf-8") as f:
+                        json.dump(cache, f, indent=4)
+                except Exception:
+                    pass
     
     @on(ChatInput.AbortRequest)
     def on_abort_request(self, event: ChatInput.AbortRequest):
@@ -3261,7 +3810,7 @@ class AIAgentView(Vertical):
     def on_input_submitted(self, event: ChatInput.Submitted):
         prompt = event.value
         if not prompt.strip(): return
-        event.input.text = "" 
+        event.input.text = "" # Clears the TextArea
         
         if prompt.strip() == "!":
             self.shell_mode = not self.shell_mode
@@ -3281,10 +3830,13 @@ class AIAgentView(Vertical):
             process_slash_command(prompt, self)
             return
         
+        
+        # Multi-Agent Routing
         acting_agent = self.active_agent
         clean_prompt = prompt
         is_team = False
         
+        # --- INTERRUPT SYSTEM ---
         is_interrupt = False
         if self._running_agents:
             self.action_abort()
@@ -3292,10 +3844,12 @@ class AIAgentView(Vertical):
         
         self.current_batch_id += 1
         batch_id = self.current_batch_id
+        # ------------------------
 
         if prompt.strip().lower() != "@resume" and hasattr(self, "paused_queue") and self.paused_queue:
             self.paused_queue = []
 
+        # Handle @resume command
         if prompt.strip().lower() == "@resume":
             if hasattr(self, "paused_queue") and self.paused_queue:
                 self.log_to_ui("[bold green]Resuming paused agent queue...[/bold green]")
@@ -3323,25 +3877,30 @@ class AIAgentView(Vertical):
                 return
             
             if is_team:
+                # Ensure everyone is initialized and synced BEFORE broadcasting
                 all_agents_list = list(self.agent_manager.agents.values())
                 for agent in all_agents_list:
                     self.session_manager.init_agent_session(agent, all_agents_list)
                     self.session_manager.join_conversation(self.active_agent.name, agent, all_agents_list)
                 acting_agents = list(self.agent_manager.agents.values())
             else:
+                # @room: Only agents already in the active_sessions
                 active_names = list(self.session_manager.active_sessions.keys())
                 acting_agents = []
                 all_agents_list = list(self.agent_manager.agents.values())
                 for name in active_names:
                     agent = self.agent_manager.get_agent(name)
                     if agent:
+                        # Standard sync for consistency
                         self.session_manager.join_conversation(self.active_agent.name, agent, all_agents_list)
                         acting_agents.append(agent)
             
+            # Reset turn queue for team/room parallel turns
             with self.turn_lock:
                 self.turn_queue = []
 
         else:
+            # Handle sequential @ mentions and parallel @@ mentions
             seq_mentions = self.agent_manager.get_mentions(prompt)
             par_mentions = self.agent_manager.get_parallel_mentions(prompt)
             clean_prompt = prompt
@@ -3359,9 +3918,11 @@ class AIAgentView(Vertical):
                 
                 if target_agents:
                     if par_mentions:
+                        # Parallel agents are running, so ALL sequential agents wait in the queue
                         with self.turn_lock:
                             self.turn_queue = target_agents
                     else:
+                        # Standard sequential behavior
                         first_agent = target_agents[0]
                         with self.turn_lock:
                             self.turn_queue = target_agents[1:]
@@ -3384,7 +3945,7 @@ class AIAgentView(Vertical):
                     acting_agents.append(p_agent)
                     self.session_manager.join_conversation(self.active_agent.name, p_agent, list(self.agent_manager.agents.values()))
 
-        user_cfg = toolbox.load_global_settings()
+        user_cfg = load_global_settings()
         u_name = user_cfg.get("user_name", "User")
         u_color = user_cfg.get("user_color", "#dda0dd")
 
@@ -3399,20 +3960,567 @@ class AIAgentView(Vertical):
 
         self._write_message_block(hdr, clean_prompt, u_color, is_markdown=True)
         
+        # Process & context injection
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
         processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
         
+        # Broadcast user message to all active agents (now they all definitely have sessions)
         self.session_manager.broadcast_message(u_name, processed_prompt, is_ai=False)
         self.update_tokens()
+        # Reset the global abort flag before starting tasks
         toolbox.ABORT_EVENT.clear()
         
         for agent in acting_agents:
             self.run_agent_task(agent, processed_prompt, batch_id=batch_id)
 
+
     @work(thread=True)
     def run_agent_task(self, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0):
-        agent_core.run_agent_task_core(self, agent, prompt, override_thread_id, batch_id)
+        toolbox.register_thread()
+        if agent.name in self._running_agents:
+            self.log_to_ui(f"[dim yellow]Agent {agent.name} is already working on a task.[/dim yellow]")
+            toolbox.unregister_thread()
+            return
 
+        if not self.ensure_chatgpt_auth_for_agent(agent):
+            self.log_to_ui(f"[bold red]ChatGPT OAuth authentication required for {agent.name}. Task cancelled.[/bold red]")
+            toolbox.unregister_thread()
+            return
+
+        self._running_agents.add(agent.name)
+        try:
+            # Synchronously translate team backstories on this background worker thread
+            try:
+                self.translate_team_backstories(agent, list(self.agent_manager.agents.values()))
+            except Exception:
+                pass
+
+            # Update the system prompt in active session history with the latest translated backstories
+            try:
+                history = self.session_manager.active_sessions.get(agent.name, [])
+                if history and history[0].role == "system":
+                    history[0].content = agent.get_full_system_prompt(list(self.agent_manager.agents.values()))
+            except Exception:
+                pass
+
+            executor = self.get_executor(agent)
+            if not executor:
+                self.log_to_ui(f"[bold red]Agent {agent.name} not configured (Key missing).[/bold red]")
+                return
+            
+            toolbox.thread_context.agent_name = agent.name    
+            toolbox.thread_context.batch_id = batch_id
+            self.app.call_from_thread(self._toggle_spinner, True, agent.name, agent.color)
+            # --- NEW: Prepare the TTS voice stream for this specific agent ---
+            if getattr(self, "tts_enabled", False):
+                self.tts_manager.start_stream(voice=agent.tts_voice, agent_name=agent.name)
+            # Use a unique thread_id per agent/session
+            thread_id = override_thread_id or f"{self.session_manager.current_session_id}_{agent.name}"
+            run_config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 5000}
+
+            current_ai_text = ""
+            full_ai_response = ""
+            current_ai_widget = None
+            tool_outputs = []
+            tool_calls = []
+
+            try:
+                # Check if we have an existing state for this thread in the checkpointer
+                state = executor.get_state(run_config)
+
+                import base64
+                import mimetypes
+
+                def _format_vision_content(text: str, is_vision: bool):
+                    if isinstance(text, list):
+                        return text
+                    if not isinstance(text, str):
+                        return text
+                    if not is_vision or "[Attached Image:" not in text:
+                        return text
+                    
+                    parts = re.split(r'\[Attached Image: (.*?)\]', text)
+                    if len(parts) == 1: return text
+                    
+                    content_list = []
+                    for i, part in enumerate(parts):
+                        if i % 2 == 0:
+                            if part.strip(): content_list.append({"type": "text", "text": part.strip()})
+                        else:
+                            file_path = part.strip()
+                            try:
+                                mime = mimetypes.guess_type(file_path)[0] or "image/jpeg"
+                                if file_path.lower().endswith(".pdf"):
+                                    try:
+                                        import pypdfium2 as pdfium
+                                        import io
+                                        
+                                        doc = pdfium.PdfDocument(file_path)
+                                        dpi_val = getattr(self, "pdf_dpi", None) or 150
+                                        # Convert DPI to scale value relative to 72 points per inch standard
+                                        scale_val = dpi_val / 72.0
+                                        
+                                        for page in doc:
+                                            bitmap = page.render(scale=scale_val)
+                                            pil_img = bitmap.to_pil()
+                                            
+                                            buffered = io.BytesIO()
+                                            pil_img.save(buffered, format="PNG")
+                                            b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+                                            content_list.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+                                    except Exception as pdf_e:
+                                        # --- SEAMLESS FALLBACK: Try pure-python text extraction via pypdf ---
+                                        try:
+                                            from pypdf import PdfReader
+                                            reader = PdfReader(file_path)
+                                            text_accum = []
+                                            for idx_p, page in enumerate(reader.pages):
+                                                page_text = page.extract_text() or ""
+                                                text_accum.append(f"--- PDF Page {idx_p+1} ---\n{page_text}")
+                                            full_text = "\n\n".join(text_accum).strip()
+                                            if full_text:
+                                                content_list.append({"type": "text", "text": f"[Visual conversion failed, fell back to text extraction]:\n\n{full_text}"})
+                                            else:
+                                                raise ValueError("No text extractable from this PDF.")
+                                        except Exception as fallback_e:
+                                            content_list.append({"type": "text", "text": f"[PDF processing failed: Visual engine error: {pdf_e}. Text engine error: {fallback_e}. Make sure the PDF is not corrupted.]"})
+                                else:
+                                    with open(file_path, "rb") as f:
+                                        b64 = base64.b64encode(f.read()).decode('utf-8')
+                                    content_list.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                            except Exception as e:
+                                content_list.append({"type": "text", "text": f"[Failed to load attached image: {file_path} - {e}]"})
+                    return content_list
+
+                # Prepare messages from history
+                history = self.session_manager.active_sessions.get(agent.name, [])
+                if not history:
+                    self.session_manager.init_agent_session(agent, list(self.agent_manager.agents.values()))
+                    history = self.session_manager.active_sessions.get(agent.name, [])
+                langchain_messages = []
+                for hm in history:
+                    content = hm.content
+                    if not agent.is_capable_vision:
+                        if "data:image" in content or "data:application/pdf" in content:
+                            content = re.sub(r'data:(?:image|application/pdf);base64,[A-Za-z0-9+/=]+', '[Attachment stripped: Agent not vision capable]', content)
+
+                    if hm.role == "system": langchain_messages.append(SystemMessage(content=content))
+                    elif hm.role == "human": langchain_messages.append(HumanMessage(content=_format_vision_content(content, agent.is_capable_vision)))
+                    elif hm.role == "ai": 
+                        langchain_messages.append(AIMessageChunk(content=content, tool_calls=hm.tool_calls or []))
+                        if hm.tool_calls:
+                            # Self-Heal: Ensure every tool call has a response
+                            outputs_by_id = {o.get("tool_call_id"): o for o in (hm.tool_outputs or []) if o.get("tool_call_id")}
+                            outputs_by_name_list = {}
+                            for o in (hm.tool_outputs or []):
+                                n = o.get("name")
+                                if n:
+                                    outputs_by_name_list.setdefault(n, []).append(o)
+
+                            for tc in hm.tool_calls:
+                                tc_name = tc.get("name")
+                                tc_id = tc.get("id")
+                                
+                                output = None
+                                if tc_id and tc_id in outputs_by_id:
+                                    output = outputs_by_id[tc_id]
+                                elif tc_name in outputs_by_name_list and outputs_by_name_list[tc_name]:
+                                    output = outputs_by_name_list[tc_name].pop(0)
+
+                                if output:
+                                    tool_content = str(output.get("content", ""))
+                                    
+                                    # 1. Standard plain-text ToolMessage (Satisfies strict API schemas)
+                                    langchain_messages.append(ToolMessage(
+                                        content=tool_content,
+                                        name=tc_name,
+                                        tool_call_id=tc.get("id", "unknown")
+                                    ))
+                                    
+                                    # 2. Global Companion Injection: 
+                                    # If ANY tool response contains an image, append companion HumanMessages
+                                    if "[Attached Image:" in tool_content:
+                                        matches = re.finditer(r'\[Attached Image: (.*?)\]', tool_content)
+                                        for match in matches:
+                                            if agent.is_capable_vision:
+                                                filepath = match.group(1).strip()
+                                                langchain_messages.append(HumanMessage(
+                                                    content=_format_vision_content(f"[Attached Image: {filepath}]", True)
+                                                ))
+                                else:
+                                    # Placeholder for unfinished calls to satisfy LangGraph validation
+                                    self.log_to_ui(f"[dim yellow] Healing interrupted tool call: {tc_name}[/dim yellow]")
+                                    langchain_messages.append(ToolMessage(
+                                        content="[Tool execution was interrupted or cancelled during session transition.]",
+                                        name=tc_name,
+                                        tool_call_id=tc.get("id", "unknown")
+                                    ))
+                """
+                # ---------------------------------------------------------------------
+                # --- OPTIMIZATION PASS: Strip Older Automated Screenshots Only ---
+                # ---------------------------------------------------------------------
+                # 1. Locate the index of the absolute last HumanMessage containing an automated screenshot
+                last_screenshot_msg_idx = -1
+                for msg_idx, msg in enumerate(langchain_messages):
+                    if isinstance(msg, HumanMessage) and isinstance(msg.content, list):
+                        # Determine if this message is an automated screenshot
+                        is_screenshot = False
+                        if msg_idx < len(history):
+                            is_screenshot = "screenshots/screen_" in (history[msg_idx].content or "")
+                        else:
+                            is_screenshot = True  # Dynamically injected companion message is always a screenshot
+
+                        if is_screenshot and any(block.get("type") == "image_url" for block in msg.content):
+                            last_screenshot_msg_idx = msg_idx
+                
+                # 2. Strip only older automated screenshots, leaving your user-uploaded files fully intact
+                if last_screenshot_msg_idx != -1:
+                    for msg_idx, msg in enumerate(langchain_messages):
+                        if msg_idx < last_screenshot_msg_idx and isinstance(msg, HumanMessage) and isinstance(msg.content, list):
+                            # Verify if this older message is indeed an automated screenshot
+                            is_screenshot = False
+                            if msg_idx < len(history):
+                                is_screenshot = "screenshots/screen_" in (history[msg_idx].content or "")
+                            else:
+                                is_screenshot = True
+
+                            if is_screenshot:
+                                for block in msg.content:
+                                    if block.get("type") == "image_url":
+                                        block.clear()
+                                        block.update({
+                                            "type": "text",
+                                            "text": "[Historical screen state omitted to ensure focus on the latest state]"
+                                        })
+                # ---------------------------------------------------------------------
+                """
+                # If no state exists, we must provide the initial input to the graph
+                if not state.values:
+                    stream_input = {"messages": langchain_messages}
+                else:
+                    # IMPORTANT: LangGraph checkpointer is independent of SessionManager.
+                    # We must sync any "intercom" messages from SessionManager history 
+                    # that LangGraph hasn't seen yet.
+                    existing_messages = state.values.get("messages", [])
+
+                    # SELF-HEAL CHECKPOINTER: LangGraph's internal state might be invalid
+                    # if it contains an AIMessage with tool_calls that has no ToolMessages.
+                    if existing_messages:
+                        # Collect all tool calls and all responses across the entire history
+                        needed_responses = {} # call_id -> tool_name
+                        for m in existing_messages:
+                            # Register tool calls
+                            tcs = getattr(m, "tool_calls", None)
+                            if tcs:
+                                for tc in tcs:
+                                    if "id" in tc:
+                                        needed_responses[tc["id"]] = tc.get("name") or "tool"
+
+                            # Remove those that have responses (ToolMessage has tool_call_id)
+                            tcid = getattr(m, "tool_call_id", None)
+                            if tcid and tcid in needed_responses:
+                                del needed_responses[tcid]
+
+                        if needed_responses:
+                            self.log_to_ui(f"[dim yellow] Healing {len(needed_responses)} incomplete tool calls in checkpointer...[/dim yellow]")
+                            healing_messages = []
+                            for tid, tname in needed_responses.items():
+                                healing_messages.append(ToolMessage(
+                                    content="[Tool execution was interrupted or cancelled during session transition.]",
+                                    name=tname,
+                                    tool_call_id=tid
+                                ))
+
+                            try:
+                                # Attempt to patch the existing state
+                                executor.update_state(run_config, {"messages": healing_messages})
+                                # Refresh state after healing
+                                state = executor.get_state(run_config)
+                                existing_messages = state.values.get("messages", [])
+                            except Exception as he:
+                                # If we can't even patch it, we'll hit the reset logic in the main except block
+                                self.log_to_ui(f"[dim red]Checkpoint patching failed: {he}[/dim red]")
+                                raise he
+
+                    existing_contents = set()
+                    for m in existing_messages:
+                        existing_contents.add(str(m.content) if isinstance(m.content, list) else m.content)
+
+                    missing_messages = []
+                    for m in langchain_messages:
+                        if isinstance(m, SystemMessage): continue
+                        m_val = str(m.content) if isinstance(m.content, list) else m.content
+                        if m_val not in existing_contents:
+                            missing_messages.append(m)
+
+                    if missing_messages:
+                        # Update state with prior missing messages (e.g. User Prompt during an Intercom handoff)
+                        if len(missing_messages) > 1:
+                            executor.update_state(run_config, {"messages": missing_messages[:-1]})
+                        # Feed ONLY the very last missing message to stream_input to trigger execution
+                        stream_input = {"messages": [missing_messages[-1]]}
+                    else:
+                        # If nothing is missing (e.g. network retry), resume from checkpoint
+                        stream_input = None
+
+                # Stream execution
+                consecutive_fail_count = 0
+                MAX_CONSECUTIVE_FAILS = 5
+                
+                while consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
+                    try:
+                        for event_type, event_data in executor.stream(stream_input, config=run_config, stream_mode=["messages", "updates"]):
+                            if toolbox.ABORT_EVENT.is_set() or (batch_id != 0 and (batch_id != self.current_batch_id or batch_id in self.session_manager.aborted_batch_ids)):
+                                raise Exception("Operation forcefully aborted or interrupted by user.")
+
+                            if event_type == "messages":
+                                chunk, metadata = event_data
+                                if metadata.get("langgraph_node") == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
+                                    text_chunk = str(chunk.content)
+                                    current_ai_text += text_chunk
+                                    full_ai_response += text_chunk
+                                    # --- NEW: Stream text chunk to TTS engine ---
+                                    if getattr(self, "tts_enabled", False):
+                                        self.tts_manager.stream_text(text_chunk, agent_name=agent.name, voice=agent.tts_voice)
+                                    if not current_ai_widget:
+                                        top_rule = Static(Rule(style=agent.color))
+                                        header_widget = Static(Text.from_markup(f"[bold {agent.color}]{agent.name}:[/bold {agent.color}]"), classes="chat_msg", markup=False)
+                                        current_ai_widget = Static(Markdown(""), classes="chat_msg")
+                                        bottom_rule = Static(Rule(style=agent.color))
+                                        
+                                        ai_box = Vertical(
+                                            top_rule,
+                                            header_widget,
+                                            current_ai_widget,
+                                            bottom_rule,
+                                            classes="message_block"
+                                        )
+                                        self.app.call_from_thread(self.query_one("#chat_messages").mount, ai_box)
+                                        
+                                    display_text = render_latex_to_unicode(current_ai_text)
+                                    self.app.call_from_thread(current_ai_widget.update, Markdown(display_text))
+                                    self.app.call_after_refresh(lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False))
+
+                            elif event_type == "updates":
+                                # Progress Made: Reset consecutive fail counter
+                                consecutive_fail_count = 0
+                                
+                                for node_name, node_data in event_data.items():
+                                    messages = node_data.get("messages", [])
+                                    if not isinstance(messages, list):
+                                        messages = [messages]
+
+                                    if node_name == "agent":
+                                        for msg in messages:
+                                            if hasattr(msg, 'additional_kwargs') and 'thought' in msg.additional_kwargs:
+                                                self.log_to_ui(f"[dim]Thought:[/dim] {escape(msg.additional_kwargs['thought'])}")
+
+                                            # Telegram integration
+                                            if getattr(self, "current_telegram_chat_id", None) and current_ai_text.strip():
+                                                # Add loud prefix for Telegram to distinguish agents
+                                                tele_msg = f"Agent {agent.name.upper()}:\n\n{current_ai_text.strip()}"
+                                                # --- NEW: Pass agent.tts_voice ---
+                                                self.telegram_manager.send_message(
+                                                    self.current_telegram_chat_id, 
+                                                    tele_msg, 
+                                                    title=agent.name, 
+                                                    voice=agent.tts_voice
+                                                )
+
+                                            # Print outgoing tool calls
+                                            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                                                for tc in msg.tool_calls:
+                                                    tool_calls.append(tc)
+                                                    call_text = f"[#808080]Calling Tool: {escape(tc['name'])} with args: {escape(str(tc['args']))}[/#808080]"
+                                                    self.write_message_block(f"[bold {agent.color}]{agent.name} (Tool Call):[/bold {agent.color}]", call_text, agent.color, is_markdown=False)
+
+                                            # Clean up streaming variables for the next turn
+                                            if getattr(self, "tts_enabled", False):
+                                                self.tts_manager.flush_stream(agent_name=agent.name, voice=agent.tts_voice)
+                                            current_ai_widget = None
+                                            current_ai_text = ""
+
+                                    # Print incoming tool results
+                                    elif node_name == "tools":
+                                        for msg in messages:
+                                            tool_name = getattr(msg, 'name', 'tool')
+                                            tool_call_id = getattr(msg, 'tool_call_id', None)
+                                            
+                                            content_to_save = msg.content
+                                            if isinstance(msg.content, list):
+                                                reconstructed = ""
+                                                for block in msg.content:
+                                                    if block.get("type") == "text":
+                                                        reconstructed += block.get("text", "")
+                                                    elif block.get("type") == "image_url":
+                                                        reconstructed += "\n[ImageBase64: <data_transmitted>]\n"
+                                                content_to_save = reconstructed
+                                                
+                                            tool_outputs.append({"name": tool_name, "content": content_to_save, "tool_call_id": tool_call_id})
+                                            
+                                            if "[Attached Image:" in str(content_to_save):
+                                                img_match = re.search(r'\[Attached Image: (.*?)\]', str(content_to_save))
+                                                if img_match:
+                                                    img_name = os.path.basename(img_match.group(1).strip())
+                                                    self.log_to_ui(f"[#808080]Harness: Intercepted companion image `{img_name}` and queued for visual analysis.[/]")
+                                            
+                                            # Intercept and hide raw search results from the UI to comply with DuckDuckGo terms
+                                            if tool_name in ["search_web", "SearchWeb"]:
+                                                summary = "[Search results successfully parsed and delivered to active agent context]"
+                                            else:
+                                                # Clean up any embedded Base64 tags or raw data URIs from the UI printout to keep Textual responsive
+                                                summary_clean = str(content_to_save)
+                                                summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', summary_clean)
+                                                summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
+                                                summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
+                                            
+                                            # Build the boxed widget
+                                            box_content = f"[bold]Tool Result ({agent.name}):[/bold]\n{escape(summary)}"
+                                            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                                            box_widget.styles.border = ("round", agent.color)
+                                            self.log_to_ui(box_widget)
+                        
+                        # Detect completely empty responses and inject a retry prompt natively
+                        if not full_ai_response.strip():
+                            consecutive_fail_count += 1
+                            if consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
+                                self.log_to_ui(f"[bold yellow] Hmmmm. Lets see now... ({consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS})...[/bold yellow]")
+                                stream_input = {"messages": [HumanMessage(content="System Guardrail: You have not provided a text response to the user. Please continue your turn and provide a response.")]}
+                                current_ai_text = ""
+                                full_ai_response = ""
+                                current_ai_widget = None
+                                # DO NOT clear tool_outputs and tool_calls here so they correctly accumulate across retries
+                                continue
+                            else:
+                                raise ValueError("Empty response received from API after multiple retries")
+
+                        # Success: exit retry loop
+                        break
+
+                    except Exception as stream_e:
+                        err_msg = str(stream_e).lower()
+                        consecutive_fail_count += 1
+                        
+                        if ("connection" in err_msg or "reset" in err_msg or "timeout" in err_msg or "429" in err_msg) and consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
+                            self.log_to_ui(f"[yellow] Stream interrupted ({escape(str(stream_e))}). Retrying {consecutive_fail_count}/{MAX_CONSECUTIVE_FAILS}...[/yellow]")
+                            time.sleep(3)
+                            stream_input = None # LangGraph resumes from checkpoint
+                            continue
+                        raise stream_e
+
+                # Broadcast AI response and tool outputs to others
+                if full_ai_response.strip() or tool_outputs or tool_calls:
+                    ai_response = full_ai_response.strip()
+                    # 1. Save to session manager so others can see it
+                    self.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls)
+                    self.app.call_from_thread(self.update_tokens)
+                    
+                    # Silent Background Session Naming
+                    self.trigger_background_naming(prompt, ai_response)
+                    
+                    # 2. Check for new mentions in AI response and add to queue/parallel
+                    new_seq_mentions = self.agent_manager.get_mentions(ai_response)
+                    new_par_mentions = self.agent_manager.get_parallel_mentions(ai_response)
+                    
+                    # Fire parallel agents immediately
+                    for m_name in new_par_mentions:
+                        m_agent = self.agent_manager.get_agent(m_name)
+                        if m_agent and m_agent.name != agent.name:
+                            self.log_to_ui(f"[bold cyan]>> Parallel hand-off to {m_agent.name}...[/bold cyan]")
+                            self.session_manager.join_conversation(agent.name, m_agent, list(self.agent_manager.agents.values()))
+                            self.run_agent_task(m_agent, prompt, batch_id=batch_id)
+
+                    with self.turn_lock:
+                        for m_name in new_seq_mentions:
+                            m_agent = self.agent_manager.get_agent(m_name)
+                            # Allow self-callback ONLY if parallel agents (@@) were dispatched in this turn;
+                            # Otherwise allow for all other distinct agents.
+                            if m_agent and m_agent not in self.turn_queue:
+                                if m_agent.name != agent.name or len(new_par_mentions) > 0:
+                                    self.turn_queue.append(m_agent)
+
+                # 3. Check queue for the next agent to respond
+                next_agent = None
+                with self.turn_lock:
+                    if "@askuser" in ai_response.lower() and self.turn_queue:
+                        self.paused_queue = list(self.turn_queue)
+                        self.turn_queue = []
+                        self.log_to_ui("[bold yellow]Queue paused by agent. Waiting for user input. Type @resume to continue.[/bold yellow]")
+
+                    # Barrier Synchronization: Wait for all parallel peers to finish before popping the sequential queue
+                    if self.turn_queue and len(self._running_agents) <= 1:
+                        next_agent = self.turn_queue.pop(0)
+
+                if next_agent:
+                    self.log_to_ui(f"[bold cyan]>> Sequential hand-off to {next_agent.name}...[/bold cyan]")
+                    self.session_manager.join_conversation(agent.name, next_agent, list(self.agent_manager.agents.values()))
+                    self.run_agent_task(next_agent, prompt, batch_id=batch_id)
+
+            except (Exception, SystemExit, BaseException) as e:
+                error_str = str(e) if str(e) else "Operation forcefully aborted by user."
+
+                # Handle abort/interrupt errors cleanly while preserving all available tool results
+                if isinstance(e, (SystemExit, BaseException)) or toolbox.ABORT_EVENT.is_set() or any(term in error_str.lower() for term in ["aborted", "interrupted"]):
+                    completed_ids = {o.get("tool_call_id") for o in tool_outputs if o.get("tool_call_id")}
+                    completed_names_count = {}
+                    for o in tool_outputs:
+                        n = o.get("name")
+                        if n: completed_names_count[n] = completed_names_count.get(n, 0) + 1
+
+                    # Fill in missing outputs for aborted/uncompleted tool calls
+                    for tc in tool_calls:
+                        tc_id = tc.get("id")
+                        tc_name = tc.get("name", "tool")
+                        
+                        is_completed = False
+                        if tc_id and tc_id in completed_ids:
+                            is_completed = True
+                        elif not tc_id and completed_names_count.get(tc_name, 0) > 0:
+                            completed_names_count[tc_name] -= 1
+                            is_completed = True
+
+                        if not is_completed:
+                            aborted_output = {
+                                "name": tc_name,
+                                "content": "Error: Tool execution aborted by user.",
+                                "tool_call_id": tc_id
+                            }
+                            tool_outputs.append(aborted_output)
+                            
+                            # Render UI box for the aborted tool
+                            box_content = f"[bold]Tool Result ({agent.name}):[/bold]\nError: Tool execution aborted by user."
+                            box_widget = Static(Text.from_markup(box_content), classes="tool_result_box", markup=False)
+                            box_widget.styles.border = ("round", agent.color)
+                            self.log_to_ui(box_widget)
+
+                    # Save both completed and aborted tools to DB & Session History
+                    if tool_outputs or tool_calls:
+                        ai_resp = full_ai_response.strip() or "[Operation Aborted by User]"
+                        self.session_manager.broadcast_message(
+                            agent.name, ai_resp, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls
+                        )
+                        self.app.call_from_thread(self.update_tokens)
+
+                    self.log_to_ui("[bold red] Operation Aborted by User. Partial tool results saved.[/bold red]")
+                    return
+
+                # Broad, guaranteed mitigation check for any API validation, schema, or Bad Request (400) errors
+                is_schema_or_api_error = any(term in error_str.lower() or term in repr(e).lower() for term in ["400", "invalid", "empty", "badrequest", "toolmessage", "tool_calls", "validation", "argument"])
+
+                if is_schema_or_api_error and "_rst_" not in thread_id:
+                    self.log_to_ui("[bold yellow] State Corruption or API Error Detected. Performing Automated Recovery...[/bold yellow]")
+                    # Timestamped reset suffix to bypass the broken SQLite thread
+                    new_thread_id = f"{thread_id}_rst_{int(time.time())}"
+                    # Remove from running agents so it can re-trigger
+                    self._running_agents.discard(agent.name)
+                    return self.run_agent_task(agent, prompt, override_thread_id=new_thread_id, batch_id=batch_id)
+
+                self.log_to_ui(f"[bold red]Execution Error ({agent.name}):[/bold red] {e}")
+        finally:
+            self._running_agents.discard(agent.name)
+            self.app.call_from_thread(self._toggle_spinner, False, agent.name, agent.color) 
+            toolbox.unregister_thread()
+               
     def _toggle_spinner(self, show: bool, agent_name: str = "Agent", agent_color: str = "#00FFFF"):
         if show:
             self._running_task_count += 1
@@ -3425,6 +4533,7 @@ class AIAgentView(Vertical):
             pass
 
     def tick_spinners(self):
+        """Animates all active spinners (research tasks and active agents)."""
         try:
             spinner_label = self.query_one("#ai_thinking_spinner")
             spinner_visible = spinner_label.display
@@ -3444,6 +4553,7 @@ class AIAgentView(Vertical):
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
             char = self.spinner_chars[self.spinner_idx]
 
+            # 1. Animate Research Tasks (if container is visible)
             if progress_visible:
                 try:
                     for row in self.query(".task_row"):
@@ -3457,6 +4567,7 @@ class AIAgentView(Vertical):
                         except Exception: continue
                 except Exception: pass
             
+            # 2. Animate Main Thinking Indicator (if spinner is visible)
             if spinner_visible:
                 try:
                     if self._running_agents:
@@ -3524,10 +4635,12 @@ class AIAgentView(Vertical):
         return candidate
 
     def tick_scheduler(self):
+        """Checks the clock and fires off scheduled tasks natively as a Ghost User with catch-up logic."""
         if getattr(self, "shell_mode", False) or not hasattr(self, "schedule_manager") or getattr(self, "_scheduler_prompt_active", False):
             return
             
         now = datetime.now()
+        current_date = now.strftime("%Y-%m-%d")
         
         for task in self.schedule_manager.tasks:
             if not task.is_active: continue
@@ -3549,7 +4662,7 @@ class AIAgentView(Vertical):
                 def handle_action(action: str):
                     self._scheduler_prompt_active = False
                     if action == "defer":
-                        task.snooze_until = time.time() + 900.0
+                        task.snooze_until = time.time() + 900.0  # Defer 15 minutes
                         self.notify(f"Scheduled task '{task.prompt[:30]}...' deferred for 15 minutes.", severity="warning")
                     elif action == "skip":
                         task.last_run_date = sched_str
@@ -3563,7 +4676,7 @@ class AIAgentView(Vertical):
                         
                         full_prompt = f"@{task.agent_name} [Automated Scheduled Task]:\n{task.prompt}"
                         
-                        from textual.widgets import TextArea
+                        from agent import ChatInput
                         chat_input = self.query_one("#ai_chat_input", ChatInput)
                         
                         event = ChatInput.Submitted(chat_input, full_prompt)
@@ -3576,6 +4689,7 @@ class AIAgentView(Vertical):
     
     def update_tokens(self):
         try:
+            # Class-level attributes to prevent main-thread visual blocking
             if not hasattr(self, "_tiktoken_encoding"):
                 self._tiktoken_encoding = None
             if not hasattr(self, "_tiktoken_loading"):
@@ -3592,10 +4706,12 @@ class AIAgentView(Vertical):
                     except Exception:
                         count = len(text) // 4
                 else:
+                    # Provide an instant character-approximation fallback for boot sequence
                     count = len(text) // 4
                     if not self._tiktoken_loading:
                         self._tiktoken_loading = True
                         
+                        # Load compiled Rust modules in background to prevent I/O or network hangs on UI
                         def bg_load_tiktoken():
                             try:
                                 import tiktoken
@@ -3604,6 +4720,7 @@ class AIAgentView(Vertical):
                                 pass
                             finally:
                                 self._tiktoken_loading = False
+                                # Silently refresh status display upon load completion
                                 try:
                                     self.app.call_from_thread(self.update_tokens)
                                 except Exception:
@@ -3653,13 +4770,14 @@ class AIAgentView(Vertical):
                 self.log_to_ui(f"[bold green]Federate is up-to-date![/bold green] Installed version: v{installed_ver}")
             return
 
-        settings = toolbox.load_global_settings()
+        settings = load_global_settings()
         skipped = settings.get("skipped_version", "")
         if not manual and skipped == latest_ver:
             return
 
         headers = {'User-Agent': 'Mozilla/5.0 (compatible; FederateApp/1.0)'}
         
+        # 1. Fetch release list to build cumulative update notes across all intermediate versions
         try:
             gh_list_url = "https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases?per_page=100"
             req_gh_list = urllib.request.Request(gh_list_url, headers=headers)
@@ -3682,6 +4800,7 @@ class AIAgentView(Vertical):
         except Exception:
             pass
 
+        # 2. Single-tag fallback if full release list lookup fails
         if not release_notes:
             for endpoint in [
                 f"https://api.github.com/repos/ROCK-LAB-PRIVATE-LIMITED/federate.ai/releases/tags/v{latest_ver}",
@@ -3705,9 +4824,9 @@ class AIAgentView(Vertical):
         def show_modal():
             def handle_update_result(action: str):
                 if action == "skip":
-                    st = toolbox.load_global_settings()
+                    st = load_global_settings()
                     st["skipped_version"] = latest_ver
-                    toolbox.save_global_settings(st)
+                    save_global_settings(st)
                     self.log_to_ui(f"[dim]Skipped update v{latest_ver}. Type /update anytime to update.[/dim]")
 
             self.app.push_screen(UpdateModal(installed_ver, latest_ver, release_notes), handle_update_result)
@@ -3715,6 +4834,7 @@ class AIAgentView(Vertical):
         self.app.call_from_thread(show_modal)
 
     def request_clarification(self, options: Optional[List[str]] = None, agent_name: str = "Agent") -> str:
+        """Pushes the ClarificationModal and waits for the result."""
         result_event = threading.Event()
         final_result = [""]
 
@@ -3724,6 +4844,7 @@ class AIAgentView(Vertical):
 
         self.app.call_from_thread(self.app.push_screen, ClarificationModal(options, agent_name=agent_name), handle_result)
         
+        # Wait for the user to submit
         while not result_event.is_set():
             if toolbox.ABORT_EVENT.is_set():
                 return ""
@@ -3732,6 +4853,7 @@ class AIAgentView(Vertical):
         return final_result[0]
 
     def handle_telegram_input(self, chat_id: int, text: str):
+        """Processes incoming Telegram messages exactly like UI chat."""
         if text.strip().startswith("/") or text.strip().startswith("&"):
             self.telegram_manager.send_message(
                 chat_id, 
@@ -3742,12 +4864,13 @@ class AIAgentView(Vertical):
             try:
                 self.current_telegram_chat_id = chat_id
                 
-                user_cfg = toolbox.load_global_settings()
+                user_cfg = load_global_settings()
                 u_name = user_cfg.get("user_name", "User")
                 u_color = user_cfg.get("user_color", "#dda0dd")
 
                 self._write_message_block(f"[bold {u_color}]Telegram {u_name} ({chat_id}):[/bold {u_color}]", text, u_color, is_markdown=True)
                 
+                # --- INTERRUPT SYSTEM ---
                 is_interrupt = False
                 if self._running_agents:
                     self.action_abort()
@@ -3755,10 +4878,12 @@ class AIAgentView(Vertical):
                 
                 self.current_batch_id += 1
                 batch_id = self.current_batch_id
+                # ------------------------
                 
                 if text.strip().lower() != "@resume" and hasattr(self, "paused_queue") and self.paused_queue:
                     self.paused_queue = []
 
+                # Determine routing and clean prompt
                 acting_agent = self.active_agent
                 clean_prompt = text
                 acting_agents = []
@@ -3802,6 +4927,7 @@ class AIAgentView(Vertical):
                                 self.session_manager.join_conversation(self.active_agent.name, agent, all_agents_list)
                                 acting_agents.append(agent)
                 else:
+                    # Handle sequential @ mentions and parallel @@ mentions
                     seq_mentions = self.agent_manager.get_mentions(text)
                     par_mentions = self.agent_manager.get_parallel_mentions(text)
                     clean_prompt = text
@@ -3819,9 +4945,11 @@ class AIAgentView(Vertical):
                         
                         if target_agents:
                             if par_mentions:
+                                # Parallel agents are running, so ALL sequential agents wait in the queue
                                 with self.turn_lock:
                                     self.turn_queue = target_agents
                             else:
+                                # Standard sequential behavior
                                 first_agent = target_agents[0]
                                 with self.turn_lock:
                                     self.turn_queue = target_agents[1:]
@@ -3849,9 +4977,12 @@ class AIAgentView(Vertical):
 
                 time_stamp = f"[Today's date is {datetime.now().strftime('%A, %B %d, %Y')} and the time now is {datetime.now().strftime('%H:%M')}]\n"
                 processed_prompt = time_stamp + clean_prompt
+                #processed_prompt = handle_dollar_commands(processed_prompt, self)
                 
+                # Broadcast user message
                 self.session_manager.broadcast_message(f"Telegram {u_name} ({chat_id})", processed_prompt, is_ai=False)
                 self.update_tokens()
+                # --- START THE TYPING LOOP ---
                 self.telegram_manager.start_chat_action(chat_id, "typing")
                 
                 toolbox.ABORT_EVENT.clear()
@@ -3863,39 +4994,89 @@ class AIAgentView(Vertical):
                 
         self.app.call_from_thread(_process)
 
+    def trigger_background_naming(self, user_prompt: str, agent_response: str):
+        session_id = self.session_manager.current_session_id
+        name_map = get_session_name_map()
+        if session_id in name_map:
+            return
+            
+        agent = self.active_agent
+        if agent.use_backup and agent.backup_model:
+            model = agent.backup_model
+            base_url = agent.backup_base_url or agent.base_url
+            api_key = agent.get_backup_api_key() or agent.get_api_key()
+        else:
+            model = agent.model
+            base_url = agent.base_url
+            api_key = agent.get_api_key()
+
+        if not api_key:
+            return
+            
+        try:
+            from langchain_openai import ChatOpenAI
+            from langchain_core.messages import SystemMessage
+            effort = getattr(agent, "reasoning_effort", "none")
+            extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+            llm = ChatOpenAI(
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=0,
+                max_retries=1,
+                **extra_args
+            )
+            naming_prompt = (
+                "Based on the following first user query and agent response of a session, "
+                "generate a short, descriptive name (3-5 words max, no quotes, no file extensions, "
+                "plain text) for this session.\n\n"
+                f"User: {user_prompt[:200]}\n"
+                f"Agent: {agent_response[:200]}"
+            )
+            res = llm.invoke([HumanMessage(content=naming_prompt)])
+            name = res.content.strip().strip('"').strip("'")
+            if name:
+                name_map[session_id] = name
+                save_session_name_map(name_map)
+                self.log_to_ui(f"[bold green]Session Named: {name}[/]")
+        except Exception:
+            pass
+
     def handle_stt_input(self, text: str, action: str = "append"):
+        """Handles pause-appends, auto-submits, and hotword deletions in the UI."""
         def _process():
             try:
                 chat_input = self.query_one("#ai_chat_input", ChatInput)
-                current_val = chat_input.text.strip() 
+                current_val = chat_input.text.strip() # CHANGED
 
                 if action == "append":
                     if text:
                         new_val = (current_val + " " + text).strip()
-                        chat_input.text = new_val 
+                        chat_input.text = new_val # CHANGED
                         self.stt_append_history.append(text)
                 
                 elif action == "delete":
                     if self.stt_append_history:
                         last_text = self.stt_append_history.pop()
-                        if chat_input.text.endswith(last_text): 
-                            chat_input.text = chat_input.text[:-len(last_text)].strip() 
+                        if chat_input.text.endswith(last_text): # CHANGED
+                            chat_input.text = chat_input.text[:-len(last_text)].strip() # CHANGED
                         else:
-                            chat_input.text = chat_input.text.replace(last_text, "").strip() 
+                            chat_input.text = chat_input.text.replace(last_text, "").strip() # CHANGED
 
                 elif action == "submit":
                     if text:
-                        chat_input.text = (current_val + " " + text).strip() 
+                        chat_input.text = (current_val + " " + text).strip() # CHANGED
                     
                     self.stt_append_history = [] 
                     
-                    if chat_input.text.strip(): 
-                        self.on_input_submitted(ChatInput.Submitted(chat_input, chat_input.text)) 
+                    if chat_input.text.strip(): # CHANGED
+                        self.on_input_submitted(ChatInput.Submitted(chat_input, chat_input.text)) # CHANGED
 
                 chat_input.focus()
                 
+                # Move cursor to end
                 lines = chat_input.text.split("\n")
-                chat_input.cursor_location = (len(lines)-1, len(lines[-1])) 
+                chat_input.cursor_location = (len(lines)-1, len(lines[-1])) # CHANGED
                 
             except Exception as e:
                 self.log_to_ui(f"[bold red]STT UI Binding Error:[/bold red] {e}")
@@ -3903,21 +5084,27 @@ class AIAgentView(Vertical):
         self.app.call_from_thread(_process)
 
     def mount_progress(self, tasks: list[str]):
+        """Integrated Progress Mounting."""
         def _mount():
             try:
+                # Log to the main chat
                 self._write_log(Rule(title="[bold]Deep Research Modules Dispatched[/]", style="dim"))
 
+                # Show the container
                 container = self.query_one("#progress_container")
                 container.styles.display = "block"
 
+                # GET references to the panes
                 left_pane = self.query_one("#progress_left")
                 right_log = self.query_one("#progress_right", RichLog)
 
+                # Only clear the inside of the left pane, not the whole dashboard!
                 left_pane.query("*").remove()
                 right_log.clear()
 
                 from textual.containers import Horizontal
                 for t in tasks:
+                    # Construct ID (toolbox.py expects 'task_...')
                     safe_id = "task_" + "".join(c if c.isalnum() else "_" for c in t)
 
                     bar = ProgressBar(total=100, show_eta=False, id=f"prog_{safe_id}")
@@ -3929,6 +5116,7 @@ class AIAgentView(Vertical):
                     )
                     left_pane.mount(row)
 
+                # Ensure we scroll the main chat to reveal the new dashboard
                 self.app.call_after_refresh(
                     lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False)
                 )
@@ -3941,16 +5129,18 @@ class AIAgentView(Vertical):
         safe_id = "task_" + "".join(c if c.isalnum() else "_" for c in task)
         def _update():
             try:
+                # 1. Stream the raw log directly to the Right Pane
                 log_pane = self.query_one("#progress_right", RichLog)
                 log_pane.write(msg)
 
+                # 2. Update the Left Pane progress bar and spinner
                 prog = self.query_one(f"#prog_{safe_id}", ProgressBar)
                 spin = self.query_one(f"#spin_{safe_id}", Label)
 
                 if percent is not None:
                     prog.update(progress=percent)
                     if percent >= 100:
-                        spin.update("") 
+                        spin.update("") # Stop animating when done
 
                 self.app.call_after_refresh(
                     lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False)
@@ -3960,6 +5150,7 @@ class AIAgentView(Vertical):
         self.app.call_from_thread(_update)
 
     def hide_progress(self):
+        """Removes progress bars on completion."""
         def _hide():
             try:
                 self.query_one("#progress_container").styles.display = "none"
@@ -3968,16 +5159,19 @@ class AIAgentView(Vertical):
         self.app.call_from_thread(_hide)
     
     def check_onboarding(self):
+        """Checks if any agent is configured. If not, prompts for onboarding."""
         settings_path = os.path.join(self.agent_manager.agents_dir, "settings.json")
         is_pristine = not os.path.exists(settings_path)
         if is_pristine or (len(self.agent_manager.agents) == 1 and not self.active_agent.get_api_key()):
             self.call_after_refresh(self.show_onboarding_modal)
 
     def show_onboarding_modal(self, initial_data: dict = None):
+        """Displays the minimal onboarding dialog screen."""
         def handle_onboarding(result):
             if result:
                 old_name = self.active_agent.name
                 
+                # Update config fields dynamically with the provided onboarding choices
                 new_config = AgentConfig(
                     name=result["name"],
                     backstory=result["backstory"],
@@ -3995,6 +5189,7 @@ class AIAgentView(Vertical):
         self.app.push_screen(OnboardingModal(initial_data), handle_onboarding)
 
     def _update_agent_keys(self, agent_name: str, primary_key: str):
+        """Securely stores credentials to the OS Keyring and sets current session variables."""
         import keyring
         primary_user = f"agent_key_{agent_name.lower().replace(' ', '_')}"
         try:
