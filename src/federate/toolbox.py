@@ -3277,11 +3277,12 @@ def get_user_clarification(options: List[str] = None, config: RunnableConfig = N
     return "Error: User interface not available for clarification."
 
 @tool
-def search_episodic_memory(query: str, config: RunnableConfig) -> str:
+def search_episodic_memory(query: str, config: RunnableConfig = None) -> str:
     """
     Search your past conversation history conceptually (semantically).
     Use this to find previous decisions, technical details, or context even if exact words don't match.
-    Returns the most relevant snippets and their Session IDs.
+    Returns the most relevant matching text snippets, relevance scores, and their Session IDs.
+    Pass the returned matching text snippet directly into retrieve_episodic_memory(session_id=..., focus_string=...).
     """
     agent_name = _get_agent(config)
     
@@ -3311,33 +3312,131 @@ def search_episodic_memory(query: str, config: RunnableConfig) -> str:
         return f"Error performing semantic search: {e}"
 
 @tool
-def retrieve_episodic_memory(session_id: str, config: RunnableConfig) -> str:
+def retrieve_episodic_memory(session_id: str, focus_string: str = "", config: RunnableConfig = None) -> str:
     """
-    Returns the entire conversation history for a specific Session ID.
-    Use this after finding a relevant session via search_episodic_memory to get the full context.
+    Retrieves a focused, compressed summary of a past conversation for a specific Session ID.
+    It summarizes the history focusing specifically on the matching snippet ('focus_string'), preserving all relevant technical details, architectural decisions, and context leading up to and following that point.
+
+    Args:
+        session_id: The session ID to retrieve (e.g. 'sess_1785562384').
+        focus_string: The exact matching string snippet returned by search_episodic_memory (e.g. "I am checked in and ready to assist with your UI update test.").
     """
-    agent_name = _get_agent(config)
+    agent_name = _get_agent(config) if config else "Agent"
     safe_name = agent_name.replace(" ", "_")
     session_file = f"{session_id}_{safe_name}.json"
     path = get_storage_path("sessions", session_file)
     
     if not os.path.exists(path):
-        return f"Error: Session log {session_file} not found."
+        # Fallback: Search for any session file matching the session_id prefix
+        sessions_dir = get_storage_path("sessions")
+        matching = glob.glob(os.path.join(sessions_dir, f"{session_id}_*.json"))
+        if matching:
+            path = matching[0]
+        else:
+            return f"Error: Session log '{session_file}' not found."
         
     try:
         with open(path, "r", encoding="utf-8") as f:
             history = json.load(f)
             
-        output = f"--- VERBATIM HISTORY FOR SESSION {session_id} ---\n\n"
+        if not history or not isinstance(history, list):
+            return f"Session log '{session_id}' contains no recorded history."
+
+        log_tool(f"Summarizing memory recall for Session [cyan]{session_id}[/]...")
+
+        # Format conversation messages for compression
+        formatted_history = []
         for msg in history:
-            role = msg.get("role", "unknown").upper()
-            if role == "SYSTEM": continue
-            content = msg.get("content", "")
-            output += f"[{role}]:\n{content}\n\n"
-            
-        return output
+            if not isinstance(msg, dict): continue
+            role = msg.get("role", "unknown")
+            if role == "system": continue
+            role_disp = "User" if role == "human" else "Agent"
+            msg_text = msg.get("content") or ""
+            tool_outs = msg.get("tool_outputs") or []
+            for out in tool_outs:
+                if isinstance(out, dict):
+                    out_content = str(out.get("content", ""))
+                    if len(out_content) > 1000:
+                        out_content = out_content[:1000] + "... [truncated]"
+                    msg_text += f"\n[Tool {out.get('name', 'Unknown')} Output]: {out_content}"
+            formatted_history.append(f"[{role_disp}]: {msg_text}")
+        
+        history_text = "\n".join(formatted_history)
+
+        # Fallback to direct text if history is too brief to warrant compression
+        if len(history_text.strip()) < 300:
+            return f"--- RECALLED EPISODIC MEMORY (Session {session_id}) ---\n\n{history_text}"
+
+        # Resolve credentials of the calling agent
+        model = "google/gemini-2.5-flash:free"
+        base_url = "https://openrouter.ai/api/v1"
+        api_key = ""
+
+        if CURRENT_APP:
+            try:
+                agent_view = CURRENT_APP.query_one("#ai_agent_view")
+                agent_cfg = agent_view.agent_manager.get_agent(agent_name)
+                if agent_cfg:
+                    if agent_cfg.use_backup and agent_cfg.backup_model:
+                        model = agent_cfg.backup_model
+                        base_url = agent_cfg.backup_base_url or agent_cfg.base_url
+                        api_key = agent_cfg.get_backup_api_key() or agent_cfg.get_api_key()
+                    else:
+                        model = agent_cfg.model
+                        base_url = agent_cfg.base_url
+                        api_key = agent_cfg.get_api_key()
+            except Exception:
+                pass
+
+        if not api_key:
+            # Fallback if API key is not resolvable: return raw transcript
+            return f"--- VERBATIM HISTORY FOR SESSION {session_id} ---\n\n{history_text}"
+
+        if focus_string and focus_string.strip():
+            prompt = f"""You are an expert AI memory summarizer.
+You are analyzing a past conversation history from Session '{session_id}' to retrieve relevant context without bloating the active memory.
+
+TARGET FOCUS SNIPPET / TOPIC:
+"{focus_string.strip()}"
+
+TASK:
+Summarize this conversation specifically in the context of the target focus snippet/topic above:
+1. Preserve all technical details, architectures, file paths, code decisions, parameters, and user requirements.
+2. Explain how the conversation developed and got to the point denoted by the focus string.
+3. If the conversation continued after the point denoted by the focus string, explain how the conversation proceeded afterwards, including what solutions, outcomes, or conclusions were reached.
+4. Highlight any important events, decisions, warnings, or constraints that occurred in this context either before or after.
+5. Keep the summary dense, technical, concise, and structured in Markdown. Do not include conversational filler.
+
+PAST CONVERSATION HISTORY (Session {session_id}):
+{history_text}"""
+        else:
+            prompt = f"""You are an expert AI memory summarizer.
+You are analyzing a past conversation history from Session '{session_id}' to retrieve relevant context without bloating the active memory.
+
+TASK:
+Generate a dense, technical, and structured Markdown summary of this conversation:
+1. Preserve all technical details, architectures, file paths, code decisions, parameters, and user requirements.
+2. Clearly explain what problems were addressed, what solutions were implemented, and the final outcomes or conclusions.
+3. Keep the summary dense, technical, concise, and structured in Markdown. Do not include conversational filler.
+
+PAST CONVERSATION HISTORY (Session {session_id}):
+{history_text}"""
+
+        llm = ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0,
+            max_retries=3,
+            timeout=90
+        )
+
+        res = resilient_invoke(llm, [HumanMessage(content=prompt)])
+        summary = res.content.strip() if res and res.content else history_text
+        return f"--- FOCUSED EPISODIC MEMORY RECALL (Session {session_id}) ---\n\n{summary}"
+
     except Exception as e:
-        return f"Error reading session log: {e}"
+        return f"Error reading or summarizing session log: {e}"
 
 @tool
 def get_toolresult(ids: List[int], config: RunnableConfig = None) -> str:
