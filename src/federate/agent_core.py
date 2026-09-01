@@ -83,53 +83,7 @@ from subagents import dispatch_coding_subagent
 import hashlib
 import secrets
 
-AUTH_CONFIG_PATH = os.path.join(toolbox.FEDERATE_DIR, "master_auth.json")
-_UNLOCKED_SESSION_TOKEN = None
 _BACKSTORY_LOCK = threading.Lock()
-
-def _hash_password(password: str, salt: str = None) -> tuple:
-    if salt is None:
-        salt = secrets.token_hex(16)
-    h = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 100_000)
-    return h.hex(), salt
-
-def is_master_password_set() -> bool:
-    if os.path.exists(AUTH_CONFIG_PATH):
-        try:
-            with open(AUTH_CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return bool(data.get("hash") and data.get("salt"))
-        except Exception:
-            pass
-    return False
-
-def set_master_password(password: str) -> str:
-    pwd_hash, salt = _hash_password(password)
-    os.makedirs(os.path.dirname(AUTH_CONFIG_PATH), exist_ok=True)
-    with open(AUTH_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"hash": pwd_hash, "salt": salt}, f, indent=4)
-    global _UNLOCKED_SESSION_TOKEN
-    _UNLOCKED_SESSION_TOKEN = secrets.token_hex(32)
-    return _UNLOCKED_SESSION_TOKEN
-
-def unlock_core(password: str) -> str | None:
-    if not os.path.exists(AUTH_CONFIG_PATH):
-        return None
-    try:
-        with open(AUTH_CONFIG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        expected_hash = data.get("hash", "")
-        salt = data.get("salt", "")
-        if not expected_hash or not salt:
-            return None
-        actual_hash, _ = _hash_password(password, salt)
-        if secrets.compare_digest(actual_hash, expected_hash):
-            global _UNLOCKED_SESSION_TOKEN
-            _UNLOCKED_SESSION_TOKEN = secrets.token_hex(32)
-            return _UNLOCKED_SESSION_TOKEN
-        return None
-    except Exception:
-        return None
 
 def is_core_unlocked() -> bool:
     return True

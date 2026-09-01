@@ -266,9 +266,8 @@ class HeadlessServerView:
         # Lock keyring initially on server boot
         lock_keyring()
 
-        # Start background timers
+        # Start background scheduler timer
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
-        threading.Thread(target=self._client_watchdog, daemon=True).start()
 
         default_name = self.agent_manager.get_default_agent_name()
         self.active_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
@@ -296,22 +295,6 @@ class HeadlessServerView:
                 "agents": [{"name": a.name, "color": a.color, "model": a.model} for a in self.agent_manager.agents.values()],
                 "needs_onboarding": self.is_onboarding_needed()
             })
-
-    def _client_watchdog(self):
-        # 30-minute grace period for backgrounding/screen sleep (1800 seconds)
-        INACTIVITY_TIMEOUT = 1800.0
-        while True:
-            time.sleep(10.0)
-            try:
-                if self.client_connected and self.active_client_token:
-                    if time.time() - self.last_client_activity > INACTIVITY_TIMEOUT:
-                        print(" 🔒 [SERVER] Client session expired (inactivity > 30m). Locking keyring...")
-                        self.client_connected = False
-                        self.active_client_token = None
-                        self._keyring_prompt_sent = False
-                        lock_keyring()
-            except Exception:
-                pass
 
     def emit(self, payload):
         self.events.push(payload)
@@ -972,13 +955,7 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
                     entered_secret = payload.get("token") or payload.get("password") or ""
                     entered_secret = str(entered_secret).strip()
 
-                    auth_success = False
-                    if entered_secret in valid_auth_tokens or entered_secret in valid_passwords:
-                        auth_success = True
-                    elif agent_core.is_master_password_set():
-                        session_tok = agent_core.unlock_core(entered_secret)
-                        if session_tok:
-                            auth_success = True
+                    auth_success = (entered_secret in valid_auth_tokens or entered_secret in valid_passwords)
 
                     if auth_success:
                         # Single-client enforcement: disconnect previous client & lock keyring
@@ -1298,8 +1275,20 @@ def main(cli_args=None):
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nStopping agent server...")
-        server.server_close()
+        print("\n Stopping server...")
+        try:
+            view.action_abort()
+        except Exception:
+            pass
+        try:
+            lock_keyring()
+        except Exception:
+            pass
+        try:
+            server.server_close()
+        except Exception:
+            pass
+        os._exit(0)
 
 if __name__ == "__main__":
     main()
