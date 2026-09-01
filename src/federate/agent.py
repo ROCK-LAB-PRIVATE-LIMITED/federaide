@@ -536,7 +536,7 @@ class UpdateModal(ModalScreen[str]):
                     "Write-Host '`n[ FEDERaiDE Updater ] Starting system update...`n' -ForegroundColor Cyan; "
                     "try { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/update.ps1 | iex } "
                     "catch { irm https://raw.githubusercontent.com/ROCK-LAB-PRIVATE-LIMITED/federaide/main/install.ps1 | iex }; "
-                    "Write-Host '`n[+] Update complete! Please run federaide to start.`n' -ForegroundColor Green"
+                    "Clear-Host; Write-Host '`n[+] Update complete!`n' -ForegroundColor Green"
                 )
                 try:
                     os.execvp("powershell.exe", ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script])
