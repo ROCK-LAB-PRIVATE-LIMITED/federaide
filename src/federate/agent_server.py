@@ -298,13 +298,16 @@ class HeadlessServerView:
             })
 
     def _client_watchdog(self):
+        # 30-minute grace period for backgrounding/screen sleep (1800 seconds)
+        INACTIVITY_TIMEOUT = 1800.0
         while True:
-            time.sleep(2.0)
+            time.sleep(10.0)
             try:
                 if self.client_connected and self.active_client_token:
-                    if time.time() - self.last_client_activity > 10.0:
-                        print(" 🔒 [SERVER] Client disconnected (inactivity > 10s). Locking keyring...")
+                    if time.time() - self.last_client_activity > INACTIVITY_TIMEOUT:
+                        print(" 🔒 [SERVER] Client session expired (inactivity > 30m). Locking keyring...")
                         self.client_connected = False
+                        self.active_client_token = None
                         self._keyring_prompt_sent = False
                         lock_keyring()
             except Exception:
