@@ -66,12 +66,14 @@ def get_local_ip():
             return "127.0.0.1"
 
 def generate_self_signed_cert(target_dir: str = "."):
-    """Generates standard-compliant self-signed server.crt and server.key with SAN IP/DNS entries."""
+    """Generates standard-compliant self-signed CA certificate and private key with SAN IP/DNS entries for Android/iOS/Desktop CA installation."""
     target_dir = os.path.abspath(target_dir or ".")
     os.makedirs(target_dir, exist_ok=True)
 
     cert_path = os.path.join(target_dir, "server.crt")
     key_path = os.path.join(target_dir, "server.key")
+    ca_path = os.path.join(target_dir, "ca.crt")
+    pem_path = os.path.join(target_dir, "cert.pem")
     local_ip = get_local_ip()
 
     openssl_bin = shutil.which("openssl")
@@ -89,15 +91,19 @@ def generate_self_signed_cert(target_dir: str = "."):
 
     cnf_content = f"""[req]
 distinguished_name = req_distinguished_name
-x509_extensions = v3_req
+x509_extensions = v3_ca
 prompt = no
 
 [req_distinguished_name]
+C = US
+O = FEDERaiDE
 CN = {local_ip if local_ip != '127.0.0.1' else 'localhost'}
 
-[v3_req]
-keyUsage = critical, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth
+[v3_ca]
+subjectKeyIdentifier = hash
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, digitalSignature, keyEncipherment, keyCertSign, cRLSign
+extendedKeyUsage = serverAuth, clientAuth
 subjectAltName = @alt_names
 
 [alt_names]
@@ -113,13 +119,17 @@ subjectAltName = @alt_names
             openssl_bin, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
             "-keyout", key_path,
             "-out", cert_path,
-            "-days", "365",
+            "-days", "3650",
             "-config", cnf_path
         ]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode != 0:
             print(f"❌ [Error] OpenSSL certificate generation failed: {res.stderr}")
             sys.exit(1)
+
+        # Write aliases for different OS certificate pickers
+        shutil.copy2(cert_path, ca_path)
+        shutil.copy2(cert_path, pem_path)
     finally:
         if os.path.exists(cnf_path):
             try:
@@ -128,13 +138,19 @@ subjectAltName = @alt_names
                 pass
 
     print("=================================================================")
-    print(" ✅ SSL Certificate & Private Key Generated Successfully!")
-    print(f" 📜 Certificate : {cert_path}")
-    print(f" 🔑 Private Key : {key_path}")
-    print(f" 🌐 Bound SANs  : localhost, 127.0.0.1{f', {local_ip}' if local_ip != '127.0.0.1' else ''}")
+    print(" ✅ Self-Signed CA Certificate & Private Key Generated!")
+    print(f" 📜 Server Cert  : {cert_path}")
+    print(f" 🔑 Private Key  : {key_path}")
+    print(f" 🛡️  CA Certificate: {ca_path} (or cert.pem)")
+    print(f" 🌐 Bound SANs   : localhost, 127.0.0.1{f', {local_ip}' if local_ip != '127.0.0.1' else ''}")
     print("=================================================================")
-    print(" To start fedserve with these certificates:")
-    print(f"   fedserve --cert \"{cert_path}\" --key \"{key_path}\"")
+    print(" 📱 To install on Android as a trusted CA certificate:")
+    print(f"    1. Open Android Settings -> Security -> Encryption & credentials")
+    print(f"    2. Tap 'Install a certificate' -> 'CA certificate' -> 'Install anyway'")
+    print(f"    3. Select '{ca_path}' (or '{cert_path}' / '{pem_path}')")
+    print("=================================================================")
+    print(" 🚀 To start fedserve:")
+    print(f"    fedserve --cert \"{cert_path}\" --key \"{key_path}\"")
     print("=================================================================")
 
 # --- MODULE RESOLUTION ---
