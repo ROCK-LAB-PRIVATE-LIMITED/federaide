@@ -1098,7 +1098,7 @@ class OnboardingModal(ModalScreen[dict]):
                     yield Label("Agent Name:")
                     yield Input("Rita", id="onboard_name")
                     yield Label("Agent Backstory:")
-                    yield TextArea("You are Rita, a general purpose senior developer.", id="onboard_backstory", show_line_numbers=False)
+                    yield TextArea("You are Rita, a general purpose junior developer.", id="onboard_backstory", show_line_numbers=False)
             with Horizontal(id="onboard_actions"):
                 yield Button("Get Started", id="onboard_submit_btn", variant="success")
 
