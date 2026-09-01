@@ -381,7 +381,7 @@ class AgentManager:
                     print(f"Error loading agent {filename}: {e}")
         
         if not self.agents:
-            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose senior developer.", reasoning_effort="none", temperature=1.0)
+            default = AgentConfig(name="Rita", model="stepfun/step-3.5-flash:free", backstory="You are Rita, a general purpose junior developer.", reasoning_effort="none", temperature=1.0)
             self.save_agent(default)
             self.agents[default.name] = default
 
