@@ -188,6 +188,20 @@ class EventBuffer:
             return [m for m in self.messages if m["id"] > after_id]
 
 # --- HEADLESS AGENT VIEW ---
+def lock_keyring():
+    """Explicitly locks EncryptedKeyring backends so credentials cannot be read without re-unlocking."""
+    try:
+        import keyring
+        main_backend = keyring.get_keyring()
+        backends = [main_backend]
+        if hasattr(main_backend, "backends"):
+            backends.extend(main_backend.backends)
+        for b in backends:
+            if type(b).__name__ == "EncryptedKeyring":
+                b.__dict__.pop("keyring_key", None)
+    except Exception:
+        pass
+
 class HeadlessServerView:
     def __init__(self):
         p = Path.home() / "FederateWorkspace"
@@ -243,11 +257,58 @@ class HeadlessServerView:
         self.current_telegram_chat_id = None
         self.last_screenshot_path = None
 
-        # Start background schedule timer
+        # Single-client session tracking & lock state
+        self.active_client_token = None
+        self.last_client_activity = 0.0
+        self.client_connected = False
+        self._keyring_prompt_sent = False
+
+        # Lock keyring initially on server boot
+        lock_keyring()
+
+        # Start background timers
         threading.Thread(target=self._scheduler_loop, daemon=True).start()
+        threading.Thread(target=self._client_watchdog, daemon=True).start()
 
         default_name = self.agent_manager.get_default_agent_name()
         self.active_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+
+    def set_active_client(self, token: str):
+        self.active_client_token = token
+        self.last_client_activity = time.time()
+        self.client_connected = True
+        self._keyring_prompt_sent = False
+
+        with self.events.lock:
+            self.events.messages.clear()
+            self.events.counter = 0
+
+        # Check keyring lock state once upon initial client connection
+        if toolbox.is_keyring_locked():
+            print(" 🔐 [SERVER] Client connected: Keyring is locked. Requesting unlock...")
+            self.emit({"type": "keyring_unlock_required"})
+            self._keyring_prompt_sent = True
+        else:
+            self.update_status_bar()
+            self.emit({
+                "type": "init",
+                "active_agent": self.active_agent.name,
+                "agents": [{"name": a.name, "color": a.color, "model": a.model} for a in self.agent_manager.agents.values()],
+                "needs_onboarding": self.is_onboarding_needed()
+            })
+
+    def _client_watchdog(self):
+        while True:
+            time.sleep(2.0)
+            try:
+                if self.client_connected and self.active_client_token:
+                    if time.time() - self.last_client_activity > 10.0:
+                        print(" 🔒 [SERVER] Client disconnected (inactivity > 10s). Locking keyring...")
+                        self.client_connected = False
+                        self._keyring_prompt_sent = False
+                        lock_keyring()
+            except Exception:
+                pass
 
     def emit(self, payload):
         self.events.push(payload)
@@ -824,7 +885,9 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
             auth_header = self.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 token = auth_header[7:].strip()
-                if token in valid_auth_tokens:
+                if view.active_client_token and token == view.active_client_token:
+                    return True
+                if not view.active_client_token and (token in valid_auth_tokens):
                     return True
             return False
 
@@ -851,7 +914,15 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
                 self._send_unauthorized()
                 return
 
+            view.last_client_activity = time.time()
+            view.client_connected = True
+
             if endpoint == "/api/poll":
+                # If reconnecting after a disconnect, check keyring lock state once
+                if not view._keyring_prompt_sent and toolbox.is_keyring_locked():
+                    view.emit({"type": "keyring_unlock_required"})
+                    view._keyring_prompt_sent = True
+
                 after_id = 0
                 for param in query_str.split("&"):
                     if param.startswith("after="):
@@ -904,13 +975,16 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
                     elif agent_core.is_master_password_set():
                         session_tok = agent_core.unlock_core(entered_secret)
                         if session_tok:
-                            valid_auth_tokens.add(session_tok)
                             auth_success = True
 
                     if auth_success:
-                        session_token = secrets.token_hex(32)
-                        valid_auth_tokens.add(session_token)
-                        res = json.dumps({"status": "ok", "token": session_token}).encode("utf-8")
+                        # Single-client enforcement: disconnect previous client & lock keyring
+                        lock_keyring()
+
+                        new_session_token = secrets.token_hex(32)
+                        view.set_active_client(new_session_token)
+
+                        res = json.dumps({"status": "ok", "token": new_session_token}).encode("utf-8")
                         self.send_response(200)
                     else:
                         res = json.dumps({"status": "unauthorized", "message": "Invalid password or token."}).encode("utf-8")
@@ -975,6 +1049,8 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
             elif action == "keyring_unlock":
                 pwd = data.get("password", "").strip()
                 if toolbox.unlock_keyring(pwd):
+                    print(" 🔓 [SERVER] Keyring unlocked successfully.")
+                    view._keyring_prompt_sent = False
                     view.emit({"type": "keyring_unlock_success"})
                     view.update_status_bar()
                     view.emit({
@@ -984,6 +1060,7 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
                         "needs_onboarding": view.is_onboarding_needed()
                     })
                 else:
+                    print(" ❌ [SERVER] Keyring unlock failed: incorrect password.")
                     view.emit({"type": "keyring_unlock_failed", "error": "Unlock failed. Password incorrect."})
             elif action == "keyring_reset":
                 pwd = data.get("password", "").strip()
@@ -997,6 +1074,8 @@ def create_handler(view: HeadlessServerView, valid_auth_tokens: set, valid_passw
                             if hasattr(b, "file_path") and b.file_path and os.path.exists(b.file_path):
                                 os.remove(b.file_path)
                             b.__dict__["keyring_key"] = pwd
+                    print(" 🔄 [SERVER] Keyring reset and unlocked.")
+                    view._keyring_prompt_sent = False
                     view.emit({"type": "keyring_unlock_success"})
                     view.update_status_bar()
                     view.emit({
