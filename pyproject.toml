@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federaide"
-version = "1.3.12"
+version = "1.3.13"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "GNU Affero General Public License v3"}
