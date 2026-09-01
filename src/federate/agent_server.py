@@ -36,6 +36,9 @@ import secrets
 import argparse
 import threading
 import warnings
+import subprocess
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from dataclasses import asdict
@@ -61,6 +64,78 @@ def get_local_ip():
             return socket.gethostbyname(socket.gethostname())
         except Exception:
             return "127.0.0.1"
+
+def generate_self_signed_cert(target_dir: str = "."):
+    """Generates standard-compliant self-signed server.crt and server.key with SAN IP/DNS entries."""
+    target_dir = os.path.abspath(target_dir or ".")
+    os.makedirs(target_dir, exist_ok=True)
+
+    cert_path = os.path.join(target_dir, "server.crt")
+    key_path = os.path.join(target_dir, "server.key")
+    local_ip = get_local_ip()
+
+    openssl_bin = shutil.which("openssl")
+    if not openssl_bin:
+        print("❌ [Error] 'openssl' command-line tool not found.")
+        print("   Please install openssl (e.g., 'pkg install openssl' on Termux, 'apt install openssl' on Debian/Ubuntu).")
+        sys.exit(1)
+
+    san_entries = [
+        "DNS.1 = localhost",
+        "IP.1 = 127.0.0.1",
+    ]
+    if local_ip and local_ip != "127.0.0.1":
+        san_entries.append(f"IP.2 = {local_ip}")
+
+    cnf_content = f"""[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = {local_ip if local_ip != '127.0.0.1' else 'localhost'}
+
+[v3_req]
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+{chr(10).join(san_entries)}
+"""
+
+    with tempfile.NamedTemporaryFile("w", suffix=".cnf", delete=False) as cnf_file:
+        cnf_file.write(cnf_content)
+        cnf_path = cnf_file.name
+
+    try:
+        cmd = [
+            openssl_bin, "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", key_path,
+            "-out", cert_path,
+            "-days", "365",
+            "-config", cnf_path
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"❌ [Error] OpenSSL certificate generation failed: {res.stderr}")
+            sys.exit(1)
+    finally:
+        if os.path.exists(cnf_path):
+            try:
+                os.remove(cnf_path)
+            except Exception:
+                pass
+
+    print("=================================================================")
+    print(" ✅ SSL Certificate & Private Key Generated Successfully!")
+    print(f" 📜 Certificate : {cert_path}")
+    print(f" 🔑 Private Key : {key_path}")
+    print(f" 🌐 Bound SANs  : localhost, 127.0.0.1{f', {local_ip}' if local_ip != '127.0.0.1' else ''}")
+    print("=================================================================")
+    print(" To start fedserve with these certificates:")
+    print(f"   fedserve --cert \"{cert_path}\" --key \"{key_path}\"")
+    print("=================================================================")
 
 # --- MODULE RESOLUTION ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1059,7 +1134,12 @@ def main(cli_args=None):
     parser.add_argument("--password", default=None, help="Password for API authentication")
     parser.add_argument("--cert", default=None, help="Path to SSL certificate (.pem or .crt)")
     parser.add_argument("--key", default=None, help="Path to SSL private key (.key)")
+    parser.add_argument("--create", nargs="?", const=".", default=None, metavar="DIR", help="Generate valid self-signed server.crt and server.key with SAN IP entries and exit")
     args = parser.parse_args(cli_args)
+
+    if args.create is not None:
+        generate_self_signed_cert(args.create)
+        sys.exit(0)
 
     valid_tokens = set()
     valid_passwords = set()
