@@ -2690,6 +2690,8 @@ class AIAgentView(Vertical):
         self.turn_queue = []
         self.paused_queue = []
         self.turn_lock = threading.Lock()
+        self.is_compressing = False
+        self.pending_compress_prompts = []
 
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
@@ -2927,6 +2929,9 @@ class AIAgentView(Vertical):
         
         if hasattr(self, "current_batch_id"):
             self.session_manager.abort_batch(self.current_batch_id)
+
+        self.is_compressing = False
+        self.pending_compress_prompts.clear()
 
         toolbox.nuke_all_threads()
 
@@ -3204,6 +3209,32 @@ class AIAgentView(Vertical):
 
         self.app.call_from_thread(finalize_ui)
     
+    @work(thread=True)
+    def action_compress(self):
+        if getattr(self, "is_compressing", False):
+            self.log_to_ui("[bold yellow]Compression is already in progress.[/bold yellow]")
+            return
+
+        if getattr(self, "_running_agents", None) or getattr(self, "_running_task_count", 0) > 0:
+            self.log_to_ui("[bold red]Compression Refused: An agent task is currently running. Please wait for it to finish or press Ctrl+A.[/bold red]")
+            return
+
+        self.is_compressing = True
+        self.app.call_from_thread(self._toggle_spinner, True, "Compression", "#f2a813")
+        try:
+            agent_core.compress_history_core(self)
+        finally:
+            self.is_compressing = False
+            self.app.call_from_thread(self._toggle_spinner, False, "Compression", "#f2a813")
+
+            # Dispatch queued prompt if user typed one while compression was running
+            if self.pending_compress_prompts:
+                next_prompt = self.pending_compress_prompts.pop(0)
+                def _dispatch_next():
+                    chat_input = self.query_one("#ai_chat_input", ChatInput)
+                    self.on_input_submitted(ChatInput.Submitted(chat_input, next_prompt))
+                self.app.call_from_thread(_dispatch_next)
+
     def consolidate_memories(self, manual: bool = False):
         if not manual:
             return 
@@ -3555,6 +3586,12 @@ class AIAgentView(Vertical):
             process_slash_command(prompt, self)
             return
         
+        # If history compression is currently in progress, queue prompt behind it
+        if getattr(self, "is_compressing", False):
+            self.pending_compress_prompts.append(prompt)
+            self.log_to_ui(f"[bold yellow]⏳ Compression in progress. Your message has been queued and will run automatically when complete.[/bold yellow]")
+            return
+
         acting_agent = self.active_agent
         clean_prompt = prompt
         is_team = False

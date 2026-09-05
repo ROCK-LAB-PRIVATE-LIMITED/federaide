@@ -215,6 +215,13 @@ EOF
 
 # 9. Perform Installation via uv tool
 install_federaide() {
+    # Cleanup legacy fedserve binary shims and tool environments
+    uv tool uninstall fedserve >/dev/null 2>&1 || true
+    rm -f "$HOME/.local/bin/fedserve" \
+          "$HOME/.cargo/bin/fedserve" \
+          "/usr/local/bin/fedserve" \
+          "/usr/bin/fedserve" 2>/dev/null || true
+
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"
     REPO_NAME="FEDERaiDE"
     BRANCH="main"
@@ -376,6 +383,7 @@ EOF
     fi
 
     # C. System-wide symlinks to /usr/local/bin or /usr/bin (Guarantees immediate execution on ALL distros)
+    run_root rm -f "/usr/local/bin/fedserve" "/usr/bin/fedserve" 2>/dev/null || true
     for bin_name in "federaide" "federate"; do
         TARGET_BIN=""
         if [ -x "$HOME/.local/bin/$bin_name" ]; then

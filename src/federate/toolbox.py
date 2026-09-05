@@ -105,7 +105,7 @@ DEFAULT_GLOBAL_SETTINGS = {
     "pdf_code_font": "Space Mono",
     "pdf_body_font_size": "11pt",
     "pdf_h1_font_size": "28pt",
-    "keep_verbatim_count": 2,
+    "keep_verbatim_count": 1,
     "research_image_system_enabled": False,
     "research_images_max": 10,
     "research_image_retries": 3,
