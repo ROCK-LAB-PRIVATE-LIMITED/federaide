@@ -606,6 +606,16 @@ class GlobalSettingsModal(ModalScreen[str]):
                 yield Label("Search & Scraping Parameters", classes="section_label")
                 
                 with Vertical(classes="field_container"):
+                    yield Label("Search Provider", classes="field_label")
+                    yield Label("Choose the web search provider ('duckduckgo' or 'searxng').", classes="field_help")
+                    yield Select([("DuckDuckGo (Built-in)", "duckduckgo"), ("SearXNG", "searxng")], value="duckduckgo", id="search_provider", allow_blank=False)
+
+                with Vertical(classes="field_container"):
+                    yield Label("SearXNG Instance URL", classes="field_label")
+                    yield Label("Base URL of your SearXNG instance (e.g. http://localhost:8080 or https://searx.example.com).", classes="field_help")
+                    yield Input(id="searxng_url", placeholder="http://localhost:8080")
+
+                with Vertical(classes="field_container"):
                     yield Label("Search Pacing Delay (Seconds)", classes="field_label")
                     yield Label("Baseline delay in seconds between consecutive web searches to protect your IP from rate limits.", classes="field_help")
                     yield Input(id="search_pacing_delay", placeholder="e.g. 65.0")
@@ -750,6 +760,8 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#model_color", Input).value = str(config.get("model_color", "#ffd700"))
         self.query_one("#diff_addition_color", Input).value = str(config.get("diff_addition_color", "green"))
         self.query_one("#diff_deletion_color", Input).value = str(config.get("diff_deletion_color", "red"))
+        self.query_one("#search_provider", Select).value = config.get("search_provider", "duckduckgo")
+        self.query_one("#searxng_url", Input).value = str(config.get("searxng_url", "http://localhost:8080"))
         self.query_one("#search_pacing_delay", Input).value = str(config.get("search_pacing_delay", 65.0))
         self.query_one("#max_search_results", Input).value = str(config.get("max_search_results", 10))
         self.query_one("#scraper_max_bytes", Input).value = str(config.get("scraper_max_bytes", 1000000))
@@ -833,6 +845,10 @@ class GlobalSettingsModal(ModalScreen[str]):
         except Exception:
             self.notify(f"Invalid Diff Deletion Color '{diff_deletion_color}'. Use a standard name or hex (e.g. red, #da6057).", severity="error")
             return
+
+        search_prov_val = self.query_one("#search_provider", Select).value
+        search_provider = str(search_prov_val) if search_prov_val != Select.BLANK else "duckduckgo"
+        searxng_url = self.query_one("#searxng_url", Input).value.strip() or "http://localhost:8080"
         
         try: pacing = float(self.query_one("#search_pacing_delay", Input).value.strip())
         except ValueError: pacing = 65.0
@@ -908,6 +924,8 @@ class GlobalSettingsModal(ModalScreen[str]):
             "model_color": model_color,
             "diff_addition_color": diff_addition_color,
             "diff_deletion_color": diff_deletion_color,
+            "search_provider": search_provider,
+            "searxng_url": searxng_url,
             "search_pacing_delay": pacing,
             "max_search_results": max_results,
             "scraper_max_bytes": max_bytes,

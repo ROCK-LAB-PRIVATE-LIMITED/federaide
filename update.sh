@@ -135,7 +135,14 @@ if [ "$UP_TO_DATE" = true ] && [ "$FORCE" = false ]; then
     exit 0
 fi
 
-# 8. Execute update based on platform
+# 8. Cleanup legacy fedserve binary shims and tool environments
+uv tool uninstall fedserve >/dev/null 2>&1 || true
+rm -f "$HOME/.local/bin/fedserve" \
+      "$HOME/.cargo/bin/fedserve" \
+      "/usr/local/bin/fedserve" \
+      "/usr/bin/fedserve" 2>/dev/null || true
+
+# 9. Execute update based on platform
 if [ "$IS_TERMUX" = true ]; then
     echo "[*] Android (Termux) environment detected."
     echo "[*] Ensuring required system packages are installed..."
