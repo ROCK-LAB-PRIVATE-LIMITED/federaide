@@ -85,6 +85,21 @@ if ($pathList -notcontains $localBin) {
 }
 
 # 3. Run installation via uv
+# Cleanup legacy fedserve binary shims and tool environments
+try { uv tool uninstall fedserve 2>$null } catch {}
+
+$legacyShims = @(
+    (Join-Path $HOME ".local\bin\fedserve.exe"),
+    (Join-Path $HOME ".local\bin\fedserve"),
+    (Join-Path $HOME ".cargo\bin\fedserve.exe"),
+    (Join-Path $HOME ".cargo\bin\fedserve")
+)
+foreach ($shim in $legacyShims) {
+    if (Test-Path $shim) {
+        Remove-Item -Path $shim -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "[*] Installing FEDERaiDE with extras (audio, vision) on standardized Python 3.13..." -ForegroundColor Yellow
 uv tool install --force --refresh --python 3.13 "federaide[audio,ide,vision]"
 
