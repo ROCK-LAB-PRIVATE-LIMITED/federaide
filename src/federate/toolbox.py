@@ -84,6 +84,8 @@ DEFAULT_GLOBAL_SETTINGS = {
     "diff_addition_color": "green",
     "diff_deletion_color": "red",
     "skipped_version": "",
+    "search_provider": "duckduckgo",
+    "searxng_url": "http://localhost:8080",
     "search_pacing_delay": 65.0,
     "max_search_results": 10,
     "scraper_max_bytes": 1000000,
@@ -1146,6 +1148,71 @@ def fetch_url(url: str) -> str:
     except Exception as e:
         return f"Error fetching URL: {e}"
 
+def _perform_raw_search(query: str, max_results: int = 10) -> list:
+    """Executes search via SearXNG or the default federate_search sidecar binary."""
+    settings = load_global_settings()
+    provider = settings.get("search_provider", "duckduckgo").lower()
+
+    if provider == "searxng":
+        searxng_url = settings.get("searxng_url", "http://localhost:8080").rstrip("/")
+        if not searxng_url.startswith(("http://", "https://")):
+            searxng_url = "http://" + searxng_url
+        endpoint = f"{searxng_url}/search"
+        resp = requests.get(
+            endpoint,
+            params={"q": query, "format": "json"},
+            headers={"User-Agent": "FEDERaiDE/1.0"},
+            timeout=20
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = []
+        for r in data.get("results", [])[:max_results]:
+            results.append({
+                "title": r.get("title", "No title"),
+                "href": r.get("url", r.get("link", "")),
+                "body": r.get("content", r.get("snippet", ""))
+            })
+        return results
+
+    # Default DuckDuckGo via federate_search binary
+    bin_path = get_storage_path(os.path.dirname(os.path.abspath(__file__)), "bin", "federate_search" + (".exe" if os.name == "nt" else ""))
+    proc = subprocess.Popen(
+        [bin_path, query, str(max_results)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True
+    )
+
+    while proc.poll() is None:
+        if ABORT_EVENT.is_set():
+            try:
+                import os as os_lib
+                os_lib.killpg(os_lib.getpgid(proc.pid), 9)
+            except: pass
+            raise Exception("Search aborted by user.")
+
+        if CURRENT_APP:
+            try:
+                agent_view = CURRENT_APP.query_one("#ai_agent_view")
+                task_batch = getattr(thread_context, "batch_id", 0)
+                if task_batch != 0 and task_batch != getattr(agent_view, "current_batch_id", 0):
+                    try:
+                        import os as os_lib
+                        os_lib.killpg(os_lib.getpgid(proc.pid), 9)
+                    except: pass
+                    raise Exception("Search interrupted by new request.")
+            except: pass
+
+        time.sleep(0.1)
+
+    stdout, stderr = proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"Search failed: {stderr}")
+
+    return [{"title": r["Title"], "href": r["Link"], "body": r["Snippet"]} for r in json.loads(stdout)]
+
 @tool
 def search_web(query: str) -> str:
     """Search for current information, facts, websites, or general web content."""
@@ -1164,58 +1231,19 @@ def search_web(query: str) -> str:
 
     # 2. Execute search
     try:
-        import subprocess, json, os
-        bin_path = get_storage_path(os.path.dirname(os.path.abspath(__file__)), "bin", "federate_search" + (".exe" if os.name == "nt" else ""))
-        
-        max_results = str(load_global_settings().get("max_search_results", 10))
-        # Use Popen to allow interruption mid-search
-        proc = subprocess.Popen(
-            [bin_path, query, max_results],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True
-        )
-        
-        while proc.poll() is None:
-            if ABORT_EVENT.is_set():
-                try:
-                    import os as os_lib
-                    os_lib.killpg(os_lib.getpgid(proc.pid), 9)
-                except: pass
-                raise Exception("Search aborted by user.")
-            
-            # Also check batch_id mid-poll
-            if CURRENT_APP:
-                try:
-                    agent_view = CURRENT_APP.query_one("#ai_agent_view")
-                    task_batch = getattr(thread_context, "batch_id", 0)
-                    if task_batch != 0 and task_batch != getattr(agent_view, "current_batch_id", 0):
-                        try:
-                            import os as os_lib
-                            os_lib.killpg(os_lib.getpgid(proc.pid), 9)
-                        except: pass
-                        raise Exception("Search interrupted by new request.")
-                except: pass
-            
-            time.sleep(0.1)
+        max_results = int(load_global_settings().get("max_search_results", 10))
+        results = _perform_raw_search(query, max_results)
 
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            return f"Search failed: {stderr}"
-            
-        results = [{"title": r["Title"], "href": r["Link"], "body": r["Snippet"]} for r in json.loads(stdout)]
-            
         if not results:
             return f"No web results found for '{query}'"
-        
+
         output = f"Found {len(results)} web results for '{query}':\n\n"
-        for i, result in enumerate(results[:10], 1):
+        for i, result in enumerate(results[:max_results], 1):
             url = result.get('href', result.get('link', 'No URL'))
             output += f"{i}. **{result.get('title', 'No title')}**\n"
             output += f"   {url}\n" 
             output += f"   {result.get('body', 'No description')[:250]}...\n\n"
-        
+
         return output
     except Exception as e:
         return f"Search failed: {str(e)}"
@@ -1635,34 +1663,15 @@ def node_execute_search(state: AgentState):
 
     # 2. Execute search
     try:
-        import subprocess, json, os
-        bin_path = get_storage_path(os.path.dirname(os.path.abspath(__file__)), "bin", "federate_search" + (".exe" if os.name == "nt" else ""))
-        
-        max_results = str(load_global_settings().get("max_search_results", 10))
-        # Use Popen to allow interruption mid-search
-        proc = subprocess.Popen(
-            [bin_path, query, max_results],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True
-        )
-        
-        while proc.poll() is None:
-            check_abort()
-            time.sleep(0.1)
+        max_results = int(load_global_settings().get("max_search_results", 10))
+        results = _perform_raw_search(query, max_results)
 
-        stdout, stderr = proc.communicate()
-        if proc.returncode != 0:
-            content = f"Search failed: {stderr}"
-        else:
-            results = [{"title": r["Title"], "href": r["Link"], "body": r["Snippet"]} for r in json.loads(stdout)]
-            start_idx = len(current_urls) + 1
-            content = f"Results for '{query}':\n\n"
-            for i, r in enumerate(results, start=start_idx):
-                current_urls[i] = r.get('href', r.get('link', ''))
-                current_manifest[i] = r.get('title', 'Unknown')
-                content += f"{i}. {r.get('title')}\n   Snippet: {r.get('body')}\n\n"
+        start_idx = len(current_urls) + 1
+        content = f"Results for '{query}':\n\n"
+        for i, r in enumerate(results, start=start_idx):
+            current_urls[i] = r.get('href', r.get('link', ''))
+            current_manifest[i] = r.get('title', 'Unknown')
+            content += f"{i}. {r.get('title')}\n   Snippet: {r.get('body')}\n\n"
     except Exception as e:
         if "aborted" in str(e).lower() or "interrupted" in str(e).lower(): raise e
         content = f"Search Error: {e}"

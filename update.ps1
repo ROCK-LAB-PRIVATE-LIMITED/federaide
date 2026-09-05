@@ -96,6 +96,21 @@ if ($upToDate -and -not $Force) {
     exit 0
 }
 
+# 5. Cleanup legacy fedserve binary shims and tool environments
+try { uv tool uninstall fedserve 2>$null } catch {}
+
+$legacyShims = @(
+    (Join-Path $HOME ".local\bin\fedserve.exe"),
+    (Join-Path $HOME ".local\bin\fedserve"),
+    (Join-Path $HOME ".cargo\bin\fedserve.exe"),
+    (Join-Path $HOME ".cargo\bin\fedserve")
+)
+foreach ($shim in $legacyShims) {
+    if (Test-Path $shim) {
+        Remove-Item -Path $shim -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Write-Host "[*] Upgrading FEDERaiDE on standardized Python 3.13..." -ForegroundColor Yellow
 uv tool install --force --upgrade --refresh --python 3.13 "federaide[audio,ide,vision]"
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federaide"
-version = "1.3.13"
+version = "1.3.14"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "GNU Affero General Public License v3"}
@@ -92,7 +92,6 @@ all = [
 [project.scripts]
 federate = "federate.app:main"
 federaide = "federate.textIDE:main"
-fedserve = "federate.agent_server:main"
 
 [project.urls]
 Homepage = "https://federaide.rocklab.in"

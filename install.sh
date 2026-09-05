@@ -113,6 +113,13 @@ ensure_uv_unix() {
 
 # 5. Perform Unix-Based Installation using uv tool
 install_federaide_unix() {
+    # Cleanup legacy fedserve binary shims and tool environments
+    uv tool uninstall fedserve >/dev/null 2>&1 || true
+    rm -f "$HOME/.local/bin/fedserve" \
+          "$HOME/.cargo/bin/fedserve" \
+          "/usr/local/bin/fedserve" \
+          "/usr/bin/fedserve" 2>/dev/null || true
+
     # GitHub repository config parameters for pre-compiled "Tyre" wheels
     REPO_OWNER="ROCK-LAB-PRIVATE-LIMITED"  # <-- CHANGE THIS to your GitHub organization/username
     REPO_NAME="FEDERaiDE"       # <-- CHANGE THIS to your repository name
