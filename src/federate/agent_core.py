@@ -362,6 +362,9 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
         return orig_stream(processed_messages, stop=stop, run_manager=run_manager, **kwargs)
     llm._stream = patched_stream
     
+    is_nomem = getattr(agent_view.session_manager, "is_no_memory", lambda: False)()
+    NOMEM_EXCLUDED_TOOLS = {"update_core_memory", "search_episodic_memory", "retrieve_episodic_memory", "mark_quagmire", "distill_journey"}
+
     if agent_config.disable_all_tools:
         tools = [
             toolbox.update_core_memory, toolbox.save_skill, toolbox.read_skill, toolbox.list_skills, 
@@ -369,6 +372,8 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory,
             toolbox.get_toolresult
         ]
+        if is_nomem:
+            tools = [t for t in tools if getattr(t, "name", "") not in NOMEM_EXCLUDED_TOOLS]
         allowed_names = {getattr(t, "name", t) for t in tools}
         
         other_tool_names = [
@@ -422,6 +427,8 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             return False
 
         raw_tools = [toolbox.search_web, toolbox.perform_research, toolbox.render_pdf, toolbox.update_core_memory, toolbox.save_skill, toolbox.read_skill, toolbox.distill_journey, toolbox.delete_passive_skill, toolbox.list_skills, toolbox.mark_quagmire, toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory, toolbox.prepare_active_skill, toolbox.finalize_active_skill, toolbox.manage_active_skill, toolbox.fix_active_skill, toolbox.get_toolresult]
+        if is_nomem:
+            raw_tools = [t for t in raw_tools if getattr(t, "name", "") not in NOMEM_EXCLUDED_TOOLS]
         raw_tools.extend(toolbox.load_dynamic_tools(agent_config.name))
 
         high_priv_map = {
@@ -561,7 +568,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
         try:
             history = agent_view.session_manager.active_sessions.get(agent.name, [])
             if history and history[0].role == "system":
-                history[0].content = agent.get_full_system_prompt(list(agent_view.agent_manager.agents.values()))
+                history[0].content = agent.get_full_system_prompt(list(agent_view.agent_manager.agents.values()), is_no_memory=agent_view.session_manager.is_no_memory())
         except Exception:
             pass
 

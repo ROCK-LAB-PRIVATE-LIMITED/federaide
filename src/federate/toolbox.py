@@ -247,8 +247,8 @@ def _bootstrap_scratchpad_venv():
 threading.Thread(target=_bootstrap_scratchpad_venv, daemon=True).start()
 
 def get_storage_path(*args):
-    """Explicitly builds a path inside FEDERATE_DIR for 'agents' or 'sessions'."""
-    if args and args[0] in ["agents", "sessions"]:
+    """Explicitly builds a path inside FEDERATE_DIR for 'agents', 'sessions', or 'nomem_sessions'."""
+    if args and args[0] in ["agents", "sessions", "nomem_sessions"]:
         return os.path.join(FEDERATE_DIR, *args)
     return os.path.join(*args)
 
