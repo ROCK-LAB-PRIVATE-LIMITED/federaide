@@ -304,14 +304,20 @@ class ChatLoadModal(ModalScreen[str]):
             self.query_one("#cancel").focus()
 
     def compose(self) -> ComposeResult:
-        files = sorted(glob.glob(toolbox.get_storage_path("sessions", "*.json")), key=os.path.getmtime, reverse=True)
+        files_normal = glob.glob(toolbox.get_storage_path("sessions", "*.json"))
+        files_nomem = glob.glob(toolbox.get_storage_path("nomem_sessions", "*.json"))
+        files = sorted(files_normal + files_nomem, key=os.path.getmtime, reverse=True)
         name_map = agent_core.get_session_name_map()
-        files = [
-            f for f in files 
-            if (parts := os.path.basename(f).replace(".json", "").split("_")) 
-            and len(parts) >= 2 
-            and f"{parts[0]}_{parts[1]}" in name_map
-        ]
+
+        def _extract_info(fpath):
+            parts = os.path.basename(fpath).replace(".json", "").split("_")
+            if len(parts) >= 3 and parts[1] == "nomem":
+                return f"{parts[0]}_{parts[1]}_{parts[2]}", " ".join(parts[3:]) if len(parts) >= 4 else ""
+            elif len(parts) >= 2:
+                return f"{parts[0]}_{parts[1]}", " ".join(parts[2:]) if len(parts) >= 3 else ""
+            return "", ""
+
+        files = [f for f in files if (sid := _extract_info(f)[0]) and sid in name_map]
         self.file_map = {f"c_{i}": f for i, f in enumerate(files)}
         with Vertical(id="chat_load_dialog"):
             yield Label(" Load Session History", classes="pane_title")
@@ -319,15 +325,14 @@ class ChatLoadModal(ModalScreen[str]):
                 if not files: yield Label("  No sessions found.")
                 for btn_id, path in self.file_map.items():
                     base = os.path.basename(path).replace(".json", "")
-                    parts = base.split("_")
-                    session_id = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else ""
-                    agent_name = " ".join(parts[2:]) if len(parts) >= 3 else ""
+                    session_id, agent_name = _extract_info(path)
+                    nomem_tag = "(NoMem) " if "_nomem_" in os.path.basename(path) else ""
                     
                     friendly_name = name_map.get(session_id)
                     if friendly_name:
-                        btn_label = f" {friendly_name} ({agent_name})"
+                        btn_label = f" {nomem_tag}{friendly_name} ({agent_name})"
                     else:
-                        btn_label = f" {base}"
+                        btn_label = f" {nomem_tag}{base}"
                         
                     yield Button(btn_label, id=btn_id)
             yield Button("Cancel", id="cancel", variant="error")
@@ -375,6 +380,7 @@ class ChatManagerModal(ModalScreen[str]):
         with Vertical(id="chat_mgr_dialog"):
             yield Label(" Session Manager", classes="pane_title")
             yield Button(" New Chat Session", id="new_session", variant="success")
+            yield Button(" New Chat (No Memory)", id="new_session_nomem", variant="warning")
             yield Button(" Load Saved Session", id="load_chat", variant="primary")
             yield Button(" Cancel", id="cancel", variant="error")
     @on(Button.Pressed)
@@ -2871,35 +2877,42 @@ class AIAgentView(Vertical):
             
         return final_result[0]
     
-    def action_clear_all_contexts(self):
+    def action_clear_all_contexts(self, no_memory: bool = False):
         self.action_abort() 
-        self.session_manager.clear_all_contexts()
+        self.session_manager.clear_all_contexts(no_memory=no_memory)
         self.agent_executors = {} 
         self.agent_mode = "PLAN"
         self.clear_chat_ui()
         invalidate_stats_cache() 
-        self._write_log(Rule(title="[bold yellow]ALL CONTEXTS CLEARED", style="dim"))
+        banner_title = "NEW CHAT SESSION (NO MEMORY)" if no_memory else "ALL CONTEXTS CLEARED"
+        self._write_log(Rule(title=f"[bold yellow]{banner_title}", style="dim"))
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
+        self.update_status_bar()
     
     def action_resume_last(self, offset: int = 1):
         if offset <= 0:
             return  
 
-        all_files = glob.glob(toolbox.get_storage_path("sessions", "*.json"))
+        all_files = glob.glob(toolbox.get_storage_path("sessions", "*.json")) + \
+                    glob.glob(toolbox.get_storage_path("nomem_sessions", "*.json"))
         curr_sess_id = getattr(self.session_manager, "current_session_id", "")
         
         sessions_map = {}
         for f in all_files:
             base = os.path.basename(f).replace(".json", "")
             parts = base.split("_")
-            if len(parts) >= 2:
+            if len(parts) >= 3 and parts[1] == "nomem":
+                sess_id = f"{parts[0]}_{parts[1]}_{parts[2]}"
+            elif len(parts) >= 2:
                 sess_id = f"{parts[0]}_{parts[1]}"
-                if sess_id == curr_sess_id:
-                    continue
-                if sess_id not in sessions_map:
-                    sessions_map[sess_id] = []
-                sessions_map[sess_id].append(f)
+            else:
+                continue
+            if sess_id == curr_sess_id:
+                continue
+            if sess_id not in sessions_map:
+                sessions_map[sess_id] = []
+            sessions_map[sess_id].append(f)
                 
         if not sessions_map:
             self.log_to_ui("[bold red]No past chat sessions found to resume.[/bold red]")
@@ -2950,7 +2963,9 @@ class AIAgentView(Vertical):
     def action_open_chat_manager(self):
         def handle_chat_mgr(action):
             if action == "new_session":
-                self.action_clear_all_contexts()
+                self.action_clear_all_contexts(no_memory=False)
+            elif action == "new_session_nomem":
+                self.action_clear_all_contexts(no_memory=True)
             elif action == "load_chat":
                 self.app.push_screen(ChatLoadModal(), self.load_chat_file)
         self.app.push_screen(ChatManagerModal(), handle_chat_mgr)
@@ -2983,8 +2998,12 @@ class AIAgentView(Vertical):
             base = os.path.basename(filepath).replace(".json", "")
             parts = base.split("_")
             if len(parts) < 2: return
-            sess_id = f"{parts[0]}_{parts[1]}"
-            owner_raw = "_".join(parts[2:]) if len(parts) >= 3 else parts[-1]
+            if len(parts) >= 4 and parts[1] == "nomem":
+                sess_id = f"{parts[0]}_{parts[1]}_{parts[2]}"
+                owner_raw = "_".join(parts[3:])
+            else:
+                sess_id = f"{parts[0]}_{parts[1]}"
+                owner_raw = "_".join(parts[2:]) if len(parts) >= 3 else parts[-1]
             
             matched_owner = self.agent_manager.get_agent(owner_raw) or self.agent_manager.get_agent(owner_raw.replace("_", " "))
             owner_name = matched_owner.name if matched_owner else owner_raw.replace("_", " ")
@@ -3000,14 +3019,15 @@ class AIAgentView(Vertical):
             self.session_manager.current_session_id = sess_id
 
             # 2. Discover and load ONLY the agents that participated in this saved session on disk
-            matching_files = glob.glob(os.path.join(self.session_manager.sessions_dir, f"{sess_id}_*.json"))
+            matching_files = glob.glob(os.path.join(self.session_manager.sessions_dir, f"{sess_id}_*.json")) + \
+                             glob.glob(os.path.join(self.session_manager.nomem_sessions_dir, f"{sess_id}_*.json"))
             if not matching_files:
                 matching_files = [filepath]
 
             for sf in matching_files:
                 sf_base = os.path.basename(sf).replace(".json", "")
                 sf_parts = sf_base.split("_")
-                sf_owner_raw = "_".join(sf_parts[2:]) if len(sf_parts) >= 3 else sf_parts[-1]
+                sf_owner_raw = "_".join(sf_parts[3:]) if len(sf_parts) >= 4 and sf_parts[1] == "nomem" else ("_".join(sf_parts[2:]) if len(sf_parts) >= 3 else sf_parts[-1])
                 sf_matched = self.agent_manager.get_agent(sf_owner_raw) or self.agent_manager.get_agent(sf_owner_raw.replace("_", " "))
                 sf_agent_name = sf_matched.name if sf_matched else sf_owner_raw.replace("_", " ")
 
@@ -3487,8 +3507,9 @@ class AIAgentView(Vertical):
                 base_dir = str(app.query_one("#dir_tree").path) if app else os.getcwd()
             except Exception:
                 base_dir = os.getcwd()
+            nomem_badge = " [bold yellow][NO MEMORY][/bold yellow]" if hasattr(self, "session_manager") and self.session_manager.is_no_memory() else ""
             self.query_one("#ai_cwd_label", Label).update(Text(base_dir))
-            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}")
+            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}{nomem_badge}")
             self.query_one("#ai_token_label", Label).update(agent_info)
         except Exception: pass
         self.update_prompt_label()

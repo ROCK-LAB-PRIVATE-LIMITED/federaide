@@ -145,7 +145,7 @@ class AgentConfig:
         env_key = f"AGENT_BACKUP_KEY_{self.name.upper().replace(' ', '_')}"
         return os.getenv(env_key, "")
 
-    def get_full_system_prompt(self, all_agents: List['AgentConfig'] = None) -> str:
+    def get_full_system_prompt(self, all_agents: List['AgentConfig'] = None, is_no_memory: bool = False) -> str:
         date_str = datetime.now().strftime('%A, %B %d, %Y')
         safe_name = self.name.replace(" ", "_")
 
@@ -265,9 +265,10 @@ class AgentConfig:
             prompt = f"{self.backstory}\n\nIDENTITY RULES:\n- You are a {gender_desc} character.\n- Express yourself in a manner consistent with a {gender_desc} persona.\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
         
         # Inject Architecture
-        prompt += f"\n\n--- CORE MEMORY (Facts) ---\n{memory_content}"
-        prompt += f"\n\n--- USER PROFILE ---\n{user_content}"
-        prompt += f"\n\n--- QUAGMIRES & ANTI-PATTERNS (Do NOT do these) ---\n{quagmire_content}"
+        if not is_no_memory:
+            prompt += f"\n\n--- CORE MEMORY (Facts) ---\n{memory_content}"
+            prompt += f"\n\n--- USER PROFILE ---\n{user_content}"
+            prompt += f"\n\n--- QUAGMIRES & ANTI-PATTERNS (Do NOT do these) ---\n{quagmire_content}"
         prompt += f"\n\n--- PROCEDURAL SKILLS LIBRARY (Passive) ---\n{passive_list}"
         prompt += f"\n\n--- EXECUTABLE CAPABILITIES (Active Tools) ---\n{active_list_str}"
         
@@ -298,23 +299,24 @@ class AgentConfig:
             prompt += "\n  6. MANAGEMENT: Use `manage_active_skill` to rename or remove tools."
             prompt += "\n  7. ACTIVATION: New tools appear after a session reset (Mode Toggle or Clear Context)."
 
-        # Memory Operating Rules        
-        prompt += "\n\nMEMORY MANAGEMENT RULES:"
-        prompt += "\n- BE EXTREMELY PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` IMMEDIATELY on learning any new fact that you did not already know, whether from user responses or toolcalls or however else. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
-        prompt += "\n- FIRST-PERSON PERSPECTIVE: All memory MUST be written in the first person, from YOUR perspective."
-        prompt += "\n- The memories are stored locally and are free to use. They can also be edited or deleted later so if there is a doubt on whether or not to save the memory, lean towards saving it. Before every response, consider if you have come to know something novel that you did not know before, if so, `update_core_memory` as follows:"
-        prompt += "\n  - ADD: Pass section, subject, content, and leave 'id' empty (\"\")."
-        prompt += "\n  - EDIT: Pass section, target 'id' (e.g., '1' from the `[id: ...]` memorylet block), updated subject, and updated content."
-        prompt += "\n  - DELETE: Pass section and target 'id' (e.g., '1'), with content=\"\" (empty string)."
-        prompt += "\n- Break down facts into atomic concepts (memorylets) and save them individually. If you learn 4 new facts from a response or a set of tool calls, do NOT clump them into a single memorylet, call the `update_core_memory` tool 4 times back to back, each for a different fact. This helps organise your memory better, reduces your workload and makes future updates easier. For example the user's actual name and what they prefer to be called should be stored separately."
-        prompt += "\n- Do NOT forget to save ALL new facts. if calling `update_core_memory` multiple times with multiple facts, DO NOT STOP BEFORE ALL FACTS ARE SAVED. If you find that you forgot to save a fact in the last response, do so NOW."
-        prompt += "\n- Whenever possible, try to edit existing memory instead of adding new, consider if the subject already exists, update that memory instead of creating a new entry. ALWAYS check for contradicting memory, if any found, attempt to intelligently unify them by deleting the older one and editing the newer one if necessary. The memorylet id is serial in nature, higher value indicates more recent memory."
-        prompt += "\n- You generally do not have to explicitly tell the user that you saved or edited a memory, it is already evident from the UI."
-        prompt += "\n- Use `search_episodic_memory(query=\"...\")` to find concepts and past session IDs. It returns the top matching snippets with their Session ID, relevance percentage, and the matching quote snippet string in quotes."
-        prompt += "\n- Use `retrieve_episodic_memory(session_id=\"...\", focus_string=\"...\")` after searching memory. You MUST pass the exact matching quote snippet string returned by `search_episodic_memory` into `focus_string`. This retrieves a concise, highly focused summary explaining how the conversation arrived at that point, what followed, and all key technical decisions without bloating your context window."
-        prompt += "\n- Use `read_skill` to read the steps for a skill listed in your library."
-        prompt += "\n- DISTILLATION: When you successfully resolve a difficult, multi-step task, autonomously use `distill_journey` to save the happy-path workflow for the future."
-        prompt += "\n- QUAGMIRES: Only use `mark_quagmire` if the user explicitly asks you to log a trap, failure, or dead-end."
+        # Memory Operating Rules
+        if not is_no_memory:
+            prompt += "\n\nMEMORY MANAGEMENT RULES:"
+            prompt += "\n- BE EXTREMELY PROACTIVE WITH MEMORY: You must autonomously use `update_core_memory` IMMEDIATELY on learning any new fact that you did not already know, whether from user responses or toolcalls or however else. Do not wait for the user to ask you to remember it! Route data correctly: section='USER' for user traits/preferences, section='MEMORY' for everything else."
+            prompt += "\n- FIRST-PERSON PERSPECTIVE: All memory MUST be written in the first person, from YOUR perspective."
+            prompt += "\n- The memories are stored locally and are free to use. They can also be edited or deleted later so if there is a doubt on whether or not to save the memory, lean towards saving it. Before every response, consider if you have come to know something novel that you did not know before, if so, `update_core_memory` as follows:"
+            prompt += "\n  - ADD: Pass section, subject, content, and leave 'id' empty (\"\")."
+            prompt += "\n  - EDIT: Pass section, target 'id' (e.g., '1' from the `[id: ...]` memorylet block), updated subject, and updated content."
+            prompt += "\n  - DELETE: Pass section and target 'id' (e.g., '1'), with content=\"\" (empty string)."
+            prompt += "\n- Break down facts into atomic concepts (memorylets) and save them individually. If you learn 4 new facts from a response or a set of tool calls, do NOT clump them into a single memorylet, call the `update_core_memory` tool 4 times back to back, each for a different fact. This helps organise your memory better, reduces your workload and makes future updates easier. For example the user's actual name and what they prefer to be called should be stored separately."
+            prompt += "\n- Do NOT forget to save ALL new facts. if calling `update_core_memory` multiple times with multiple facts, DO NOT STOP BEFORE ALL FACTS ARE SAVED. If you find that you forgot to save a fact in the last response, do so NOW."
+            prompt += "\n- Whenever possible, try to edit existing memory instead of adding new, consider if the subject already exists, update that memory instead of creating a new entry. ALWAYS check for contradicting memory, if any found, attempt to intelligently unify them by deleting the older one and editing the newer one if necessary. The memorylet id is serial in nature, higher value indicates more recent memory."
+            prompt += "\n- You generally do not have to explicitly tell the user that you saved or edited a memory, it is already evident from the UI."
+            prompt += "\n- Use `search_episodic_memory(query=\"...\")` to find concepts and past session IDs. It returns the top matching snippets with their Session ID, relevance percentage, and the matching quote snippet string in quotes."
+            prompt += "\n- Use `retrieve_episodic_memory(session_id=\"...\", focus_string=\"...\")` after searching memory. You MUST pass the exact matching quote snippet string returned by `search_episodic_memory` into `focus_string`. This retrieves a concise, highly focused summary explaining how the conversation arrived at that point, what followed, and all key technical decisions without bloating your context window."
+            prompt += "\n- Use `read_skill` to read the steps for a skill listed in your library."
+            prompt += "\n- DISTILLATION: When you successfully resolve a difficult, multi-step task, autonomously use `distill_journey` to save the happy-path workflow for the future."
+            prompt += "\n- QUAGMIRES: Only use `mark_quagmire` if the user explicitly asks you to log a trap, failure, or dead-end."
         
         # Check for project rules in the workspace root
         try:
@@ -452,7 +454,9 @@ class HistoryMessage:
 class SessionManager:
     def __init__(self, sessions_dir: str = None):
         self.sessions_dir = sessions_dir or get_storage_path("sessions")
+        self.nomem_sessions_dir = get_storage_path("nomem_sessions")
         os.makedirs(self.sessions_dir, exist_ok=True)
+        os.makedirs(self.nomem_sessions_dir, exist_ok=True)
         self.active_sessions: Dict[str, List[HistoryMessage]] = {}
         self.current_session_id = f"sess_{int(time.time())}"
         self.aborted_batch_ids = set()
@@ -484,6 +488,9 @@ class SessionManager:
         
         # Start background sync
         threading.Thread(target=self.sync_all_sessions, daemon=True).start()
+
+    def is_no_memory(self) -> bool:
+        return self.current_session_id.startswith("sess_nomem_")
 
     def abort_batch(self, batch_id: int):
         with self._lock:
@@ -525,7 +532,8 @@ class SessionManager:
 
     def _get_session_path(self, agent_name: str) -> str:
         safe_name = agent_name.replace(" ", "_")
-        return os.path.join(self.sessions_dir, f"{self.current_session_id}_{safe_name}.json")
+        target_dir = self.nomem_sessions_dir if self.is_no_memory() else self.sessions_dir
+        return os.path.join(target_dir, f"{self.current_session_id}_{safe_name}.json")
 
     def init_agent_session(self, agent: AgentConfig, all_agents: List[AgentConfig] = None):
         with self._lock:
@@ -533,7 +541,7 @@ class SessionManager:
                 return
             
             self.active_sessions[agent.name] = [
-                HistoryMessage(role="system", content=agent.get_full_system_prompt(all_agents))
+                HistoryMessage(role="system", content=agent.get_full_system_prompt(all_agents, is_no_memory=self.is_no_memory()))
             ]
             self.save_session(agent.name, _bypass_lock=True)
 
@@ -542,7 +550,7 @@ class SessionManager:
             # Always ensure the target agent has a session
             if to_agent.name not in self.active_sessions:
                 self.active_sessions[to_agent.name] = [
-                    HistoryMessage(role="system", content=to_agent.get_full_system_prompt(all_agents))
+                    HistoryMessage(role="system", content=to_agent.get_full_system_prompt(all_agents, is_no_memory=self.is_no_memory()))
                 ]
 
             if from_agent_name == to_agent.name:
@@ -652,10 +660,11 @@ class SessionManager:
                 if is_ai:
                     if agent_name == sender_name:
                         history.append(HistoryMessage(role="ai", content=content, tool_outputs=tool_outputs, tool_calls=tool_calls))
-                        # Index AI response
-                        threading.Thread(target=self.semantic_engine.index_message, 
-                                         args=(agent_name, self.current_session_id, msg_idx, content), 
-                                         daemon=True).start()
+                        # Index AI response only if memory is enabled
+                        if not self.is_no_memory():
+                            threading.Thread(target=self.semantic_engine.index_message, 
+                                             args=(agent_name, self.current_session_id, msg_idx, content), 
+                                             daemon=True).start()
                     else:
                         intercom_content = f'<AGENT_INTERCOM sender="{sender_name}">\n{content}\n</AGENT_INTERCOM>'
                         history.append(HistoryMessage(role="human", content=intercom_content))
@@ -710,10 +719,11 @@ class SessionManager:
                 try: os.remove(temp_path)
                 except Exception: pass
 
-    def clear_all_contexts(self):
+    def clear_all_contexts(self, no_memory: bool = False):
         with self._lock:
             self.active_sessions = {}
-            self.current_session_id = f"sess_{int(time.time())}"
+            prefix = "sess_nomem" if no_memory else "sess"
+            self.current_session_id = f"{prefix}_{int(time.time())}"
 
 # --- SCHEDULING SYSTEM ---
 @dataclass
