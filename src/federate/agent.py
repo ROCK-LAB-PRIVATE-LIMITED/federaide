@@ -111,6 +111,7 @@ SLASH_COMMAND_DESCS = {
     "/readback": "Read back the last AI response with TTS",
     "/speech": "Open Audio/Voice configuration modal",
     "/telegram": "Configure Telegram Bot integration",
+    "/mcp": "Configure Model Context Protocol (MCP) servers",
     "/select_agent": "Switch the active host agent",
     "/clear_all": "Wipe memory and history of all agents",
     "/skills": "List all passive and active skills for the active agent",
@@ -1276,6 +1277,17 @@ class ConfigModal(ModalScreen[str]):
             "read_file", "fetch_url", "save_file", "edit_file", 
             "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation", "send_file_to_telegram"
         ]
+        
+        try:
+            import toolbox
+            for mt in toolbox.load_mcp_tools():
+                if mt.name not in self.all_manageable_tools:
+                    self.all_manageable_tools.append(mt.name)
+            #for dt in toolbox.load_dynamic_tools(agent_config.name):
+            #    if dt.name not in self.all_manageable_tools:
+            #        self.all_manageable_tools.append(dt.name)
+        except Exception:
+            pass
 
     def update_auth_btn_visibility(self):
         btn = self.query_one("#ai_chatgpt_auth_btn", Button)
@@ -1756,6 +1768,97 @@ class ScheduledTaskPromptModal(ModalScreen[str]):
         if self.timer:
             self.timer.stop()
         self.dismiss(event.button.id)
+
+class MCPConfigModal(ModalScreen[bool]):
+    DEFAULT_CSS = """
+    MCPConfigModal { align: center middle; background: $background 60%; }
+    #mcp_dialog { width: 80; height: 95%; border: round $primary; background: $surface; padding: 1 2; }
+    #mcp_json_edit { height: 2fr; border: round $accent; margin: 1 0; }
+    #mcp_log { height: 1fr; border: round $success; background: $boost; display: none; margin-bottom: 1; }
+    .buttons { height: auto; align: right middle; margin-top: 1; }
+    .buttons Button { margin-left: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mcp_dialog"):
+            yield Label(" MCP Servers Configuration (JSON)", classes="pane_title")
+            yield Label("Define your Model Context Protocol servers below:", classes="field_label")
+            yield TextArea(id="mcp_json_edit", language="json")
+            yield RichLog(id="mcp_log", markup=True, auto_scroll=True)
+            with Horizontal(classes="buttons"):
+                yield Button("Query / Refresh Tools", id="mcp_query_btn", variant="primary")
+                yield Button("Save Config", id="mcp_save_btn", variant="success")
+                yield Button("Close", id="mcp_cancel_btn", variant="error")
+
+    def on_mount(self):
+        try:
+            import mcp_handler
+            self.query_one("#mcp_json_edit", TextArea).text = mcp_handler.load_mcp_config_raw()
+        except Exception:
+            self.query_one("#mcp_json_edit", TextArea).text = "{}"
+
+    def _save_json(self) -> bool:
+        content = self.query_one("#mcp_json_edit", TextArea).text
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            self.notify(f"Invalid JSON: {e}", severity="error")
+            return False
+            
+        try:
+            import mcp_handler
+            mcp_handler.save_mcp_config_raw(content)
+            return True
+        except Exception as e:
+            self.notify(f"Keyring Save Failed: {e}", severity="error")
+            return False
+
+    @on(Button.Pressed, "#mcp_save_btn")
+    def save(self):
+        if self._save_json():
+            import toolbox
+            toolbox.reload_mcp_servers()
+            self.notify("MCP servers configuration saved and reloaded.", severity="information")
+            self.dismiss(True)
+
+    @on(Button.Pressed, "#mcp_query_btn")
+    def query_btn(self):
+        if not self._save_json():
+            return
+        
+        log = self.query_one("#mcp_log", RichLog)
+        log.styles.display = "block"
+        log.clear()
+        log.write("[bold yellow]Querying MCP servers (Downloading dependencies via npx can take 60s+)...[/bold yellow]")
+        
+        # Disable buttons to prevent spamming
+        for btn in self.query(".buttons Button"):
+            btn.disabled = True
+            
+        self.run_query_worker()
+
+    @work(thread=True)
+    def run_query_worker(self):
+        import toolbox
+        tools = toolbox.load_mcp_tools(force_reload=True, timeout=120.0)
+        
+        def update_ui():
+            log = self.query_one("#mcp_log", RichLog)
+            if not tools:
+                log.write("[bold red]No tools returned. Check your JSON, network, and ensure npx/uvx are in PATH.[/bold red]")
+            else:
+                log.write(f"[bold green]Successfully retrieved {len(tools)} tools![/bold green]")
+                for t in tools:
+                    log.write(f" - [bold cyan]{t.name}[/bold cyan]: {t.description}")
+                    
+            for btn in self.query(".buttons Button"):
+                btn.disabled = False
+                
+        self.app.call_from_thread(update_ui)
+
+    @on(Button.Pressed, "#mcp_cancel_btn")
+    def cancel(self):
+        self.dismiss(False)
 
 class ChatInput(TextArea):
     BINDINGS = [

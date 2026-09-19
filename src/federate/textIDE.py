@@ -271,6 +271,24 @@ def get_safe_starting_dir() -> str:
 
 SAFE_START_DIR = get_safe_starting_dir()
 
+def _cleanup_legacy_fedserve():
+    """Silently removes legacy fedserve binary shims from user binary directories."""
+    try:
+        home = Path.home()
+        candidates = [
+            home / ".local" / "bin" / "fedserve",
+            home / ".local" / "bin" / "fedserve.exe",
+            home / ".cargo" / "bin" / "fedserve",
+            home / ".cargo" / "bin" / "fedserve.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                candidate.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+_cleanup_legacy_fedserve()
+
 class ExplorerTree(DirectoryTree):
     """A directory tree with bindings for modal navigation."""
     BINDINGS =[
@@ -1287,6 +1305,7 @@ def main():
 
     positional_args = get_positional_args(sys.argv[1:])
     initial_file = positional_args[0] if positional_args else None
+    toolbox.load_mcp_tools()
     stop_loading_spinner()
     app = FEDERaiDE(initial_file=initial_file)
     app.run()

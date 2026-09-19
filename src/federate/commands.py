@@ -34,6 +34,7 @@ SLASH_COMMANDS =[
     "/tts", "/stt", "/readback", "/speech",
     "/mictest",
     "/telegram",
+    "/mcp",
     "/select_agent", "/clear_all",
     "/dpi", "/schedule",
     "/skills",
@@ -396,6 +397,10 @@ def process_slash_command(command: str, agent_view):
         from agent import ScheduleModal
         agent_view.app.push_screen(ScheduleModal(agent_view))
 
+    elif cmd == "/mcp":
+        from agent import MCPConfigModal
+        agent_view.app.push_screen(MCPConfigModal())
+
     elif cmd == "/select_agent":
         if not args:
             agent_view.log_to_ui("[bold red]Usage: /select_agent <agent_name>[/bold red]")
@@ -515,6 +520,7 @@ def process_slash_command(command: str, agent_view):
 | `/select_agent <name>` | Permanently switch the active host agent. |
 | `/clear_all` | Wipe memory for all agents. |
 | `/telegram` | Configure and activate the Telegram Bot integration. |
+| `/mcp` | Configure Model Context Protocol (MCP) servers. |
 | `/schedule` | Open the automated daily task scheduler menu. |
 | `/skills` | List all passive and active skills currently available to the active agent. |
 | `/settings` | Open global harness settings modal. |
