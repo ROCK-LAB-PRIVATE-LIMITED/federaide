@@ -33,15 +33,7 @@ MCP_LEGACY_KEY = "mcp_config_token"
 
 DEFAULT_MCP_CONFIG = '''{
   "mcpServers": {
-    "Canva": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote@latest",
-        "https://mcp.canva.com/mcp"
-      ]
-    }
+      
   }
 }'''
 
