@@ -449,6 +449,12 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             "send_file_to_telegram": toolbox.send_file_to_telegram
         }
 
+        try:
+            for mt in toolbox.load_mcp_tools():
+                high_priv_map[mt.name] = mt
+        except Exception:
+            pass
+
         _SERIAL_TOOL_LOCK = threading.Lock()
 
         def make_wrapped_tool(t_obj):

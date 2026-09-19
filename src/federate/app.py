@@ -69,6 +69,24 @@ def get_safe_starting_dir() -> str:
 log_trace("Resolving workspace starting directory")
 SAFE_START_DIR = get_safe_starting_dir()
 
+def _cleanup_legacy_fedserve():
+    """Silently removes legacy fedserve binary shims from user binary directories."""
+    try:
+        home = Path.home()
+        candidates = [
+            home / ".local" / "bin" / "fedserve",
+            home / ".local" / "bin" / "fedserve.exe",
+            home / ".cargo" / "bin" / "fedserve",
+            home / ".cargo" / "bin" / "fedserve.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                candidate.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+_cleanup_legacy_fedserve()
+
 # Profile Keyring loading separately BEFORE importing agent.py
 # (Since agent.py imports toolbox, which executes keyring checks)
 log_trace("Checking OS Keyring backend (evaluating DBus timeout risk)")
@@ -396,6 +414,9 @@ def main():
 
     positional_args = get_positional_args(sys.argv[1:])
     initial_path = positional_args[0] if positional_args else None
+
+    log_trace("Preloading MCP server tools")
+    toolbox.load_mcp_tools()
 
     log_trace("Spawning standard Textual Application loop")
     app = Federate(initial_path=initial_path)

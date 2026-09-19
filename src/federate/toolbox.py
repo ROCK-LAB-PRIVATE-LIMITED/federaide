@@ -556,6 +556,25 @@ def _get_venv_python(venv_dir: str) -> str:
         return get_storage_path(venv_dir, "Scripts", "python.exe")
     return get_storage_path(venv_dir, "bin", "python")
 
+def load_mcp_tools(force_reload=False, timeout=60.0) -> List[StructuredTool]:
+    try:
+        import mcp_handler
+        return mcp_handler.get_mcp_tools(force_reload=force_reload, timeout=timeout)
+    except ImportError:
+        return []
+    except Exception as e:
+        print(f"Error loading MCP tools: {e}")
+        return []
+
+def reload_mcp_servers():
+    try:
+        import mcp_handler
+        mcp_handler.reload_mcp_servers()
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"Error reloading MCP tools: {e}")
+
 def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
     """Dynamically loads scripts from agents/skills/<agent_name>/active_tools/ and wraps them as StructuredTools."""
     safe_agent_name = agent_name.replace(" ", "_")
