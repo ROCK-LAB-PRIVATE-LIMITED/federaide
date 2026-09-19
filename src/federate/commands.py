@@ -114,6 +114,7 @@ class ChatSuggester(Suggester):
 
 def process_shell_command(command: str, agent_view) -> str:
     """Execute !shell commands passthrough."""
+    return "Shell commands disabled"
     try:
         app = agent_view.app
         base_dir = str(app.query_one("#dir_tree").path) if app else os.getcwd()
