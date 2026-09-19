@@ -1783,7 +1783,7 @@ class MCPConfigModal(ModalScreen[bool]):
         with Vertical(id="mcp_dialog"):
             yield Label(" MCP Servers Configuration (JSON)", classes="pane_title")
             yield Label("Define your Model Context Protocol servers below:", classes="field_label")
-            yield TextArea(id="mcp_json_edit", language="json")
+            yield TextArea(id="mcp_json_edit")
             yield RichLog(id="mcp_log", markup=True, auto_scroll=True)
             with Horizontal(classes="buttons"):
                 yield Button("Query / Refresh Tools", id="mcp_query_btn", variant="primary")
@@ -1791,11 +1791,17 @@ class MCPConfigModal(ModalScreen[bool]):
                 yield Button("Close", id="mcp_cancel_btn", variant="error")
 
     def on_mount(self):
+        ta = self.query_one("#mcp_json_edit", TextArea)
         try:
             import mcp_handler
-            self.query_one("#mcp_json_edit", TextArea).text = mcp_handler.load_mcp_config_raw()
+            ta.text = mcp_handler.load_mcp_config_raw()
         except Exception:
-            self.query_one("#mcp_json_edit", TextArea).text = "{}"
+            ta.text = "{}"
+            
+        try:
+            ta.language = "json"
+        except Exception:
+            ta.language = None
 
     def _save_json(self) -> bool:
         content = self.query_one("#mcp_json_edit", TextArea).text
