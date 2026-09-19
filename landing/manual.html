@@ -1037,6 +1037,17 @@ pip install "federaide[all]"</code></pre>
                 <li><strong>Automatic Git Commits:</strong> Every edit or dependency update is automatically committed with timestamped git logs.</li>
                 <li><strong>Management &amp; Deletion:</strong> Use <code>manage_active_skill</code> to rename or delete active tools, and <code>delete_passive_skill</code> to delete playbook manuals.</li>
             </ul>
+
+            <h3>7.7. Model Context Protocol (MCP) Server Integration</h3>
+            <p>
+                FEDERaiDE natively supports the <strong>Model Context Protocol (MCP)</strong> specification. You can connect any standard MCP server (such as filesystem tools, Postgres connectors, GitHub integrations, Canva integration, Playright browser automation etc.):
+            </p>
+            <ul>
+                <li><strong>Configuring Servers (<code>/mcp</code>):</strong> Type <code>/mcp</code> to open the interactive MCP JSON editor. Define your servers in JSON format using commands like <code>npx</code>, <code>uvx</code>, or custom binary paths with arguments and environment variables.</li>
+                <li><strong>Live Tool Querying &amp; Refresh:</strong> Click <strong>Query / Refresh Tools</strong> inside the <code>/mcp</code> modal to spin up the servers, enumerate their tools, and dynamically generate validated Pydantic tool schemas.</li>
+                <li><strong>Encrypted Credential Storage:</strong> Your MCP server configuration is encrypted and stored securely within your OS Keyring in chunks to prevent plain-text credential leaks on disk.</li>
+                <li><strong>Granular Ability Controls:</strong> Newly discovered MCP tools appear under <strong>Manage Agent Abilities...</strong> (<kbd>F4</kbd>), where you can enable or disable them on a per-agent basis. New MCP tools discovered are disabled by default for all agents, please enable them using this modal for whichever agents you would like.</li>
+            </ul>
         </section>
 
         <!-- SECTION 8 -->
@@ -1075,7 +1086,7 @@ pip install "federaide[all]"</code></pre>
             </ol>
 
             <div class="callout callout-alert">
-                <h5>Copyright Warning Modal</h5>
+                <h5>Copyright Warning</h5>
                 <p>
                     When enabling the Image Companion, FEDERaiDE presents a mandatory legal disclaimer modal. Users must accept terms acknowledging full responsibility for copyright compliance when using fetched images before the image search subsystem will engage.
                 </p>
@@ -1088,14 +1099,21 @@ pip install "federaide[all]"</code></pre>
                 </p>
             </div>
 
-            <h3>8.5. Global Settings & PDF Styling Customization (<kbd>F3</kbd> / `/settings`)</h3>
+            <h3>8.5. Standalone PDF Generation Tool (`render_pdf`)</h3>
+            <p>
+                Agents (and users via prompt directives) can convert any Markdown text or <code>.md</code> document in the workspace into a styled PDF report on demand using the built-in <code>render_pdf</code> tool. It automatically renders headings, code blocks, tables, and clickable hyperlinks.
+            </p>
+
+            <h3>8.6. Global Settings & PDF Styling Customization (<kbd>F3</kbd> / `/settings`)</h3>
             <p>Press <kbd>F3</kbd> or type <code>/settings</code> to customize global harness parameters:</p>
             <ul>
+                <li><strong>Search Providers:</strong> Choose between <strong>DuckDuckGo (Built-in)</strong> or a self-hosted / private <strong>SearXNG</strong> instance by providing your SearXNG URL.</li>
                 <li><strong>Tool Result Availability:</strong> Choose between <code>Private</code> (default: tool outputs in multi-agent discussions are hidden behind <code>[Tool Output Hidden - Result ID: X]</code> stubs to save context tokens; agents fetch them via <code>get_toolresult(ids=[X])</code>) or <code>Public</code> (broadcasts full outputs immediately).</li>
-                <li><strong>Search Pacing Delay:</strong> Set global search pacing delay (default: 65 seconds with random jitter) to prevent DuckDuckGo rate-limiting.</li>
-                <li><strong>Auto-Update on Launch:</strong> Automatically query PyPI for new releases when starting FEDERaiDE.</li>
+                <li><strong>Search Pacing Delay:</strong> Set global search pacing delay (default: 65 seconds with random jitter) to prevent search engine rate-limiting.</li>
+                <li><strong>Auto-Update on Launch:</strong> Automatically query PyPI for new releases and display changelogs when starting FEDERaiDE.</li>
                 <li><strong>Research Limits:</strong> Configure maximum parallel sub-agents (1–10), target context token limit (default: 28,000 tokens), and minimum report token length.</li>
-                <li><strong>PDF Customization:</strong> Adjust rendering DPI (or use <code>/dpi &lt;number&gt;</code>), change footer text, and select custom body, heading, or code font families and sizes.</li>
+                <li><strong>PDF Typography &amp; Styling:</strong> Customize <code>pdf_body_font</code> (e.g. Space Grotesk), <code>pdf_header_font</code> (e.g. Michroma), <code>pdf_code_font</code> (e.g. Space Mono), <code>pdf_body_font_size</code> (e.g. 11pt), <code>pdf_h1_font_size</code> (e.g. 28pt), custom footer text, and rendering DPI (or use <code>/dpi &lt;number&gt;</code>).</li>
+                <li><strong>UI Colors:</strong> Customize User Name, User Label Color, Model Label Color, and Diff Addition/Deletion highlight colors.</li>
             </ul>
         </section>
 
@@ -1269,14 +1287,16 @@ pip install "federaide[all]"</code></pre>
                     <tr><td><code>/readback</code></td><td>Re-reads the last AI agent response out loud using TTS.</td></tr>
                     <tr><td><code>/mictest</code></td><td>Opens the sandboxed microphone and trigger word testing window.</td></tr>
                     <tr><td><code>/speech</code></td><td>Opens the Speech &amp; Audio configuration settings modal.</td></tr>
+                    <tr><td><code>/theme &lt;name&gt;</code></td><td>Switches and persists the UI theme (e.g. <code>/theme tokyo-night</code>, <code>/theme nord</code>, <code>/theme monokai</code>).</td></tr>
                     <tr><td><code>/telegram</code></td><td>Opens the Telegram Bot connection setup modal.</td></tr>
+                    <tr><td><code>/mcp</code></td><td>Opens the Model Context Protocol (MCP) server configuration and query manager.</td></tr>
                     <tr><td><code>/schedule</code></td><td>Opens the Scheduled Task Routines manager.</td></tr>
                     <tr><td><code>/dpi &lt;number&gt;</code></td><td>Sets the image DPI resolution for generated research PDF documents.</td></tr>
-                    <tr><td><code>/settings</code></td><td>Opens global harness settings (search pacing, retries, research token limits).</td></tr>
+                    <tr><td><code>/settings</code></td><td>Opens global harness settings (search pacing, retries, research token limits, PDF styling, UI colors).</td></tr>
                     <tr><td><code>/backstory</code></td><td>Forces an immediate 3rd-person translation and update of all agent backstories.</td></tr>
                     <tr><td><code>/consolidate</code></td><td>Consolidates, unifies, and prunes core memorylets in <code>MEMORY.json</code>.</td></tr>
                     <tr><td><code>/update</code></td><td>Checks PyPI for software updates and displays release notes.</td></tr>
-                    <tr><td><code>/version</code></td><td>Displays the currently installed version of FEDERaiDE.</td></tr>
+                    <tr><td><code>/version</code> or <code>/ver</code></td><td>Displays the currently installed version of FEDERaiDE.</td></tr>
                 </tbody>
             </table>
         </section>
