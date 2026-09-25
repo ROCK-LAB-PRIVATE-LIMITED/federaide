@@ -185,6 +185,9 @@ EOF
                 --with tree-sitter \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
+                --with mcp \
                 "federaide"
         else
             echo "[!] Pre-compiled wheels not found."
@@ -200,6 +203,9 @@ EOF
                 --with tree-sitter-c \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
+                --with mcp \
                 federaide
         fi
         
