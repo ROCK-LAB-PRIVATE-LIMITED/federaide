@@ -115,51 +115,7 @@ class ChatSuggester(Suggester):
 def process_shell_command(command: str, agent_view) -> str:
     """Execute !shell commands passthrough."""
     return "Shell commands disabled"
-    try:
-        app = agent_view.app
-        base_dir = str(app.query_one("#dir_tree").path) if app else os.getcwd()
-    except:
-        base_dir = os.getcwd()
-        
-    # Intercept 'cd' to change the stateful environment directory
-    if command.strip().startswith("cd ") or command.strip() == "cd":
-        target = command.strip()[3:].strip()
-        if not target:
-            target = os.path.expanduser("~")
-        try:
-            if not os.path.isabs(target):
-                target = os.path.join(base_dir, target)
-            target = os.path.abspath(target)
-            os.chdir(target)
-            
-            if app:
-                try:
-                    tree = app.query_one("#dir_tree")
-                    tree.path = target
-                    tree.reload()
-                except Exception:
-                    pass
-            return f"Changed directory to {target}"
-        except Exception as e:
-            return f"cd error: {e}"
-        
-    try:
-        sys_os = platform.system()
-        if sys_os == "Windows":
-            proc = subprocess.run(["powershell.exe", "-NoProfile", "-Command", command], cwd=base_dir, capture_output=True, text=True)
-        else:
-            proc = subprocess.run(command, shell=True, executable="/bin/bash", cwd=base_dir, capture_output=True, text=True)
-            
-        output = ""
-        if proc.stdout:
-            output += proc.stdout
-        if proc.stderr:
-            output += f"\nError:\n{proc.stderr}"
-        if not output:
-            output = ""
-        return output
-    except Exception as e:
-        return f"Shell execution error: {e}"
+    
 
 def copy_to_clipboard(text: str):
     """Platform-independent clipboard logic."""

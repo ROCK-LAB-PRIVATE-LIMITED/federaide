@@ -752,6 +752,11 @@ class GlobalSettingsModal(ModalScreen[str]):
 
                 yield Label("Context Compression", classes="section_label")
                 with Vertical(classes="field_container"):
+                    yield Label("Pre-execution Compression Mode", classes="field_label")
+                    yield Label("Choose model behavior for pre-execution context compression ('self' or 'borrow').", classes="field_help")
+                    yield Select([("Self (Use own model fallback)", "self"), ("Borrow (Delegate to last responder)", "borrow")], value="self", id="precompress_mode", allow_blank=False)
+
+                with Vertical(classes="field_container"):
                     yield Label("Verbatim Messages to Keep", classes="field_label")
                     yield Label("Number of recent dialogue messages kept verbatim at the end of the context (Minimum: 1).", classes="field_help")
                     yield Input(id="keep_verbatim_count", placeholder="e.g. 2")
@@ -788,6 +793,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#pdf_code_font", Input).value = str(config.get("pdf_code_font", "Space Mono"))
         self.query_one("#pdf_body_font_size", Input).value = str(config.get("pdf_body_font_size", "11pt"))
         self.query_one("#pdf_h1_font_size", Input).value = str(config.get("pdf_h1_font_size", "28pt"))
+        self.query_one("#precompress_mode", Select).value = config.get("precompress_mode", "self")
         self.query_one("#keep_verbatim_count", Input).value = str(config.get("keep_verbatim_count", 1))
         self.query_one("#tool_result_visibility", Select).value = config.get("tool_result_visibility", "private")
         
@@ -922,9 +928,12 @@ class GlobalSettingsModal(ModalScreen[str]):
         
         tool_result_vis_val = self.query_one("#tool_result_visibility", Select).value
         tool_result_visibility = str(tool_result_vis_val) if tool_result_vis_val != Select.BLANK else "private"
+        precompress_mode_val = self.query_one("#precompress_mode", Select).value
+        precompress_mode = str(precompress_mode_val) if precompress_mode_val != Select.BLANK else "self"
 
         config = {
             "tool_result_visibility": tool_result_visibility,
+            "precompress_mode": precompress_mode,
             "user_name": user_name,
             "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
@@ -1351,9 +1360,13 @@ class ConfigModal(ModalScreen[str]):
                     yield Select(voice_options, value=current_voice, id="ai_tts_voice", allow_blank=False) 
                     yield Label("Pronouns:") 
                     yield Select([("He/Him", "he/him"), ("She/Her", "she/her"), ("Neither", "neither")], value=self.agent_config.pronouns or "neither", id="ai_pronouns", allow_blank=False) 
+                    yield Label("Max Tokens (Context Limit for Tool Results):")
+                    yield Input(value=str(getattr(self.agent_config, "max_tokens", 256000)), id="ai_max_tokens")
+                    yield Label("Token Equivalent Char Number:")
+                    yield Input(value=str(getattr(self.agent_config, "token_equivalent_char_number", 3.9)), id="ai_token_char_num")
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
-                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools) 
+                        yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools)
 
                     yield Label("Agent Abilities", classes="section_label")
                     yield Button("Manage Agent Abilities...", id="ai_abilities_btn", variant="primary")
@@ -1441,6 +1454,18 @@ class ConfigModal(ModalScreen[str]):
         except ValueError:
             temp = 1.0
 
+        try:
+            max_tokens = int(self.query_one("#ai_max_tokens", Input).value.strip())
+        except ValueError:
+            max_tokens = 256000
+
+        try:
+            token_char_num = float(self.query_one("#ai_token_char_num", Input).value.strip())
+            if token_char_num <= 0:
+                token_char_num = 3.9
+        except ValueError:
+            token_char_num = 3.9
+
         preset_val = self.query_one("#ai_base_url_preset", Select).value
         api_key_val = self.query_one("#ai_api_key", Input).value.strip()
         if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key_val:
@@ -1464,7 +1489,9 @@ class ConfigModal(ModalScreen[str]):
             "tts_voice": (self.query_one("#ai_tts_voice", Select).value if self.query_one("#ai_tts_voice", Select).value != Select.BLANK else None) or "af_sarah",
             "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her",
             "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "none",
-            "temperature": temp
+            "temperature": temp,
+            "max_tokens": max_tokens,
+            "token_equivalent_char_number": token_char_num
         }
 
     def _apply_save(self, is_new: bool):
@@ -2988,6 +3015,7 @@ class AIAgentView(Vertical):
     
     def action_clear_all_contexts(self, no_memory: bool = False):
         self.action_abort() 
+        toolbox.ABORT_EVENT.clear()
         self.session_manager.clear_all_contexts(no_memory=no_memory)
         self.agent_executors = {} 
         self.agent_mode = "PLAN"
@@ -3048,6 +3076,7 @@ class AIAgentView(Vertical):
         
     def action_abort(self):
         toolbox.ABORT_EVENT.set()
+        
         
         if hasattr(self, "current_batch_id"):
             self.session_manager.abort_batch(self.current_batch_id)
@@ -3179,18 +3208,41 @@ class AIAgentView(Vertical):
                 agent = self.agent_manager.get_agent(owner_name)
                 color = agent.color if agent else "magenta"
 
-                if content and content.strip():
-                    self._write_message_block(f"[bold {color}]{owner_name}:[/bold {color}]", content, color, is_markdown=True)
-
-                if hm.tool_calls:
-                    for tc in hm.tool_calls:
+                if hm.tool_calls or hm.tool_outputs:
+                    pending_outputs = list(hm.tool_outputs or [])
+                    
+                    for tc in (hm.tool_calls or []):
                         tc_name = tc.get("name", "tool")
                         tc_args = str(tc.get("args", {}))
                         call_text = f"Calling Tool: {tc_name} with args: {tc_args}"
                         self._write_message_block(f"[bold {color}]{owner_name} (Tool Call):[/bold {color}]", call_text, "#808080", is_markdown=False)
 
-                if hm.tool_outputs:
-                    for out in hm.tool_outputs:
+                        # Find and render the matching Tool Output immediately
+                        tc_id = tc.get("id")
+                        matched_out = None
+                        for i, out in enumerate(pending_outputs):
+                            if (tc_id and out.get("tool_call_id") == tc_id) or (not tc_id and out.get("name") == tc_name):
+                                matched_out = pending_outputs.pop(i)
+                                break
+                                
+                        if matched_out:
+                            t_name = matched_out.get("name", "tool")
+                            t_content = str(matched_out.get("content", ""))
+                            if t_name in ["search_web", "SearchWeb"]:
+                                summary = "[Search results successfully parsed and delivered to active agent context]"
+                            else:
+                                summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', t_content)
+                                summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
+                                summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
+
+                            header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
+                            body_text = Text(summary)
+                            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
+                            box_widget.styles.border = ("round", color)
+                            self._write_log(box_widget)
+
+                    # Render any orphaned outputs (just in case they didn't match a call)
+                    for out in pending_outputs:
                         t_name = out.get("name", "tool")
                         t_content = str(out.get("content", ""))
                         if t_name in ["search_web", "SearchWeb"]:
@@ -3205,6 +3257,9 @@ class AIAgentView(Vertical):
                         box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
                         box_widget.styles.border = ("round", color)
                         self._write_log(box_widget)
+
+                if content and content.strip():
+                    self._write_message_block(f"[bold {color}]{owner_name}:[/bold {color}]", content, color, is_markdown=True)
             else: 
                 intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
                 tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
@@ -3402,6 +3457,7 @@ class AIAgentView(Vertical):
             "- When finished, provide a concise summary of changes made."
         )
 
+        toolbox.ABORT_EVENT.clear()
         self.current_batch_id += 1
         processed_prompt = f"[Memory Consolidation Task]\n{prompt}"
 
@@ -4388,7 +4444,9 @@ class AIAgentView(Vertical):
                     color="#00FFFF",
                     enabled_tools=["read_file", "fetch_url", "save_file", "edit_file", "dispatch_coding_subagent", "run_terminal_command"],
                     reasoning_effort="none",
-                    temperature=1.0
+                    temperature=1.0,
+                    max_tokens=256000,
+                    token_equivalent_char_number=3.9
                 )
                 
                 self._update_agent_keys(new_config.name, result["api_key"])

@@ -23,10 +23,24 @@ import threading
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
+import re
+import hashlib
 from semantic_search import SemanticSearchEngine
 
 from pathlib import Path
 from toolbox import get_storage_path, FEDERATE_DIR
+
+def normalize_msg_content(content: str) -> str:
+    if not content:
+        return ""
+    text = content.strip()
+    m = re.match(r'<AGENT_INTERCOM[^>]*>([\s\S]*?)</AGENT_INTERCOM>', text)
+    if m:
+        text = m.group(1).strip()
+    m_tool = re.match(r'<AGENT_INTERCOM_TOOL_RESPONSE[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', text)
+    if m_tool:
+        text = m_tool.group(1).strip()
+    return text
 
 
 # The core operational logic that all agents must follow
@@ -116,6 +130,8 @@ class AgentConfig:
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
     reasoning_effort: str = "none"
     temperature: float = 1.0
+    max_tokens: int = 256000
+    token_equivalent_char_number: float = 3.9
     
     def get_api_key(self) -> str:
         try:
@@ -574,8 +590,26 @@ class SessionManager:
     def _sync_history_delta(self, src_name: str, src_history: List[HistoryMessage], dst_name: str, dst_history: List[HistoryMessage]):
         existing_contents = {msg.content for msg in dst_history}
         
-        for msg in src_history:
-            if msg.role == "system":
+        # Check if dst_history has a summary watermark
+        cutoff_hash = None
+        for msg in reversed(dst_history):
+            if msg.role == "ai" and msg.content and "[SYSTEM HISTORICAL RECALL SUMMARY]" in msg.content:
+                m = re.search(r'<!--\s*WATERMARK:\s*cutoff_hash="([^"]+)"\s*-->', msg.content)
+                if m:
+                    cutoff_hash = m.group(1)
+                    break
+
+        # If a watermark exists, only sync messages in src_history that occurred AFTER the cutoff
+        start_idx = 0
+        if cutoff_hash:
+            for idx in range(len(src_history) - 1, -1, -1):
+                norm = normalize_msg_content(src_history[idx].content)
+                if norm and hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16] == cutoff_hash:
+                    start_idx = idx + 1
+                    break
+
+        for msg in src_history[start_idx:]:
+            if msg.role == "system" or "[SYSTEM HISTORICAL RECALL SUMMARY]" in (msg.content or ""):
                 continue
             
             if msg.role == "ai":
@@ -608,7 +642,6 @@ class SessionManager:
                             dst_history.append(HistoryMessage(role="human", content=tool_content))
             elif msg.role == "human":
                 # --- MITIGATION: Skip importing intercom messages sent by the destination agent themselves ---
-                import re
                 match_intercom = re.match(r'<AGENT_INTERCOM sender="([^"]+)">', msg.content)
                 if match_intercom and match_intercom.group(1) == dst_name:
                     continue
