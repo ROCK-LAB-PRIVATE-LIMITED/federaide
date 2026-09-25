@@ -171,7 +171,8 @@ EOF
 
         DOWNLOAD_SUCCESS=true
         
-        export ANDROID_API_LEVEL=19
+        export ANDROID_API_LEVEL=24
+        export LDFLAGS="-lcompiler_rt"
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
             uv tool install --force --refresh --python 3.13 \
