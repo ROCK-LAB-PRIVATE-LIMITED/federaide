@@ -52,7 +52,6 @@ dependencies = [
     "pyperclip==1.11.0",   # Compulsory clipboard support for IDE copies/cuts
     "curl-cffi==0.15.0",   # Compulsory HTTP client with impersonation support (Cloudflare bypass)
     "pypdfium2",
-    "cffi",
     "mcp",
     # Platform-specific hard dependencies
     "pywinpty; platform_system == 'Windows'",

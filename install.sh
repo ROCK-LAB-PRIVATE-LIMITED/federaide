@@ -171,9 +171,11 @@ EOF
 
         DOWNLOAD_SUCCESS=true
         
-        export ANDROID_API_LEVEL=19
+        export ANDROID_API_LEVEL=24
+        
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
+
             uv tool install --force --refresh --python 3.13 \
                 --find-links "$TYRES_DIR" \
                 --find-links "https://geoarkadeep.github.io/Tyres/" \
@@ -181,10 +183,14 @@ EOF
                 --with tree-sitter \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
+                --with mcp \
                 "federaide"
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
+
             uv tool install --force --refresh --python 3.13 \
                 --with pycryptodome \
                 --with tree-sitter \
@@ -193,9 +199,33 @@ EOF
                 --with tree-sitter-c \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
+                --with mcp \
                 federaide
         fi
+        # --- FIX START: Android Symbol Resolution Shim ---
+        echo "    [*] Configuring symbol resolution shim for Termux..."
+        # Locate the tool directory for federaide
+        TOOL_DIR="$HOME/.local/share/uv/tools/federaide"
+        SITE_PACKAGES=$(find "$TOOL_DIR" -name "site-packages" -type d | head -n 1)
         
+        if [ -n "$SITE_PACKAGES" ]; then
+            cat << 'EOF_SHIM' > "$SITE_PACKAGES/sitecustomize.py"
+import os
+from ctypes import CDLL, RTLD_GLOBAL
+libpython_path = "/data/data/com.termux/files/usr/lib/libpython3.13.so"
+if os.path.exists(libpython_path):
+    try:
+        CDLL(libpython_path, mode=RTLD_GLOBAL)
+    except:
+        pass
+EOF_SHIM
+            echo "    [+] Shim installed in $SITE_PACKAGES"
+        else
+            echo "    [!] Could not locate site-packages for shim installation."
+        fi
+        # --- FIX END ---
         # Ensure the executable directory is added to the Termux path permanently
         grep -qF ".local/bin" ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         
