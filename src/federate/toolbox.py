@@ -112,6 +112,7 @@ DEFAULT_GLOBAL_SETTINGS = {
     "research_images_as_links": False,
     "autoupdate_on_launch": True,
     "tool_result_visibility": "private",
+    "precompress_mode": "self",
 }
 
 
@@ -354,9 +355,10 @@ def purge_db_checkpoints():
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")
         tables = [row[0] for row in cursor.fetchall()]
         
-        # 1. Delete all rows
+        # 1. Delete all rows from ephemeral checkpoint tables (preserve persistent tool results)
         for table in tables:
-            cursor.execute(f"DELETE FROM {table};")
+            if table != "global_tool_results":
+                cursor.execute(f"DELETE FROM {table};")
             
         # 2. MUST COMMIT DELETION FIRST (SQLite forbids VACUUM inside an open transaction)
         shared_db_conn.commit()
@@ -371,13 +373,21 @@ def purge_db_checkpoints():
     except Exception as e:
         print(f"\n[FEDERaiDE] Checkpoint purge error: {e}\n")
 
-def _get_agent(config: RunnableConfig) -> str:
-    """Extracts the agent name natively from the LangGraph session ID or thread context."""
+def _get_agent(config: RunnableConfig = None) -> str:
+    """Extracts the agent name natively from the LangGraph session ID, thread context, or active agent."""
     if hasattr(thread_context, "agent_name") and thread_context.agent_name:
         return thread_context.agent_name
         
-    thread_id = config.get("configurable", {}).get("thread_id", "")
-    if not thread_id: return "Rita"
+    thread_id = config.get("configurable", {}).get("thread_id", "") if config else ""
+    if not thread_id:
+        if CURRENT_APP:
+            try:
+                agent_view = CURRENT_APP.query_one("#ai_agent_view")
+                if hasattr(agent_view, "active_agent") and agent_view.active_agent:
+                    return agent_view.active_agent.name
+            except Exception:
+                pass
+        return "Rita"
     
     # Handle automated recovery thread IDs (e.g., sess_123_Rita_rst_1785142122)
     if thread_id.startswith("sess_"):
@@ -2512,7 +2522,7 @@ def update_core_memory(section: str, subject: str = "", content: str = "", id: s
     2. EDIT: Pass section, target 'id', updated subject, and updated content.
     3. DELETE: Pass section and target 'id', with content="" (empty string).
     """
-    agent_name = _get_agent(config) if config else "Agent"
+    agent_name = _get_agent(config)
     sec = section.upper().strip() if section else ""
     
     # Early Guard 1: Invalid Section
@@ -3296,7 +3306,7 @@ def get_user_clarification(options: List[str] = None, config: RunnableConfig = N
     Use this when you are unsure about a path, need missing information, or want the user to pick from a set of options.
     Returns the user's typed response or the text of the selected option.
     """
-    agent_name = _get_agent(config) if config else "Agent"
+    agent_name = _get_agent(config)
     if CURRENT_APP:
         try:
             agent_view = CURRENT_APP.query_one("#ai_agent_view")
@@ -3351,7 +3361,7 @@ def retrieve_episodic_memory(session_id: str, focus_string: str = "", config: Ru
         session_id: The session ID to retrieve (e.g. 'sess_1785562384').
         focus_string: The exact matching string snippet returned by search_episodic_memory (e.g. "I am checked in and ready to assist with your UI update test.").
     """
-    agent_name = _get_agent(config) if config else "Agent"
+    agent_name = _get_agent(config)
     safe_name = agent_name.replace(" ", "_")
     session_file = f"{session_id}_{safe_name}.json"
     path = get_storage_path("sessions", session_file)
@@ -3467,6 +3477,149 @@ PAST CONVERSATION HISTORY (Session {session_id}):
 
     except Exception as e:
         return f"Error reading or summarizing session log: {e}"
+
+_RAW_TOOL_RESULTS_QUEUE = []
+_RAW_TOOL_RESULTS_LOCK = threading.Lock()
+
+def store_raw_tool_result(tool_name: str, tool_args: dict, raw_result: str):
+    with _RAW_TOOL_RESULTS_LOCK:
+        _RAW_TOOL_RESULTS_QUEUE.append((tool_name, raw_result))
+
+def pop_raw_tool_result(tool_name: str) -> Optional[str]:
+    with _RAW_TOOL_RESULTS_LOCK:
+        for idx in range(len(_RAW_TOOL_RESULTS_QUEUE) - 1, -1, -1):
+            t_name, raw_res = _RAW_TOOL_RESULTS_QUEUE[idx]
+            if t_name == tool_name:
+                _RAW_TOOL_RESULTS_QUEUE.pop(idx)
+                return raw_res
+    return None
+
+def apply_minicompress_if_needed(tool_name: str, tool_args: dict, result: Any, agent_config: Any) -> tuple[str, str]:
+    """
+    Checks if a tool result exceeds max_tokens for the given agent.
+    If so, performs iterative bottom-to-top minicompress summarization with an ephemeral agent.
+    Returns (compressed_or_original_result, original_result).
+    """
+    result_str = result if isinstance(result, str) else str(result)
+    if not agent_config or not result_str:
+        return result_str, result_str
+
+    max_tokens = int(getattr(agent_config, "max_tokens", 256000) or 256000)
+    token_char_num = float(getattr(agent_config, "token_equivalent_char_number", 3.9) or 3.9)
+    if token_char_num <= 0:
+        token_char_num = 3.9
+
+    total_chars = len(result_str)
+    estimated_tokens = total_chars / token_char_num
+
+    if estimated_tokens <= max_tokens:
+        return result_str, result_str
+
+    log_tool(f"[dim yellow]Minicompress: Tool '{tool_name}' output ({estimated_tokens:.0f} tokens) exceeds {agent_config.name}'s max_tokens ({max_tokens}). Summarizing...[/dim yellow]")
+
+    if getattr(agent_config, "use_backup", False) and getattr(agent_config, "backup_model", ""):
+        model_name = agent_config.backup_model
+        base_url = agent_config.backup_base_url or agent_config.base_url
+        api_key = agent_config.get_backup_api_key() or agent_config.get_api_key()
+    else:
+        model_name = agent_config.model
+        base_url = agent_config.base_url
+        api_key = agent_config.get_api_key()
+
+    if not api_key:
+        return result_str, result_str
+
+    try:
+        effort = getattr(agent_config, "reasoning_effort", "none")
+        extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+        llm = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0.0,
+            max_retries=3,
+            timeout=120,
+            **extra_args
+        )
+
+        try:
+            args_str = json.dumps(tool_args, indent=2) if isinstance(tool_args, dict) else str(tool_args)
+        except Exception:
+            args_str = str(tool_args)
+
+        max_chunk_chars = int(max_tokens * token_char_num)
+        effective_chunk_chars = max(1000, max_chunk_chars - 4000)
+
+        # Iteration 1: slice top-most chunk
+        start_idx = 0
+        end_idx = min(total_chars, effective_chunk_chars)
+        chunk = result_str[start_idx:end_idx]
+        pct = int((end_idx / total_chars) * 100)
+        log_tool(f"[dim cyan]Minicompress ({tool_name}): Pass 1 (chars {start_idx}..{end_idx}/{total_chars}, {pct}% covered)...[/dim cyan]")
+
+        prompt_1 = f"""You are an autonomous AI summarization agent performing a minicompress operation on a large tool output.
+
+ORIGINAL TOOL CALL:
+Tool Name: {tool_name}
+Arguments: {args_str}
+
+TOOL OUTPUT (CHUNK: characters {start_idx} to {end_idx} of {total_chars}, end of output):
+\"\"\"
+{chunk}
+\"\"\"
+
+TASK:
+Provide a concise, highly technical summary of this tool output. Retain all key facts, error messages, findings, code snippets, numbers, file paths, and actionable data relevant to the original tool call."""
+
+        res = resilient_invoke(llm, [HumanMessage(content=prompt_1)])
+        summary = res.content.strip() if res and res.content else ""
+
+        pass_num = 1
+        # Iterations 2..N: Move downwards towards the bottom
+        while end_idx < total_chars:
+            check_abort()
+            pass_num += 1
+            start_idx = end_idx
+            summary_chars = len(summary)
+            available_chunk_chars = max(1000, max_chunk_chars - summary_chars - 4000)
+            end_idx = min(total_chars, start_idx + available_chunk_chars)
+            chunk = result_str[start_idx:end_idx]
+            pct = int((end_idx / total_chars) * 100)
+            log_tool(f"[dim cyan]Minicompress ({tool_name}): Pass {pass_num} (chars {start_idx}..{end_idx}/{total_chars}, {pct}% covered)...[/dim cyan]")
+
+            prompt_n = f"""You are an autonomous AI summarization agent performing a minicompress operation on a large tool output.
+
+ORIGINAL TOOL CALL:
+Tool Name: {tool_name}
+Arguments: {args_str}
+
+EXISTING SUMMARY (of preceding tool output):
+\"\"\"
+{summary}
+\"\"\"
+
+SUBSEQUENT TOOL OUTPUT CHUNK (characters {start_idx} to {end_idx} of {total_chars}):
+\"\"\"
+{chunk}
+\"\"\"
+
+TASK:
+Analyze the subsequent tool output chunk above. Determine if this subsequent content contains relevant information that should be integrated into the summary.
+Update and synthesize the summary so that it accurately and comprehensively covers all relevant information from both the existing summary and the subsequent chunk. Retain all critical technical details, errors, paths, and results relevant to the original tool call."""
+
+            res = resilient_invoke(llm, [HumanMessage(content=prompt_n)])
+            if res and res.content:
+                summary = res.content.strip()
+
+        log_tool(f"[bold green]Minicompress ({tool_name}) complete: Condensed {total_chars} chars into {len(summary)} chars.[/bold green]")
+        final_summary = f"[MINICOMPRESS SUMMARY - Output exceeded agent token limit ({estimated_tokens:.0f} tokens > {max_tokens} tokens max)]\nOriginal Tool: {tool_name}\n\n{summary}"
+        return final_summary, result_str
+
+    except Exception as e:
+        if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
+            raise e
+        log_tool(f"[dim red]Minicompress failed: {e}. Returning original output.[/dim red]")
+        return result_str, result_str
 
 @tool
 def get_toolresult(ids: List[int], config: RunnableConfig = None) -> str:

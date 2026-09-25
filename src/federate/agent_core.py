@@ -25,6 +25,7 @@ import base64
 import mimetypes
 from datetime import datetime
 import threading
+from typing import Optional, List, Dict, Any
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, AIMessageChunk, ToolMessage
@@ -78,7 +79,7 @@ except Exception:
 # ----------------------------------------------------------------------------
 
 import toolbox
-from orchestration import AgentConfig, HistoryMessage
+from orchestration import AgentConfig, HistoryMessage, normalize_msg_content
 from subagents import dispatch_coding_subagent
 import hashlib
 import secrets
@@ -456,10 +457,17 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             pass
 
         _SERIAL_TOOL_LOCK = threading.Lock()
+        MEMORY_TOOL_NAMES = {
+            "update_core_memory", "save_skill", "read_skill", "list_skills",
+            "distill_journey", "delete_passive_skill", "mark_quagmire",
+            "get_user_clarification", "search_episodic_memory", "retrieve_episodic_memory",
+            "set_toolresult"
+        }
 
-        def make_wrapped_tool(t_obj):
-            def wrapped_func(*args, **kwargs):
+        def make_wrapped_tool(t_obj, requires_confirmation=False):
+            def wrapped_func(*args, config=None, **kwargs):
                 agent_name = agent_config.name
+                toolbox.thread_context.agent_name = agent_name
                 
                 # Acquire serial lock so simultaneous tool calls are evaluated strictly in series
                 with _SERIAL_TOOL_LOCK:
@@ -467,34 +475,60 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                     if toolbox.ABORT_EVENT.is_set():
                         return "Error: Tool execution aborted by user."
 
-                    # Pre-validate file operations before bothering the user with a confirmation popup
-                    if t_obj.name == "edit_file":
-                        from toolbox import get_safe_path
-                        fp = kwargs.get("filepath") or kwargs.get("file_path") or kwargs.get("path") or ""
-                        search = kwargs.get("search") or kwargs.get("old_str") or kwargs.get("old_content")
-                        if not fp:
-                            return "Error editing file: No filepath provided."
-                        try:
-                            safe_path, display_path = get_safe_path(fp)
-                            if not os.path.exists(safe_path):
-                                return f"Error editing file: File '{display_path}' does not exist."
-                            with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
-                                content = f.read()
-                            if search is not None:
-                                norm_content = content.replace("\r\n", "\n")
-                                norm_search = search.replace("\r\n", "\n")
-                                count = norm_content.count(norm_search)
-                                if count == 0:
-                                    return f"Error editing file: No match found for the search block in '{display_path}'. Please re-read the file with read_file to get exact indentation/content and retry."
-                                if count > 1:
-                                    return f"Error editing file: Multiple matches ({count}) found for the search block in '{display_path}'. Please provide more surrounding context."
-                        except Exception as pre_err:
-                            return f"Error pre-validating edit: {pre_err}"
+                    if requires_confirmation:
+                        # Pre-validate file operations before bothering the user with a confirmation popup
+                        if t_obj.name == "edit_file":
+                            from toolbox import get_safe_path
+                            fp = kwargs.get("filepath") or kwargs.get("file_path") or kwargs.get("path") or ""
+                            search = kwargs.get("search") or kwargs.get("old_str") or kwargs.get("old_content")
+                            if not fp:
+                                return "Error editing file: No filepath provided."
+                            try:
+                                safe_path, display_path = get_safe_path(fp)
+                                if not os.path.exists(safe_path):
+                                    return f"Error editing file: File '{display_path}' does not exist."
+                                with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
+                                    content = f.read()
+                                if search is not None:
+                                    norm_content = content.replace("\r\n", "\n")
+                                    norm_search = search.replace("\r\n", "\n")
+                                    count = norm_content.count(norm_search)
+                                    if count == 0:
+                                        return f"Error editing file: No match found for the search block in '{display_path}'. Please re-read the file with read_file to get exact indentation/content and retry."
+                                    if count > 1:
+                                        return f"Error editing file: Multiple matches ({count}) found for the search block in '{display_path}'. Please provide more surrounding context."
+                            except Exception as pre_err:
+                                return f"Error pre-validating edit: {pre_err}"
 
-                    confirmed = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
-                    if not confirmed:
-                        return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
-                    return t_obj.func(*args, **kwargs)
+                        confirmed = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
+                        if not confirmed:
+                            return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
+
+                    call_kwargs = dict(kwargs)
+                    func_to_call = t_obj.func if hasattr(t_obj, "func") and callable(t_obj.func) else t_obj
+                    if config is not None:
+                        try:
+                            import inspect
+                            sig = inspect.signature(func_to_call)
+                            if "config" in sig.parameters:
+                                call_kwargs["config"] = config
+                        except Exception:
+                            pass
+
+                    raw_res = func_to_call(*args, **call_kwargs)
+
+                    if t_obj.name in MEMORY_TOOL_NAMES:
+                        return raw_res
+
+                    compressed_res, original_res = toolbox.apply_minicompress_if_needed(
+                        tool_name=t_obj.name,
+                        tool_args=kwargs,
+                        result=raw_res,
+                        agent_config=agent_config
+                    )
+                    if compressed_res != original_res:
+                        toolbox.store_raw_tool_result(t_obj.name, kwargs, original_res)
+                    return compressed_res
 
             return StructuredTool(
                 name=t_obj.name,
@@ -505,17 +539,17 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
 
         if agent_view.agent_mode == "EXECUTE":
             for tname, tool_obj in high_priv_map.items():
-                raw_tools.append(tool_obj)
+                raw_tools.append(make_wrapped_tool(tool_obj, requires_confirmation=False))
         elif agent_view.agent_mode == "INTERMEDIATE":
             for tname, tool_obj in high_priv_map.items():
-                raw_tools.append(make_wrapped_tool(tool_obj))
+                raw_tools.append(make_wrapped_tool(tool_obj, requires_confirmation=True))
         else: # PLAN (SAFE) Mode
             for tname in agent_config.enabled_tools:
                 if tname == "visual_computer_operation":
                     for ct in ["take_screenshot", "click_at_current_location", "move_cursor_absolute", "move_cursor_relative", "send_scroll", "inject_keyboard_input"]:
-                        raw_tools.append(make_wrapped_tool(high_priv_map[ct]))
+                        raw_tools.append(make_wrapped_tool(high_priv_map[ct], requires_confirmation=True))
                 elif tname in high_priv_map:
-                    raw_tools.append(make_wrapped_tool(high_priv_map[tname]))
+                    raw_tools.append(make_wrapped_tool(high_priv_map[tname], requires_confirmation=True))
         
         final_tools = []
         allowed_names = set()
@@ -527,8 +561,12 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                     description="Unauthorized placeholder."
                 )
                 final_tools.append(dummy)
-            else:
+            elif t_obj.name in MEMORY_TOOL_NAMES:
                 final_tools.append(t_obj)
+                allowed_names.add(t_obj.name)
+            else:
+                wrapped = t_obj if getattr(t_obj.func, "__name__", "") == "wrapped_func" else make_wrapped_tool(t_obj, requires_confirmation=False)
+                final_tools.append(wrapped)
                 allowed_names.add(t_obj.name)
 
         class RestrictedModelWrapper:
@@ -565,6 +603,8 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
         return
 
     agent_view._running_agents.add(agent.name)
+    toolbox.thread_context.agent_name = agent.name    
+    toolbox.thread_context.batch_id = batch_id
     try:
         try:
             translate_team_backstories_core(agent_view, agent, list(agent_view.agent_manager.agents.values()))
@@ -578,13 +618,16 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
         except Exception:
             pass
 
+        try:
+            check_and_run_precompress(agent_view, agent, prompt)
+        except Exception as pe:
+            agent_view.log_to_ui(f"[dim red]Pre-compression error: {pe}[/dim red]")
+
         executor = agent_view.get_executor(agent)
         if not executor:
             agent_view.log_to_ui(f"[bold red]Agent {agent.name} not configured (Key missing).[/bold red]")
             return
         
-        toolbox.thread_context.agent_name = agent.name    
-        toolbox.thread_context.batch_id = batch_id
         agent_view.app.call_from_thread(agent_view._toggle_spinner, True, agent.name, agent.color)
         agent_view.app.call_from_thread(agent_view.update_tokens)
         if getattr(agent_view, "tts_enabled", False):
@@ -694,7 +737,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                 output = outputs_by_name_list[tc_name].pop(0)
 
                             if output:
-                                tool_content = str(output.get("content", ""))
+                                tool_content = str(output.get("compressed_content") or output.get("content", ""))
                                 langchain_messages.append(ToolMessage(
                                     content=tool_content,
                                     name=tc_name,
@@ -866,17 +909,25 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                         tool_name = getattr(msg, 'name', 'tool')
                                         tool_call_id = getattr(msg, 'tool_call_id', None)
                                         
-                                        content_to_save = msg.content
-                                        if isinstance(msg.content, list):
+                                        display_content = msg.content
+                                        if isinstance(display_content, list):
                                             reconstructed = ""
-                                            for block in msg.content:
+                                            for block in display_content:
                                                 if block.get("type") == "text":
                                                     reconstructed += block.get("text", "")
                                                 elif block.get("type") == "image_url":
                                                     reconstructed += "\n[ImageBase64: <data_transmitted>]\n"
-                                            content_to_save = reconstructed
-                                            
-                                        tool_outputs.append({"name": tool_name, "content": content_to_save, "tool_call_id": tool_call_id})
+                                            display_content = reconstructed
+
+                                        content_to_save = display_content
+                                        raw_popped = toolbox.pop_raw_tool_result(tool_name)
+                                        if raw_popped is not None:
+                                            content_to_save = raw_popped
+
+                                        output_entry = {"name": tool_name, "content": content_to_save, "tool_call_id": tool_call_id}
+                                        if raw_popped is not None:
+                                            output_entry["compressed_content"] = display_content
+                                        tool_outputs.append(output_entry)
                                         
                                         if "[Attached Image:" in str(content_to_save):
                                             img_match = re.search(r'\[Attached Image: (.*?)\]', str(content_to_save))
@@ -887,10 +938,11 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                         if tool_name in ["search_web", "SearchWeb"]:
                                             summary = "[Search results successfully parsed and delivered to active agent context]"
                                         else:
-                                            summary_clean = str(content_to_save)
+                                            # Render the compressed display_content on the UI
+                                            summary_clean = str(display_content)
                                             summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', summary_clean)
                                             summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
-                                            summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
+                                            summary = (summary_clean + '...') if len(summary_clean) > 400 else summary_clean
                                         
                                         agent_view.app.call_from_thread(agent_view.render_tool_result_box, agent.name, agent.color, summary)
                     
@@ -926,6 +978,8 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                 
                 threading.Thread(target=trigger_background_naming_core, args=(agent_view, prompt, ai_response), daemon=True).start()
                 
+                check_and_run_autocompress(agent_view, agent)
+                
                 new_seq_mentions = agent_view.agent_manager.get_mentions(ai_response)
                 new_par_mentions = agent_view.agent_manager.get_parallel_mentions(ai_response)
                 
@@ -960,6 +1014,11 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
         except (Exception, SystemExit) as e:
             error_str = str(e) if str(e) else "Operation forcefully aborted by user."
+
+            # If this task is from an older superseded batch, discard quietly without touching the UI
+            is_stale_task = (batch_id != 0 and batch_id != getattr(agent_view, "current_batch_id", 0))
+            if is_stale_task:
+                return
 
             if isinstance(e, SystemExit) or toolbox.ABORT_EVENT.is_set() or any(term in error_str.lower() for term in ["aborted", "interrupted"]):
                 completed_ids = {o.get("tool_call_id") for o in tool_outputs if o.get("tool_call_id")}
@@ -1008,8 +1067,11 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
             agent_view.log_to_ui(f"[bold red]Execution Error ({agent.name}):[/bold red] {e}")
     finally:
-        agent_view._running_agents.discard(agent.name)
-        agent_view.app.call_from_thread(agent_view._toggle_spinner, False, agent.name, agent.color) 
+        # Only discard running agent state if this was the current active batch
+        is_current_task = (batch_id == 0 or batch_id == getattr(agent_view, "current_batch_id", 0))
+        if is_current_task:
+            agent_view._running_agents.discard(agent.name)
+            agent_view.app.call_from_thread(agent_view._toggle_spinner, False, agent.name, agent.color) 
         toolbox.unregister_thread()
 
 
@@ -1060,21 +1122,133 @@ def trigger_background_naming_core(agent_view, user_prompt: str, agent_response:
         pass
 
 
-def compress_history_core(agent_view):
-    agent_view.log_to_ui("Analyzing chat history for technical compression...", is_markdown=False)
-    
-    global_config = toolbox.load_global_settings()
-    keep_verbatim_count = int(global_config.get("keep_verbatim_count", 2))
-    
-    comp_threshold = keep_verbatim_count + 2
+def estimate_history_tokens(history: list, agent_config: AgentConfig) -> float:
+    token_char_num = float(getattr(agent_config, "token_equivalent_char_number", 3.9) or 3.9)
+    if token_char_num <= 0:
+        token_char_num = 3.9
+    total_chars = 0
+    for hm in history:
+        content = getattr(hm, "content", None) if isinstance(hm, HistoryMessage) else hm.get("content")
+        if content:
+            total_chars += len(content) if isinstance(content, str) else len(str(content))
+        t_calls = getattr(hm, "tool_calls", None) if isinstance(hm, HistoryMessage) else hm.get("tool_calls")
+        if t_calls:
+            total_chars += len(str(t_calls))
+        t_outs = getattr(hm, "tool_outputs", None) if isinstance(hm, HistoryMessage) else hm.get("tool_outputs")
+        if t_outs:
+            for out in t_outs:
+                if isinstance(out, dict):
+                    c = out.get("compressed_content") or out.get("content") or ""
+                    total_chars += len(c) if isinstance(c, str) else len(str(c))
+    return total_chars / token_char_num
 
-    history = agent_view.session_manager.active_sessions.get(agent_view.active_agent.name, [])
-    if len(history) <= comp_threshold:
-        agent_view.log_to_ui(f"Chat history is too short to compress safely (requires > {comp_threshold} turns).", is_markdown=False)
+
+def get_last_responder_agent(agent_view, current_agent_name: str) -> Optional[AgentConfig]:
+    """Finds the most recent colleague who responded before the current turn and has valid API credentials."""
+    history = agent_view.session_manager.active_sessions.get(current_agent_name, [])
+    for msg in reversed(history):
+        if msg.role == "human" and msg.content:
+            m = re.search(r'<AGENT_INTERCOM\s+sender="([^"]+)">', msg.content)
+            if m:
+                s_name = m.group(1).strip()
+                if s_name != current_agent_name:
+                    s_agent = agent_view.agent_manager.get_agent(s_name)
+                    if s_agent:
+                        k = s_agent.get_backup_api_key() if (s_agent.use_backup and s_agent.backup_model) else s_agent.get_api_key()
+                        if k:
+                            return s_agent
+            m_tool = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE\s+agent="([^"]+)"', msg.content)
+            if m_tool:
+                s_name = m_tool.group(1).strip()
+                if s_name != current_agent_name:
+                    s_agent = agent_view.agent_manager.get_agent(s_name)
+                    if s_agent:
+                        k = s_agent.get_backup_api_key() if (s_agent.use_backup and s_agent.backup_model) else s_agent.get_api_key()
+                        if k:
+                            return s_agent
+        elif msg.role == "ai":
+            break
+
+    for o_name, o_hist in agent_view.session_manager.active_sessions.items():
+        if o_name != current_agent_name and o_hist:
+            if o_hist[-1].role == "ai":
+                s_agent = agent_view.agent_manager.get_agent(o_name)
+                if s_agent:
+                    k = s_agent.get_backup_api_key() if (s_agent.use_backup and s_agent.backup_model) else s_agent.get_api_key()
+                    if k:
+                        return s_agent
+    return None
+
+
+def check_and_run_precompress(agent_view, agent: AgentConfig, incoming_prompt: str = ""):
+    """Pre-compression gate: checks if history + incoming turn exceeds context before LLM invocation."""
+    history = agent_view.session_manager.active_sessions.get(agent.name, [])
+    if len(history) <= 1:
         return
+    max_tokens = int(getattr(agent, "max_tokens", 256000) or 256000)
+    token_char_num = float(getattr(agent, "token_equivalent_char_number", 3.9) or 3.9)
+    if token_char_num <= 0:
+        token_char_num = 3.9
+    est_tokens = estimate_history_tokens(history, agent) + (len(incoming_prompt) / token_char_num)
+    if est_tokens > max_tokens:
+        mode = toolbox.load_global_settings().get("precompress_mode", "self")
+        borrowed = get_last_responder_agent(agent_view, agent.name) if mode == "borrow" else None
+        borrow_msg = f" (delegating to {borrowed.name}'s model)" if borrowed else " (using self fallback)"
+        agent_view.log_to_ui(
+            f"[bold yellow]Pre-compress: {agent.name}'s context ({est_tokens:.0f} tokens) exceeds limit ({max_tokens}){borrow_msg}. Compressing history before execution...[/bold yellow]"
+        )
+        compress_history_core(agent_view, target_agent=agent, is_autocompress=True, incoming_query=incoming_prompt, borrowed_agent=borrowed)
 
-    to_summarize = history[1:-keep_verbatim_count]
-    verbatim_suffix = history[-keep_verbatim_count:]
+
+def check_and_run_autocompress(agent_view, agent: AgentConfig):
+    history = agent_view.session_manager.active_sessions.get(agent.name, [])
+    if len(history) <= 1:
+        return
+    max_tokens = int(getattr(agent, "max_tokens", 256000) or 256000)
+    est_tokens = estimate_history_tokens(history, agent)
+    if est_tokens > max_tokens:
+        agent_view.log_to_ui(
+            f"[bold yellow]Post-compress: {agent.name}'s context ({est_tokens:.0f} tokens) exceeded max_tokens ({max_tokens}). Running autocompress...[/bold yellow]"
+        )
+        compress_history_core(agent_view, target_agent=agent, is_autocompress=True)
+
+
+def compress_history_core(agent_view, target_agent: AgentConfig = None, is_autocompress: bool = False, incoming_query: str = "", borrowed_agent: AgentConfig = None):
+    agent = target_agent or agent_view.active_agent
+    if is_autocompress:
+        agent_view.log_to_ui(f"[dim yellow]Post-compress: Analyzing chat history for {agent.name}...[/dim yellow]", is_markdown=False)
+    else:
+        agent_view.log_to_ui(f"Analyzing chat history for {agent.name}...", is_markdown=False)
+
+    history = agent_view.session_manager.active_sessions.get(agent.name, [])
+    initial_tokens = estimate_history_tokens(history, agent)
+    
+    # --- DELTA COMPRESSION UPGRADE ---
+    existing_summary_text = ""
+    start_idx = 1
+    if len(history) > 1 and history[1].role == "ai" and "[SYSTEM HISTORICAL RECALL SUMMARY]" in (history[1].content or ""):
+        existing_summary_text = history[1].content
+        # Clean it up so we don't nest headers and watermarks
+        existing_summary_text = re.sub(r'^(?:#+\s*)?\[?SYSTEM HISTORICAL RECALL SUMMARY\]?:?\s*', '', existing_summary_text, flags=re.IGNORECASE).strip()
+        existing_summary_text = re.sub(r'<!--\s*WATERMARK:[^>]*-->\s*', '', existing_summary_text).strip()
+        start_idx = 2
+
+    if is_autocompress:
+        if len(history) <= start_idx:
+            return
+        to_summarize = history[start_idx:]
+        verbatim_suffix = []
+    else:
+        global_config = toolbox.load_global_settings()
+        keep_verbatim_count = int(global_config.get("keep_verbatim_count", 2))
+        comp_threshold = start_idx + keep_verbatim_count
+
+        if len(history) <= comp_threshold:
+            agent_view.log_to_ui(f"Chat history is too short to compress safely (requires > {comp_threshold} turns).", is_markdown=False)
+            return
+
+        to_summarize = history[start_idx:-keep_verbatim_count]
+        verbatim_suffix = history[-keep_verbatim_count:]
     
     formatted_history = []
     for msg in to_summarize:
@@ -1082,137 +1256,269 @@ def compress_history_core(agent_view):
         msg_text = msg.content or ""
         if getattr(msg, "tool_outputs", None):
             for out in msg.tool_outputs:
-                msg_text += f"\n[Tool {out.get('name', 'Unknown')} Output]: {out.get('content', '')}"
+                c = out.get("compressed_content") or out.get("content", "")
+                msg_text += f"\n[Tool {out.get('name', 'Unknown')} Output]: {c}"
         formatted_history.append(f"[{role_disp}]: {msg_text}")
     history_text = "\n".join(formatted_history)
-    
-    agent = agent_view.active_agent
-    if agent.use_backup and agent.backup_model:
-        model = agent.backup_model
-        base_url = agent.backup_base_url or agent.base_url
-        api_key = agent.get_backup_api_key()
-    else:
-        model = agent.model
-        base_url = agent.base_url
-        api_key = agent.get_api_key()
-        
-    if not api_key:
-        agent_view.log_to_ui("[bold red]Error: Active agent API key is missing. Compression aborted.[/bold red]")
-        return
-        
-    try:
-        llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url, temperature=0)
-        
-        extracted_image_tags = []
-        vision_payload = []
-        
-        for m in re.finditer(r'\[Attached Image:\s*(.*?)\]', history_text):
-            tag = m.group(0)
-            filepath = m.group(1).strip()
-            if tag not in extracted_image_tags:
-                extracted_image_tags.append(tag)
-                if agent.is_capable_vision and os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not filepath.lower().endswith(".pdf"):
-                    try:
-                        mime = mimetypes.guess_type(filepath)[0] or "image/png"
-                        with open(filepath, "rb") as img_f:
-                            b64 = base64.b64encode(img_f.read()).decode('utf-8').replace('\n', '').replace('\r', '')
-                        vision_payload.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-                    except Exception:
-                        pass
 
-        compress_dir = os.path.join(agent_view.session_manager.sessions_dir, "compressed_images")
-        os.makedirs(compress_dir, exist_ok=True)
+    # Preserve all tool call stubs from the compressed region so other agents can fetch them via get_toolresult
+    verbatim_ids = set()
+    for msg in verbatim_suffix:
+        if getattr(msg, "tool_outputs", None):
+            for out in msg.tool_outputs:
+                if isinstance(out, dict) and out.get("global_id"):
+                    verbatim_ids.add(str(out["global_id"]))
+        if msg.content:
+            for m in re.finditer(r'id="(\d+)"', msg.content):
+                verbatim_ids.add(m.group(1))
+
+    preserved_stubs = []
+    seen_stub_ids = set(verbatim_ids)
+
+    for msg in to_summarize:
+        if getattr(msg, "tool_outputs", None):
+            for out in msg.tool_outputs:
+                if isinstance(out, dict):
+                    gid = out.get("global_id")
+                    if gid and str(gid) not in seen_stub_ids:
+                        seen_stub_ids.add(str(gid))
+                        t_name = out.get("name", "tool")
+                        args_str = str(out.get("args") or "None")
+                        ts = out.get("timestamp", "")
+                        stub = (
+                            f"[Tool Output Hidden]\n"
+                            f"- Tool Name: {t_name}\n"
+                            f"- Result ID: {gid}\n"
+                            f"- Arguments: {args_str}\n"
+                            f"- Time: {ts}\n"
+                            f"- Action: Use get_toolresult(ids=[{gid}]) to read output. (Combine multiple IDs into one list e.g. ids=[{gid}, ...])"
+                        )
+                        stub_tag = f'<AGENT_INTERCOM_TOOL_RESPONSE agent="{agent.name}" tool="{t_name}" id="{gid}">\n{stub}\n</AGENT_INTERCOM_TOOL_RESPONSE>'
+                        preserved_stubs.append(stub_tag)
+
+        if msg.content and "<AGENT_INTERCOM_TOOL_RESPONSE" in msg.content:
+            for m in re.finditer(r'<AGENT_INTERCOM_TOOL_RESPONSE[^>]*id="(\d+)"[^>]*>[\s\S]*?</AGENT_INTERCOM_TOOL_RESPONSE>', msg.content):
+                gid_str = m.group(1)
+                if gid_str not in seen_stub_ids:
+                    seen_stub_ids.add(gid_str)
+                    preserved_stubs.append(m.group(0))
+
+    extracted_image_tags = []
+    vision_payload = []
+    
+    for m in re.finditer(r'\[Attached Image:\s*(.*?)\]', history_text):
+        tag = m.group(0)
+        filepath = m.group(1).strip()
+        if tag not in extracted_image_tags:
+            extracted_image_tags.append(tag)
+            if agent.is_capable_vision and os.path.exists(filepath) and os.path.getsize(filepath) > 0 and not filepath.lower().endswith(".pdf"):
+                try:
+                    mime = mimetypes.guess_type(filepath)[0] or "image/png"
+                    with open(filepath, "rb") as img_f:
+                        b64 = base64.b64encode(img_f.read()).decode('utf-8').replace('\n', '').replace('\r', '')
+                    vision_payload.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                except Exception:
+                    pass
+
+    compress_dir = os.path.join(agent_view.session_manager.sessions_dir, "compressed_images")
+    os.makedirs(compress_dir, exist_ok=True)
+    
+    for m in re.finditer(r'\[ImageBase64:\s*(data:image/([a-zA-Z]+);base64,([^\]]+))\]', history_text):
+        tag = m.group(0)
+        full_data = m.group(1).strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        ext = m.group(2)
+        b64_data = m.group(3).strip().replace("\n", "").replace("\r", "").replace(" ", "")
         
-        for m in re.finditer(r'\[ImageBase64:\s*(data:image/([a-zA-Z]+);base64,([^\]]+))\]', history_text):
-            tag = m.group(0)
-            full_data = m.group(1).strip().replace("\n", "").replace("\r", "").replace(" ", "")
-            ext = m.group(2)
-            b64_data = m.group(3).strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        if any(marker in full_data for marker in ["{", "}", "<", ">", "b64_str", "base64data"]):
+            continue
             
-            if any(marker in full_data for marker in ["{", "}", "<", ">", "b64_str", "base64data"]):
-                continue
-                
-            new_filename = f"compressed_{int(time.time() * 1000)}_{len(extracted_image_tags)}.{ext}"
-            new_filepath = os.path.join(compress_dir, new_filename)
-            
-            try:
-                with open(new_filepath, "wb") as f:
-                    f.write(base64.b64decode(b64_data))
-                
-                new_tag = f"[Attached Image: {new_filepath}]"
-                if new_tag not in extracted_image_tags:
-                    extracted_image_tags.append(new_tag)
-                    if agent.is_capable_vision:
-                        vision_payload.append({"type": "image_url", "image_url": {"url": full_data}})
-            except Exception:
-                pass
-                    
-        history_text = re.sub(r'\[ImageBase64:\s*data:image/[a-zA-Z]+;base64,[^\]]+\]', '[ImageBase64: <data_transmitted>]', history_text)
-        
-        comp_prompt = f"""
-        You are {agent.name}. {agent.backstory}
-        You are summarizing YOUR OWN conversation history to save memory.
-        Write the summary from your own first-person perspective ("I", "my") so that when you read it later, you seamlessly remember what YOU did, what you saw, and what the User said.
-        
-        Analyze the intermediate conversation history below. Generate a dense, technical, and precise Markdown state summary.
-        
-        The summary MUST capture:
-        1. User Directives & Intent: Exactly what the user asked for, why, and what requirements or constraints they gave.
-        2. Actions & Tool Outcomes: What actions/tools I executed in response to each user request and the results.
-        3. Active project paths, files being edited, and exact workspace parameters.
-        4. Hard technical decisions made and agreed-upon designs/architectures.
-        5. Discovered issues, constraints, errors, or dependencies.
-        6. Pending tasks, goals, and next steps.
-        7. Any facts or visual details established in the conversation so far.
-        
-        If you see a message starting with [SYSTEM HISTORICAL RECALL SUMMARY] then understand this conversation has been summarized before. 
-        Consider how the conversation has progressed since the last summary and construct your current summary such that all the details of the older summary are retained while updating it with the progress made since then.
-        
-        Do not lose technical specificity (such as exact filenames, code, functions, paths, or keys).
-        
-        CONVERSATION TO SUMMARIZE:
-        {history_text}
-        """
-        
-        if agent.is_capable_vision and vision_payload:
-            content_list = [{"type": "text", "text": comp_prompt}]
-            content_list.extend(vision_payload)
-            msg_to_send = HumanMessage(content=content_list)
-        else:
-            msg_to_send = HumanMessage(content=comp_prompt)
-        
-        res = llm.invoke([msg_to_send])
-        raw_text = res.content.strip() if res and res.content else ""
-        # Strip any redundant header generated by the LLM before applying the single standardized header
-        clean_text = re.sub(r'^(?:#+\s*)?\[?SYSTEM HISTORICAL RECALL SUMMARY\]?:?\s*', '', raw_text, flags=re.IGNORECASE).strip()
-        summary_content = f"### [SYSTEM HISTORICAL RECALL SUMMARY]\n{clean_text}"
-        
-        summary_message = HistoryMessage(role="ai", content=summary_content)
-        
-        if extracted_image_tags:
-            image_message = HistoryMessage(
-                role="human", 
-                content="### [Images preserved from compressed history]\n" + "\n".join(extracted_image_tags)
-            )
-            new_history = [history[0], summary_message, image_message] + verbatim_suffix
-        else:
-            new_history = [history[0], summary_message] + verbatim_suffix
-        
-        agent_view.session_manager.active_sessions[agent_view.active_agent.name] = new_history
-        agent_view.session_manager.save_session(agent_view.active_agent.name)
+        new_filename = f"compressed_{int(time.time() * 1000)}_{len(extracted_image_tags)}.{ext}"
+        new_filepath = os.path.join(compress_dir, new_filename)
         
         try:
-            thread_id = f"{agent_view.session_manager.current_session_id}_{agent_view.active_agent.name}"
-            from toolbox import shared_db_conn
-            cursor = shared_db_conn.cursor()
-            cursor.execute("DELETE FROM checkpoints WHERE thread_id = ?", (thread_id,))
-            cursor.execute("DELETE FROM writes WHERE thread_id = ?", (thread_id,))
-            shared_db_conn.commit()
-        except Exception as e:
-            agent_view.log_to_ui(f"[dim red]Checkpointer sync error: {e}[/dim red]")
+            with open(new_filepath, "wb") as f:
+                f.write(base64.b64decode(b64_data))
             
-        agent_view.log_to_ui("[bold green]Chat context successfully compressed semantically.[/bold green]")
-        agent_view.app.call_from_thread(agent_view.update_tokens)
-        
+            new_tag = f"[Attached Image: {new_filepath}]"
+            if new_tag not in extracted_image_tags:
+                extracted_image_tags.append(new_tag)
+                if agent.is_capable_vision:
+                    vision_payload.append({"type": "image_url", "image_url": {"url": full_data}})
+        except Exception:
+            pass
+                
+    history_text = re.sub(r'\[ImageBase64:\s*data:image/[a-zA-Z]+;base64,[^\]]+\]', '[ImageBase64: <data_transmitted>]', history_text)
+
+    def _build_comp_prompt(text_chunk: str, is_rolling: bool = False, existing_sum: str = "") -> str:
+        query_sec = ""
+        if incoming_query and incoming_query.strip():
+            query_sec = f"""
+TARGET INCOMING USER QUERY / DIRECTIVE (Retain all context required to answer this):
+\"\"\"
+{incoming_query.strip()}
+\"\"\"
+"""
+        if is_rolling and existing_sum:
+            return f"""You are an autonomous AI summarization worker compressing conversation history on behalf of {agent.name}.
+Write from {agent.name}'s first-person perspective ("I", "my") so {agent.name} seamlessly retains its memory.
+{query_sec}
+EXISTING SUMMARY OF PRIOR CONVERSATION:
+\"\"\"
+{existing_sum}
+\"\"\"
+
+SUBSEQUENT CONVERSATION CHUNK:
+\"\"\"
+{text_chunk}
+\"\"\"
+
+TASK:
+Synthesize the existing summary and the subsequent conversation chunk into an updated, dense Markdown state summary from {agent.name}'s perspective.
+Preserve all user requirements, key actions, code decisions, file paths, variables, and context needed to address the incoming directive."""
+        else:
+            return f"""You are an autonomous AI summarization worker compressing conversation history on behalf of {agent.name}.
+Write the summary in the first-person perspective ("I", "my") from {agent.name}'s perspective so {agent.name} seamlessly remembers its actions and dialogue.
+{query_sec}
+Analyze the conversation history below. Generate a dense, technical, and precise Markdown state summary.
+
+The summary MUST capture:
+1. User Directives & Intent: What the user asked for, constraints, and requirements.
+2. Actions & Tool Outcomes: Actions/tools executed and findings.
+3. Active project paths, files edited, and workspace parameters.
+4. Hard technical decisions, architectures, and discovered issues.
+5. Pending tasks and established facts.
+
+If you see a message starting with [SYSTEM HISTORICAL RECALL SUMMARY], integrate its details while updating with new progress.
+Do not lose technical specificity (filenames, code snippets, functions, paths).
+
+CONVERSATION TO SUMMARIZE:
+{text_chunk}"""
+
+    raw_text = None
+
+    # --- Strategy 1: Delegate to Last Responder's Model ---
+    if borrowed_agent:
+        try:
+            if borrowed_agent.use_backup and borrowed_agent.backup_model:
+                b_model = borrowed_agent.backup_model
+                b_base_url = borrowed_agent.backup_base_url or borrowed_agent.base_url
+                b_api_key = borrowed_agent.get_backup_api_key() or borrowed_agent.get_api_key()
+            else:
+                b_model = borrowed_agent.model
+                b_base_url = borrowed_agent.base_url
+                b_api_key = borrowed_agent.get_api_key()
+
+            if b_api_key:
+                b_effort = getattr(borrowed_agent, "reasoning_effort", "none")
+                b_extra = {"model_kwargs": {"reasoning_effort": b_effort}} if b_effort not in ("none", None, "") else {}
+                b_llm = ChatOpenAI(model=b_model, api_key=b_api_key, base_url=b_base_url, temperature=0, timeout=120, **b_extra)
+                
+                comp_prompt = _build_comp_prompt(history_text, is_rolling=bool(existing_summary_text), existing_sum=existing_summary_text)
+                if agent.is_capable_vision and vision_payload:
+                    msg_to_send = HumanMessage(content=[{"type": "text", "text": comp_prompt}] + vision_payload)
+                else:
+                    msg_to_send = HumanMessage(content=comp_prompt)
+
+                res = toolbox.resilient_invoke(b_llm, [msg_to_send])
+                if res and res.content:
+                    raw_text = res.content.strip()
+        except Exception as be:
+            agent_view.log_to_ui(f"[dim yellow]Delegated compression via {borrowed_agent.name} failed ({be}). Falling back to chunked compression...[/dim yellow]")
+
+    # --- Strategy 2: Fallback to Agent's Own Model (Chunked if needed) ---
+    if not raw_text:
+        if agent.use_backup and agent.backup_model:
+            model = agent.backup_model
+            base_url = agent.backup_base_url or agent.base_url
+            api_key = agent.get_backup_api_key() or agent.get_api_key()
+        else:
+            model = agent.model
+            base_url = agent.base_url
+            api_key = agent.get_api_key()
+            
+        if not api_key:
+            agent_view.log_to_ui(f"[bold red]Error: {agent.name} API key is missing. Compression aborted.[/bold red]")
+            return
+            
+        try:
+            effort = getattr(agent, "reasoning_effort", "none")
+            extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+            llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url, temperature=0, timeout=120, **extra_args)
+
+            token_char_num = float(getattr(agent, "token_equivalent_char_number", 3.9) or 3.9)
+            if token_char_num <= 0:
+                token_char_num = 3.9
+            max_chunk_chars = int((getattr(agent, "max_tokens", 256000) or 256000) * token_char_num) - 6000
+            max_chunk_chars = max(2000, max_chunk_chars)
+
+            if len(history_text) <= max_chunk_chars:
+                comp_prompt = _build_comp_prompt(history_text, is_rolling=bool(existing_summary_text), existing_sum=existing_summary_text)
+                if agent.is_capable_vision and vision_payload:
+                    msg_to_send = HumanMessage(content=[{"type": "text", "text": comp_prompt}] + vision_payload)
+                else:
+                    msg_to_send = HumanMessage(content=comp_prompt)
+                res = toolbox.resilient_invoke(llm, [msg_to_send])
+                raw_text = res.content.strip() if res and res.content else ""
+            else:
+                # Chunked rolling minicompress
+                chunks = [history_text[i:i + max_chunk_chars] for i in range(0, len(history_text), max_chunk_chars)]
+                rolling_summary = existing_summary_text
+                for idx, ch in enumerate(chunks, 1):
+                    toolbox.check_abort()
+                    agent_view.log_to_ui(f"[dim cyan]Chunked compress ({agent.name}): Pass {idx}/{len(chunks)}...[/dim cyan]")
+                    p = _build_comp_prompt(ch, is_rolling=(idx > 1 or bool(existing_summary_text)), existing_sum=rolling_summary)
+                    res = toolbox.resilient_invoke(llm, [HumanMessage(content=p)])
+                    rolling_summary = res.content.strip() if res and res.content else rolling_summary
+                raw_text = rolling_summary
+        except Exception as e:
+            agent_view.log_to_ui(f"[bold red]Inference compression error ({agent.name}): {e}[/bold red]")
+            return
+
+    clean_text = re.sub(r'^(?:#+\s*)?\[?SYSTEM HISTORICAL RECALL SUMMARY\]?:?\s*', '', raw_text or "", flags=re.IGNORECASE).strip()
+    clean_text = re.sub(r'<!--\s*WATERMARK:[^>]*-->\s*', '', clean_text).strip()
+
+    cutoff_hash = ""
+    if to_summarize:
+        for m in reversed(to_summarize):
+            if m.content and m.content.strip():
+                norm = normalize_msg_content(m.content)
+                if norm:
+                    cutoff_hash = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+                    break
+
+    if cutoff_hash:
+        summary_content = f"### [SYSTEM HISTORICAL RECALL SUMMARY]\n<!-- WATERMARK: cutoff_hash=\"{cutoff_hash}\" -->\n{clean_text}"
+    else:
+        summary_content = f"### [SYSTEM HISTORICAL RECALL SUMMARY]\n{clean_text}"
+    
+    summary_message = HistoryMessage(role="ai", content=summary_content)
+    stub_messages = [HistoryMessage(role="human", content=st) for st in preserved_stubs]
+    
+    if extracted_image_tags:
+        image_message = HistoryMessage(
+            role="human", 
+            content="### [Images preserved from compressed history]\n" + "\n".join(extracted_image_tags)
+        )
+        new_history = [history[0], summary_message, image_message] + stub_messages + verbatim_suffix
+    else:
+        new_history = [history[0], summary_message] + stub_messages + verbatim_suffix
+    
+    agent_view.session_manager.active_sessions[agent.name] = new_history
+    agent_view.session_manager.save_session(agent.name)
+    final_tokens = estimate_history_tokens(new_history, agent)
+    
+    try:
+        thread_id = f"{agent_view.session_manager.current_session_id}_{agent.name}"
+        from toolbox import shared_db_conn
+        cursor = shared_db_conn.cursor()
+        cursor.execute("DELETE FROM checkpoints WHERE thread_id = ? OR thread_id LIKE ?", (thread_id, f"{thread_id}%"))
+        cursor.execute("DELETE FROM writes WHERE thread_id = ? OR thread_id LIKE ?", (thread_id, f"{thread_id}%"))
+        shared_db_conn.commit()
     except Exception as e:
-        agent_view.log_to_ui(f"[bold red]Inference compression error: {e}[/bold red]")
+        agent_view.log_to_ui(f"[dim red]Checkpointer sync error: {e}[/dim red]")
+        
+    agent_view.agent_executors.pop(agent.name, None)
+    msg_status = "automatically" if is_autocompress else "semantically"
+    token_diff_str = f" ({initial_tokens:.0f} ➔ {final_tokens:.0f} tokens)" if initial_tokens > 0 else f" ({final_tokens:.0f} tokens)"
+    agent_view.log_to_ui(f"[bold green]Chat context for {agent.name} successfully compressed {msg_status}{token_diff_str}.[/bold green]")
+    agent_view.app.call_from_thread(agent_view.update_tokens)
