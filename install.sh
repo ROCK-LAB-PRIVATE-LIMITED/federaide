@@ -186,6 +186,7 @@ EOF
                 --with weasyprint \
                 --with cffi \
                 --with cryptography \
+                --with mcp \
                 "federaide"
         else
             echo "[!] Pre-compiled wheels not found."
@@ -201,6 +202,7 @@ EOF
                 --with weasyprint \
                 --with cffi \
                 --with cryptography \
+                --with mcp \
                 federaide
         fi
         
