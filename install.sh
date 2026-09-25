@@ -172,7 +172,7 @@ EOF
         DOWNLOAD_SUCCESS=true
         
         export ANDROID_API_LEVEL=24
-        export LDFLAGS="-lcompiler_rt"
+
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
             uv tool install --force --refresh --python 3.13 \
@@ -182,6 +182,8 @@ EOF
                 --with tree-sitter \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
                 "federaide"
         else
             echo "[!] Pre-compiled wheels not found."
@@ -194,6 +196,8 @@ EOF
                 --with tree-sitter-c \
                 --with keyrings.alt \
                 --with weasyprint \
+                --with cffi \
+                --with cryptography \
                 federaide
         fi
         
