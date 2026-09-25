@@ -175,9 +175,7 @@ EOF
 
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
-            uv pip install cffi --system
-            uv pip install cryptography --system
-            uv pip install mcp --system
+
             uv tool install --force --refresh --python 3.13 \
                 --find-links "$TYRES_DIR" \
                 --find-links "https://geoarkadeep.github.io/Tyres/" \
@@ -192,9 +190,7 @@ EOF
         else
             echo "[!] Pre-compiled wheels not found."
             echo "[!] Falling back to basic installation (no extras) to prevent compilation hangs."
-            uv pip install cffi --system
-            uv pip install cryptography --system
-            uv pip install mcp --system
+
             uv tool install --force --refresh --python 3.13 \
                 --with pycryptodome \
                 --with tree-sitter \
