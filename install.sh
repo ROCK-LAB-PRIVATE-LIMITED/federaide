@@ -204,7 +204,28 @@ EOF
                 --with mcp \
                 federaide
         fi
+        # --- FIX START: Android Symbol Resolution Shim ---
+        echo "    [*] Configuring symbol resolution shim for Termux..."
+        # Locate the tool directory for federaide
+        TOOL_DIR="$HOME/.local/share/uv/tools/federaide"
+        SITE_PACKAGES=$(find "$TOOL_DIR" -name "site-packages" -type d | head -n 1)
         
+        if [ -n "$SITE_PACKAGES" ]; then
+            cat << 'EOF_SHIM' > "$SITE_PACKAGES/sitecustomize.py"
+import os
+from ctypes import CDLL, RTLD_GLOBAL
+libpython_path = "/data/data/com.termux/files/usr/lib/libpython3.13.so"
+if os.path.exists(libpython_path):
+    try:
+        CDLL(libpython_path, mode=RTLD_GLOBAL)
+    except:
+        pass
+EOF_SHIM
+            echo "    [+] Shim installed in $SITE_PACKAGES"
+        else
+            echo "    [!] Could not locate site-packages for shim installation."
+        fi
+        # --- FIX END ---
         # Ensure the executable directory is added to the Termux path permanently
         grep -qF ".local/bin" ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         
