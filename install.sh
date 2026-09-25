@@ -172,8 +172,7 @@ EOF
         DOWNLOAD_SUCCESS=true
         
         export ANDROID_API_LEVEL=24
-        export LDFLAGS="-lpython3.13"
-        export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-Wl,--allow-shlib-undefined"
+        
         if [ "$DOWNLOAD_SUCCESS" = true ]; then
             echo "[*] Installing FEDERaiDE with full extras [all] using pre-compiled wheels on Python 3.13..."
 
