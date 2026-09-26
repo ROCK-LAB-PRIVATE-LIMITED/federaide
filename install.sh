@@ -138,7 +138,7 @@ install_federaide_unix() {
 
         # Ensure weasyprint system dependencies are present even if uv was already installed
         echo "[*] Ensuring required system packages are installed..."
-        pkg install -y pango rust nodejs gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash libjpeg-turbo libtiff libpng openjpeg
+        pkg install -y pango rust python nodejs gobject-introspection libffi pkg-config tree-sitter-python tree-sitter-go tree-sitter-rust tree-sitter-c tree-sitter-bash libjpeg-turbo libtiff libpng openjpeg
 
         # 1. Define a safe working directory in Termux home space for dummy builds
         BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
@@ -204,28 +204,7 @@ EOF
                 --with mcp \
                 federaide
         fi
-        # --- FIX START: Android Symbol Resolution Shim ---
-        echo "    [*] Configuring symbol resolution shim for Termux..."
-        # Locate the tool directory for federaide
-        TOOL_DIR="$HOME/.local/share/uv/tools/federaide"
-        SITE_PACKAGES=$(find "$TOOL_DIR" -name "site-packages" -type d | head -n 1)
         
-        if [ -n "$SITE_PACKAGES" ]; then
-            cat << 'EOF_SHIM' > "$SITE_PACKAGES/sitecustomize.py"
-import os
-from ctypes import CDLL, RTLD_GLOBAL
-libpython_path = "/data/data/com.termux/files/usr/lib/libpython3.13.so"
-if os.path.exists(libpython_path):
-    try:
-        CDLL(libpython_path, mode=RTLD_GLOBAL)
-    except:
-        pass
-EOF_SHIM
-            echo "    [+] Shim installed in $SITE_PACKAGES"
-        else
-            echo "    [!] Could not locate site-packages for shim installation."
-        fi
-        # --- FIX END ---
         # Ensure the executable directory is added to the Termux path permanently
         grep -qF ".local/bin" ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         
