@@ -116,6 +116,7 @@ SLASH_COMMAND_DESCS = {
     "/clear_all": "Wipe memory and history of all agents",
     "/skills": "List all passive and active skills for the active agent",
     "/settings": "Open global harness settings modal",
+    "/rollback": "Roll back ~/.federate Git state by N turns (e.g. /rollback or /rollback 2)",
     "/help": "Show this detailed help menu",
     "/backstory": "Force update and translate all agent backstories",
     "/consolidate": "Consolidate, summarize, and prune core memorylets",

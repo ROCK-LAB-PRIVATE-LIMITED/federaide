@@ -229,11 +229,122 @@ FEDERATE_DIR = os.path.join(str(Path.home()), ".federate")
 
 DEFAULT_VENV_PATH = os.path.join(FEDERATE_DIR, "defaultVenv")
 
+def init_federate_git_repo():
+    """Initializes ~/.federate as a git repository with .db tracking and strict ignore rules."""
+    import subprocess
+    fed_dir = FEDERATE_DIR
+    os.makedirs(fed_dir, exist_ok=True)
+
+    gitignore_path = os.path.join(fed_dir, ".gitignore")
+    default_gitignore = """# Virtual environments
+# Globally ignore all hidden files and folders starting with a dot
+.*
+**/.*
+
+# Whitelist the essential dotfiles we MUST track
+!.gitignore
+!.federate_state.db
+
+# Virtual Environments
+defaultVenv/
+**/venv/
+**/.venv/
+
+# Credentials & Secrets
+.env
+*.env
+chatgpt-auth.json
+mcp_servers.json
+agent_config.json
+keyring*.cfg
+share/
+**/pki/
+**/*keyring*/
+
+# Heavy neural network models & weights
+*.onnx
+*.bin
+sherpa-onnx-*
+
+# Ephemeral SQLite WAL logs (all data is flushed directly into *.db)
+*.db-wal
+*.db-shm
+
+# Caches & temp files
+__pycache__/
+*.pyc
+*.part
+*.tmp
+temp_*
+.federate_worktrees/
+"""
+    # 1. Ensure .gitignore is created BEFORE git init
+    if not os.path.exists(gitignore_path):
+        try:
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(default_gitignore)
+        except Exception:
+            pass
+
+    # 2. Initialize Git repo and local identity
+    git_dir = os.path.join(fed_dir, ".git")
+    if not os.path.exists(git_dir):
+        try:
+            subprocess.run(["git", "init"], cwd=fed_dir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "FEDERaiDE"], cwd=fed_dir, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "harness@local"], cwd=fed_dir, check=True, capture_output=True)
+            flush_sqlite_databases()
+            subprocess.run(["git", "add", "."], cwd=fed_dir, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial baseline state"], cwd=fed_dir, check=True, capture_output=True)
+        except Exception:
+            pass
+
+def flush_sqlite_databases():
+    """Flushes all SQLite WAL frames directly into the main .db files."""
+    import sqlite3
+    try:
+        global shared_db_conn
+        if 'shared_db_conn' in globals() and shared_db_conn:
+            shared_db_conn.commit()
+            shared_db_conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    except Exception:
+        pass
+
+    try:
+        ep_db = os.path.join(FEDERATE_DIR, "episodic_memory.db")
+        if os.path.exists(ep_db):
+            conn = sqlite3.connect(ep_db, timeout=5.0)
+            conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            conn.close()
+    except Exception:
+        pass
+
+_GIT_COMMIT_LOCK = threading.Lock()
+
+def auto_commit_state(message: str = "State update"):
+    """Flushes SQLite databases and stages/commits changes in ~/.federate asynchronously."""
+    def _worker():
+        with _GIT_COMMIT_LOCK:
+            fed_dir = FEDERATE_DIR
+            if not os.path.exists(os.path.join(fed_dir, ".git")):
+                return
+            try:
+                flush_sqlite_databases()
+                status = subprocess.run(["git", "status", "--porcelain"], cwd=fed_dir, capture_output=True, text=True)
+                if status.stdout.strip():
+                    subprocess.run(["git", "add", "."], cwd=fed_dir, check=True, capture_output=True)
+                    subprocess.run(["git", "commit", "-m", message], cwd=fed_dir, check=True, capture_output=True)
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True).start()
+
 def _bootstrap_scratchpad_venv():
     """Silently creates a default scratchpad virtual environment in the background if missing."""
     try:
+        init_federate_git_repo()
         if not os.path.exists(DEFAULT_VENV_PATH):
-            # Use the host system's running Python executable to guarantee version matching
             subprocess.run(
                 [sys.executable, "-m", "venv", DEFAULT_VENV_PATH], 
                 stdout=subprocess.DEVNULL, 
@@ -243,8 +354,6 @@ def _bootstrap_scratchpad_venv():
     except Exception:
         pass
 
-# Run bootstrapping on a daemon thread to keep UI startup instant and non-blocking.
-# Since the function is now defined above, this resolves the NameError.
 threading.Thread(target=_bootstrap_scratchpad_venv, daemon=True).start()
 
 def get_storage_path(*args):
