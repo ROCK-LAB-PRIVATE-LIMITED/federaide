@@ -39,6 +39,7 @@ SLASH_COMMANDS =[
     "/dpi", "/schedule",
     "/skills",
     "/settings",
+    "/rollback",
     "/update", "/version",
     "/help",
     "/backstory",
@@ -458,6 +459,10 @@ def process_slash_command(command: str, agent_view):
     elif cmd == "/consolidate":
         agent_view.consolidate_memories(manual=True)
     
+    elif cmd == "/rollback":
+        steps = args[0].strip() if args else "1"
+        perform_rollback_command(agent_view, steps)
+    
     elif cmd == "/help":
         help_text = """
 ###  Available Chat Commands
@@ -482,7 +487,7 @@ def process_slash_command(command: str, agent_view):
 | `/skills` | List all passive and active skills currently available to the active agent. |
 | `/settings` | Open global harness settings modal. |
 | `/backstory` | Force update and translate all agent backstories immediately. |
-
+| `/rollback` | Roll back `~/.federate` Git history by N turns (e.g. `/rollback` or `/rollback 2`). |
 
 ###  Interactive Features
 - **File Injection:** Type `&` followed by a file or directory path (e.g. `&src/main.py`). Press **`UP/DOWN`** to dynamically cycle through available files! Hit `ENTER` to inject their content into the AI's prompt context.
@@ -619,3 +624,38 @@ def load_pdf_dpi() -> int:
     """Loads persisted PDF DPI configuration from global settings."""
     from toolbox import load_global_settings
     return load_global_settings().get("pdf_dpi", 150)
+    
+def perform_rollback_command(agent_view, steps_or_target: str = "1"):
+    """Rolls back ~/.federate by N commits or to a specific Git ref and reloads the runtime."""
+    import toolbox
+
+    fed_dir = toolbox.FEDERATE_DIR
+    if not os.path.exists(os.path.join(fed_dir, ".git")):
+        agent_view.log_to_ui("[bold red]Git repository not initialized in ~/.federate.[/bold red]")
+        return
+
+    # Abort active workers to prevent write-collisions during checkout
+    agent_view.action_abort()
+
+    try:
+        target = f"HEAD~{steps_or_target}" if steps_or_target.isdigit() else steps_or_target
+
+        res = subprocess.run(["git", "reset", "--hard", target], cwd=fed_dir, capture_output=True, text=True)
+        if res.returncode != 0:
+            agent_view.log_to_ui(f"[bold red]Rollback failed:[/bold red] {res.stderr.strip()}")
+            return
+
+        # Reload runtime state and UI
+        agent_view.agent_manager.load_agents()
+        agent_view.agent_executors.clear()
+        agent_view.select_agent(agent_view.agent_manager.get_default_agent_name())
+        agent_view.action_clear_all_contexts()
+        agent_view.update_status_bar()
+
+        agent_view.log_to_ui(
+            f"[bold green] System rolled back successfully to `{target}`![/bold green]\n"
+            f"- Databases, memories, skills, and session transcripts restored.",
+            is_markdown=False
+        )
+    except Exception as e:
+        agent_view.log_to_ui(f"[bold red]Rollback error:[/bold red] {e}")

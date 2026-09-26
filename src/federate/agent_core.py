@@ -976,6 +976,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                 agent_view.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls)
                 agent_view.app.call_from_thread(agent_view.update_tokens)
                 
+                toolbox.auto_commit_state(f"{agent.name}: Completed response turn")
                 threading.Thread(target=trigger_background_naming_core, args=(agent_view, prompt, ai_response), daemon=True).start()
                 
                 check_and_run_autocompress(agent_view, agent)
