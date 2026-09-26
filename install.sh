@@ -208,6 +208,13 @@ EOF
         # Ensure the executable directory is added to the Termux path permanently
         grep -qF ".local/bin" ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
         
+        # Ensure libpython symbols are available (libpython LD_PRELOAD)
+        for prof in "$HOME/.bashrc" "$HOME/.profile" "/data/data/com.termux/files/usr/etc/profile"; do
+            [ -f "$prof" ] && ! grep -q "libpython3.13.so" "$prof" 2>/dev/null && \
+                echo 'export LD_PRELOAD="/data/data/com.termux/files/usr/lib/libpython3.13.so${LD_PRELOAD:+:$LD_PRELOAD}"' >> "$prof"
+        done
+        export LD_PRELOAD="/data/data/com.termux/files/usr/lib/libpython3.13.so${LD_PRELOAD:+:$LD_PRELOAD}"
+        
         unset UV_FIND_LINKS
         rm -rf "$BUILD_DIR"
 
