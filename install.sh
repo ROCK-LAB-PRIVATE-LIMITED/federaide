@@ -143,7 +143,26 @@ install_federaide_unix() {
         # 1. Define a safe working directory in Termux home space for dummy builds
         BUILD_DIR="$HOME/.tmp_sqlite_vec_build"
         rm -rf "$BUILD_DIR"
-        
+        mkdir -p "$BUILD_DIR/sqlite_vec"
+
+        echo "    [*] Creating dummy sqlite-vec package structures to bypass compilation..."
+        touch "$BUILD_DIR/README.md"
+        touch "$BUILD_DIR/sqlite_vec/__init__.py"
+        cat << 'EOF' > "$BUILD_DIR/pyproject.toml"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sqlite-vec"
+version = "0.1.9"
+description = "Dummy package to trick the Android environment resolver"
+readme = "README.md"
+requires-python = ">=3.8"
+EOF
+
+        echo "    [*] Building platform-agnostic universal wheel for sqlite-vec..."
+        (cd "$BUILD_DIR" && uv build --wheel)
         
         # Copy the dummy wheel to TYRES_DIR so we only need one find-links directory
         cp "$BUILD_DIR/dist/"*.whl "$TYRES_DIR/" 2>/dev/null || true
