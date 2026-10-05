@@ -40,6 +40,7 @@ SLASH_COMMANDS =[
     "/skills",
     "/settings",
     "/rollback",
+    "/team", "/teams",
     "/update", "/version",
     "/help",
     "/backstory",
@@ -283,11 +284,11 @@ def process_slash_command(command: str, agent_view):
         if matched:
             try:
                 agent_view.app.theme = matched
-                from toolbox import load_global_settings, save_global_settings
-                settings = load_global_settings()
-                settings["theme"] = matched
-                save_global_settings(settings)
-                agent_view.log_to_ui(f"[bold green]Theme successfully set and persisted to:[/] [bold cyan]{matched}[/]")
+                import toolbox
+                team_settings = toolbox.load_team_settings()
+                team_settings["theme"] = matched
+                toolbox.save_team_settings(team_settings)
+                agent_view.log_to_ui(f"[bold green]Team theme successfully set to:[/] [bold cyan]{matched}[/]")
             except Exception as e:
                 agent_view.log_to_ui(f"[bold red]Failed to apply theme '{matched}':[/bold red] {e}")
         else:
@@ -438,6 +439,11 @@ def process_slash_command(command: str, agent_view):
             
         agent_view.log_to_ui(output, is_markdown=True)
     
+    elif cmd in ["/team", "/teams"]:
+        if hasattr(agent_view, "action_open_teams"):
+            agent_view.action_open_teams()
+        return
+
     elif cmd == "/settings":
         if hasattr(agent_view, "action_open_global_settings"):
             agent_view.action_open_global_settings()
@@ -626,12 +632,12 @@ def load_pdf_dpi() -> int:
     return load_global_settings().get("pdf_dpi", 150)
     
 def perform_rollback_command(agent_view, steps_or_target: str = "1"):
-    """Rolls back ~/.federate by N commits or to a specific Git ref and reloads the runtime."""
+    """Rolls back active team repository by N commits or to a specific Git ref and reloads the runtime."""
     import toolbox
 
-    fed_dir = toolbox.FEDERATE_DIR
+    fed_dir = toolbox.get_team_dir()
     if not os.path.exists(os.path.join(fed_dir, ".git")):
-        agent_view.log_to_ui("[bold red]Git repository not initialized in ~/.federate.[/bold red]")
+        agent_view.log_to_ui(f"[bold red]Git repository not initialized in {fed_dir}.[/bold red]")
         return
 
     # Abort active workers to prevent write-collisions during checkout
@@ -644,6 +650,12 @@ def perform_rollback_command(agent_view, steps_or_target: str = "1"):
         if res.returncode != 0:
             agent_view.log_to_ui(f"[bold red]Rollback failed:[/bold red] {res.stderr.strip()}")
             return
+
+        # Force-push the rolled back state to remote as ultimate truth
+        try:
+            toolbox.sync_team_remote(action="force-push", team_dir=fed_dir)
+        except Exception:
+            pass
 
         # Reload runtime state and UI
         agent_view.agent_manager.load_agents()

@@ -90,7 +90,7 @@ def is_core_unlocked() -> bool:
     return True
 
 def get_session_name_map() -> dict:
-    path = os.path.join(toolbox.FEDERATE_DIR, "session_names.json")
+    path = os.path.join(toolbox.get_team_dir(), "session_names.json")
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -100,7 +100,7 @@ def get_session_name_map() -> dict:
     return {}
 
 def save_session_name_map(m: dict):
-    path = os.path.join(toolbox.FEDERATE_DIR, "session_names.json")
+    path = os.path.join(toolbox.get_team_dir(), "session_names.json")
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(m, f, indent=4)

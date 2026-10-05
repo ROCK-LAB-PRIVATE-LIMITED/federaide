@@ -52,8 +52,8 @@ from textual.widgets import Label, Input, Button, RichLog
 from textual.screen import ModalScreen
 from textual import on
 
-FEDERATE_DIR = os.path.join(os.path.expanduser("~"), ".federate")
-AUDIO_CONFIG_FILE = os.path.join(FEDERATE_DIR, "audio_config.json")
+from toolbox import FEDERAIDE_SYS_DIR
+AUDIO_CONFIG_FILE = os.path.join(FEDERAIDE_SYS_DIR, "audio_config.json")
 _DOWNLOAD_LOCK = threading.Lock()
 
 def _download_file(url: str, dest_path: str, log_cb=None, max_retries=3):
@@ -558,8 +558,8 @@ class TTSManager:
     def load_model(self):
         if not Kokoro or not sd: return
         if not self.model:
-            model_path = os.path.join(FEDERATE_DIR, "kokoro-v1.0.onnx")
-            voices_path = os.path.join(FEDERATE_DIR, "voices-v1.0.bin")
+            model_path = os.path.join(FEDERAIDE_SYS_DIR, "kokoro-v1.0.onnx")
+            voices_path = os.path.join(FEDERAIDE_SYS_DIR, "voices-v1.0.bin")
             try:
                 _download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx", model_path)
                 _download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", voices_path)
@@ -749,7 +749,7 @@ class STTManager:
             raise ImportError("sherpa-onnx or sounddevice is not installed.")
             
         if not self.whisper_recognizer:
-            whisper_dir = os.path.join(FEDERATE_DIR, "sherpa-onnx-whisper-tiny.en")
+            whisper_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-whisper-tiny.en")
             try:
                 _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main/tiny.en-encoder.onnx", os.path.join(whisper_dir, "tiny.en-encoder.onnx"), self.log_callback)
                 _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main/tiny.en-decoder.onnx", os.path.join(whisper_dir, "tiny.en-decoder.onnx"), self.log_callback)
@@ -765,7 +765,7 @@ class STTManager:
             )
             
         if not self.trigger_recognizer and self.mode == "hotword":
-            model_dir = os.path.join(FEDERATE_DIR, "sherpa-onnx-streaming-zipformer-en-2023-02-21")
+            model_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-streaming-zipformer-en-2023-02-21")
             try:
                 _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/tokens.txt", os.path.join(model_dir, "tokens.txt"), self.log_callback)
                 _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/encoder-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"), self.log_callback)

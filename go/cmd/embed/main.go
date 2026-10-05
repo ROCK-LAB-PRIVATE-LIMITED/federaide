@@ -61,7 +61,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
 		os.Exit(1)
 	}
-	modelsDir := filepath.Join(homeDir, ".federate", "models")
+	modelsDir := filepath.Join(homeDir, ".federaide", "models")
 	
 	// Create the global models directory if it doesn't exist
 	err = os.MkdirAll(modelsDir, 0755)

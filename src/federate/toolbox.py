@@ -74,10 +74,44 @@ def nuke_all_threads():
         _ACTIVE_THREADS.clear()
 # ----------------------------------------
 
-# Persistent Global Settings Helper
-GLOBAL_SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".federate", "global_settings.json")
+# Global System Directory (Fixed Home for shared models, settings, search state)
+FEDERAIDE_SYS_DIR = os.path.join(str(Path.home()), ".federaide")
+os.makedirs(FEDERAIDE_SYS_DIR, exist_ok=True)
+
+DEFAULT_TEAM_DIR = os.path.join(str(Path.home()), ".federate")
+GLOBAL_SETTINGS_FILE = os.path.join(FEDERAIDE_SYS_DIR, "global_settings.json")
+
+def _bootstrap_system_migration():
+    """Seamlessly migrates shared models and settings from ~/.federate to ~/.federaide if needed."""
+    try:
+        old_fed = os.path.join(str(Path.home()), ".federate")
+        if not os.path.exists(old_fed):
+            return
+        
+        # 1. Global settings & search state
+        for fname in ["global_settings.json", "search_state.json"]:
+            old_f = os.path.join(old_fed, fname)
+            new_f = os.path.join(FEDERAIDE_SYS_DIR, fname)
+            if os.path.exists(old_f) and not os.path.exists(new_f):
+                try: os.replace(old_f, new_f)
+                except Exception: pass
+
+        # 2. Heavy models (kokoro, voices, sherpa models, sentence-transformers)
+        import shutil
+        for item in ["kokoro-v1.0.onnx", "voices-v1.0.bin", "sherpa-onnx-whisper-tiny.en", "sherpa-onnx-streaming-zipformer-en-2023-02-21", "models"]:
+            old_p = os.path.join(old_fed, item)
+            new_p = os.path.join(FEDERAIDE_SYS_DIR, item)
+            if os.path.exists(old_p) and not os.path.exists(new_p):
+                try: shutil.move(old_p, new_p)
+                except Exception: pass
+    except Exception:
+        pass
+
+_bootstrap_system_migration()
 
 DEFAULT_GLOBAL_SETTINGS = {
+    "active_team_dir": DEFAULT_TEAM_DIR,
+    "registered_teams": [{"name": "Default", "path": DEFAULT_TEAM_DIR}],
     "user_name": "User",
     "user_color": "#dda0dd",
     "model_color": "#ffd700",
@@ -138,7 +172,7 @@ def save_global_settings(settings: dict):
 _DYNAMIC_PACING_DELAY = float(load_global_settings()["search_pacing_delay"])
 
 # Persistent search pacing state file (RFC 1918 & cross-restart safety)
-_SEARCH_STATE_PATH = os.path.join(str(Path.home()), ".federate", "search_state.json")
+_SEARCH_STATE_PATH = os.path.join(FEDERAIDE_SYS_DIR, "search_state.json")
 
 def _load_last_search_time() -> float:
     try:
@@ -223,60 +257,93 @@ ABORT_EVENT = threading.Event()
 
 from pathlib import Path
 
-# --- GLOBAL SYSTEM STORAGE REDIRECTION ---
-# Redirects all internal state/memories outside the code folder to your safe Home Directory.
-FEDERATE_DIR = os.path.join(str(Path.home()), ".federate")
+_ACTIVE_TEAM_DIR = None
 
+def get_team_dir() -> str:
+    """Returns the absolute path of the currently active team workspace folder."""
+    global _ACTIVE_TEAM_DIR, FEDERATE_DIR
+    if _ACTIVE_TEAM_DIR:
+        return _ACTIVE_TEAM_DIR
+    try:
+        settings = load_global_settings()
+        active = settings.get("active_team_dir")
+        if active:
+            _ACTIVE_TEAM_DIR = os.path.abspath(os.path.expanduser(active))
+        else:
+            _ACTIVE_TEAM_DIR = DEFAULT_TEAM_DIR
+    except Exception:
+        _ACTIVE_TEAM_DIR = DEFAULT_TEAM_DIR
+    FEDERATE_DIR = _ACTIVE_TEAM_DIR
+    return _ACTIVE_TEAM_DIR
+
+def set_team_dir(new_dir: str):
+    """Sets and persists the active team workspace folder."""
+    global _ACTIVE_TEAM_DIR, FEDERATE_DIR, DEFAULT_VENV_PATH, DB_PATH
+    _ACTIVE_TEAM_DIR = os.path.abspath(os.path.expanduser(new_dir))
+    FEDERATE_DIR = _ACTIVE_TEAM_DIR
+    DEFAULT_VENV_PATH = os.path.join(FEDERATE_DIR, "defaultVenv")
+    DB_PATH = os.path.join(FEDERATE_DIR, ".federate_state.db")
+    settings = load_global_settings()
+    settings["active_team_dir"] = FEDERATE_DIR
+    
+    teams = settings.get("registered_teams", [])
+    if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == FEDERATE_DIR for t in teams):
+        teams.append({"name": os.path.basename(FEDERATE_DIR).lstrip("."), "path": FEDERATE_DIR})
+        settings["registered_teams"] = teams
+        
+    save_global_settings(settings)
+
+# Active Team Workspace Directory (Defaults to ~/.federate for backwards compatibility)
+FEDERATE_DIR = get_team_dir()
 DEFAULT_VENV_PATH = os.path.join(FEDERATE_DIR, "defaultVenv")
 
 def init_federate_git_repo():
-    """Initializes ~/.federate as a git repository with .db tracking and strict ignore rules."""
+    """Initializes the active team folder as a git repository with .db tracking and strict ignore rules."""
     import subprocess
-    fed_dir = FEDERATE_DIR
+    fed_dir = get_team_dir()
     os.makedirs(fed_dir, exist_ok=True)
 
     gitignore_path = os.path.join(fed_dir, ".gitignore")
-    default_gitignore = """# Virtual environments
-# Globally ignore all hidden files and folders starting with a dot
+    default_gitignore = """# 1. Ignore all files and folders in the root by default
+/*
+/.*
+
+# 2. Whitelist .gitignore and allowed root files
+!.gitignore
+!/known_mcp_tools.json
+!/session_names.json
+!/team_settings.json
+
+# 3. Whitelist only the 3 permitted root folders
+!/agents/
+!/sessions/
+!/nomem_sessions/
+
+# 4. Inside permitted folders, ignore all files by default
+agents/**
+sessions/**
+nomem_sessions/**
+
+# 5. Allow directory traversal into subdirectories
+!agents/**/
+!sessions/**/
+!nomem_sessions/**/
+
+# 6. Exclusively allow .json and .md files at any depth
+!agents/**/*.json
+!agents/**/*.md
+!sessions/**/*.json
+!sessions/**/*.md
+!nomem_sessions/**/*.json
+!nomem_sessions/**/*.md
+
+# 7. Strictly ignore hidden files, venvs, and caches
 .*
 **/.*
-
-# Whitelist the essential dotfiles we MUST track
 !.gitignore
-!.federate_state.db
-
-# Virtual Environments
-defaultVenv/
 **/venv/
 **/.venv/
-
-# Credentials & Secrets
-.env
-*.env
-chatgpt-auth.json
-mcp_servers.json
-agent_config.json
-keyring*.cfg
-share/
-**/pki/
-**/*keyring*/
-
-# Heavy neural network models & weights
-*.onnx
-*.bin
-sherpa-onnx-*
-
-# Ephemeral SQLite WAL logs (all data is flushed directly into *.db)
-*.db-wal
-*.db-shm
-
-# Caches & temp files
-__pycache__/
-*.pyc
-*.part
-*.tmp
-temp_*
-.federate_worktrees/
+**/__pycache__/
 """
     # 1. Ensure .gitignore is created BEFORE git init
     if not os.path.exists(gitignore_path):
@@ -295,12 +362,18 @@ temp_*
             subprocess.run(["git", "config", "user.email", "harness@local"], cwd=fed_dir, check=True, capture_output=True)
             flush_sqlite_databases()
             subprocess.run(["git", "add", "."], cwd=fed_dir, check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "Initial baseline state"], cwd=fed_dir, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local", "commit", "-m", "Initial baseline state"], cwd=fed_dir, check=True, capture_output=True)
         except Exception:
             pass
+    else:
+        # Non-blocking remote pull on app start
+        def _bg_pull():
+            try: sync_team_remote(action="pull", team_dir=fed_dir)
+            except Exception: pass
+        threading.Thread(target=_bg_pull, daemon=True).start()
 
 def flush_sqlite_databases():
-    """Flushes all SQLite WAL frames directly into the main .db files."""
+    """Flushes all SQLite WAL frames directly into the main .db files for the active team."""
     import sqlite3
     try:
         global shared_db_conn
@@ -311,7 +384,7 @@ def flush_sqlite_databases():
         pass
 
     try:
-        ep_db = os.path.join(FEDERATE_DIR, "episodic_memory.db")
+        ep_db = os.path.join(get_team_dir(), "episodic_memory.db")
         if os.path.exists(ep_db):
             conn = sqlite3.connect(ep_db, timeout=5.0)
             conn.commit()
@@ -323,10 +396,10 @@ def flush_sqlite_databases():
 _GIT_COMMIT_LOCK = threading.Lock()
 
 def auto_commit_state(message: str = "State update"):
-    """Flushes SQLite databases and stages/commits changes in ~/.federate asynchronously."""
+    """Flushes SQLite databases and stages/commits changes in active team directory asynchronously."""
     def _worker():
         with _GIT_COMMIT_LOCK:
-            fed_dir = FEDERATE_DIR
+            fed_dir = get_team_dir()
             if not os.path.exists(os.path.join(fed_dir, ".git")):
                 return
             try:
@@ -334,7 +407,9 @@ def auto_commit_state(message: str = "State update"):
                 status = subprocess.run(["git", "status", "--porcelain"], cwd=fed_dir, capture_output=True, text=True)
                 if status.stdout.strip():
                     subprocess.run(["git", "add", "."], cwd=fed_dir, check=True, capture_output=True)
-                    subprocess.run(["git", "commit", "-m", message], cwd=fed_dir, check=True, capture_output=True)
+                    subprocess.run(["git", "-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local", "commit", "-m", message], cwd=fed_dir, check=True, capture_output=True)
+                    try: sync_team_remote(action="sync", team_dir=fed_dir)
+                    except Exception: pass
             except Exception:
                 pass
 
@@ -344,9 +419,10 @@ def _bootstrap_scratchpad_venv():
     """Silently creates a default scratchpad virtual environment in the background if missing."""
     try:
         init_federate_git_repo()
-        if not os.path.exists(DEFAULT_VENV_PATH):
+        venv_p = os.path.join(get_team_dir(), "defaultVenv")
+        if not os.path.exists(venv_p):
             subprocess.run(
-                [sys.executable, "-m", "venv", DEFAULT_VENV_PATH], 
+                [sys.executable, "-m", "venv", venv_p], 
                 stdout=subprocess.DEVNULL, 
                 stderr=subprocess.DEVNULL, 
                 check=True
@@ -357,10 +433,238 @@ def _bootstrap_scratchpad_venv():
 threading.Thread(target=_bootstrap_scratchpad_venv, daemon=True).start()
 
 def get_storage_path(*args):
-    """Explicitly builds a path inside FEDERATE_DIR for 'agents', 'sessions', or 'nomem_sessions'."""
+    """Explicitly builds a path inside active team directory for 'agents', 'sessions', or 'nomem_sessions'."""
+    team_dir = get_team_dir()
     if args and args[0] in ["agents", "sessions", "nomem_sessions"]:
-        return os.path.join(FEDERATE_DIR, *args)
+        return os.path.join(team_dir, *args)
     return os.path.join(*args)
+
+def get_agent_keyring_user(agent_name: str, is_backup: bool = False) -> str:
+    """Generates a team-scoped Keyring username identifier."""
+    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(get_team_dir())).lower().lstrip("_") or "default"
+    prefix = "agent_backup_key" if is_backup else "agent_key"
+    safe_agent = agent_name.lower().replace(" ", "_")
+    return f"{prefix}_{team_tag}_{safe_agent}"
+
+def get_team_settings_file() -> str:
+    return os.path.join(get_team_dir(), "team_settings.json")
+
+def load_team_settings() -> dict:
+    defaults = {"theme": "tokyo-night"}
+    path = get_team_settings_file()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                defaults.update(json.load(f))
+        except Exception:
+            pass
+    return defaults
+
+def save_team_settings(settings: dict):
+    path = get_team_settings_file()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=4)
+    except Exception:
+        pass
+
+def get_team_git_credentials(team_dir: str = None) -> tuple[str, str, str]:
+    """Returns (remote_url, git_username, git_pat) for the team without exposing secrets on disk."""
+    t_dir = team_dir or get_team_dir()
+    team_settings = load_team_settings() if t_dir == get_team_dir() else {}
+    if not team_settings and os.path.exists(os.path.join(t_dir, "team_settings.json")):
+        try:
+            with open(os.path.join(t_dir, "team_settings.json"), "r", encoding="utf-8") as f:
+                team_settings = json.load(f)
+        except Exception:
+            team_settings = {}
+            
+    remote_url = team_settings.get("remote_url", "").strip()
+    if not remote_url and os.path.exists(os.path.join(t_dir, ".git")):
+        try:
+            res = subprocess.run(["git", "remote", "get-url", "origin"], cwd=t_dir, capture_output=True, text=True)
+            if res.returncode == 0 and res.stdout.strip():
+                remote_url = res.stdout.strip()
+        except Exception:
+            pass
+            
+    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(t_dir)).lower().lstrip("_") or "default"
+    username, pat = "", ""
+    try:
+        from toolbox import is_keyring_locked
+        if not is_keyring_locked():
+            import keyring
+            username = keyring.get_password("Federate", f"git_user_{team_tag}") or ""
+            pat = keyring.get_password("Federate", f"git_pat_{team_tag}") or ""
+    except Exception:
+        pass
+    return remote_url, username, pat
+
+def save_team_git_credentials(remote_url: str, username: str, pat: str, team_dir: str = None):
+    """Saves remote URL to team_settings.json and git origin, and username/PAT securely to Keyring."""
+    t_dir = team_dir or get_team_dir()
+    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(t_dir)).lower().lstrip("_") or "default"
+    clean_url = remote_url.strip()
+
+    team_settings = load_team_settings() if t_dir == get_team_dir() else {}
+    team_settings["remote_url"] = clean_url
+    if t_dir == get_team_dir():
+        save_team_settings(team_settings)
+    else:
+        try:
+            with open(os.path.join(t_dir, "team_settings.json"), "w", encoding="utf-8") as f:
+                json.dump(team_settings, f, indent=4)
+        except Exception:
+            pass
+            
+    if os.path.exists(os.path.join(t_dir, ".git")) and clean_url:
+        try:
+            remotes = subprocess.run(["git", "remote"], cwd=t_dir, capture_output=True, text=True).stdout.split()
+            if "origin" in remotes:
+                subprocess.run(["git", "remote", "set-url", "origin", clean_url], cwd=t_dir, capture_output=True)
+            else:
+                subprocess.run(["git", "remote", "add", "origin", clean_url], cwd=t_dir, capture_output=True)
+        except Exception:
+            pass
+
+    try:
+        from toolbox import is_keyring_locked
+        if not is_keyring_locked():
+            import keyring
+            if username:
+                keyring.set_password("Federate", f"git_user_{team_tag}", username.strip())
+            else:
+                try: keyring.delete_password("Federate", f"git_user_{team_tag}")
+                except Exception: pass
+                
+            if pat:
+                keyring.set_password("Federate", f"git_pat_{team_tag}", pat.strip())
+            else:
+                try: keyring.delete_password("Federate", f"git_pat_{team_tag}")
+                except Exception: pass
+    except Exception:
+        pass
+
+def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, str]:
+    """
+    Executes an in-memory authenticated Git remote operation (push, pull, force-push, sync).
+    The PAT is dynamically read from Keyring and never written to disk or git configs.
+    Returns (success, message).
+    """
+    t_dir = team_dir or get_team_dir()
+    if not os.path.exists(os.path.join(t_dir, ".git")):
+        return False, "Git repository not initialized."
+        
+    remote_url, username, pat = get_team_git_credentials(t_dir)
+    if not remote_url:
+        return False, "Remote URL not configured."
+    if not pat:
+        return False, "Personal Access Token (PAT) not found in Keyring."
+        
+    try:
+        from urllib.parse import urlparse, urlunparse, quote
+        parsed = urlparse(remote_url)
+        if not parsed.scheme or not parsed.netloc:
+            return False, f"Invalid remote URL format: {remote_url}"
+            
+        user_part = quote(username.strip(), safe='') if username else "git"
+        pat_part = quote(pat.strip(), safe='')
+        auth_netloc = f"{user_part}:{pat_part}@{parsed.netloc}"
+        authed_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+        
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+
+        # Define _sanitize immediately so it is in scope everywhere below
+        def _sanitize(txt: str) -> str:
+            if not txt: return ""
+            clean = txt.replace(pat, "******")
+            if pat_part != pat:
+                clean = clean.replace(pat_part, "******")
+            return clean.strip()
+        
+        branch_res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=t_dir, capture_output=True, text=True)
+        branch = branch_res.stdout.strip() if branch_res.returncode == 0 and branch_res.stdout.strip() else "main"
+        user_args = ["-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local"]
+
+        if action == "pull":
+            cmd = ["git"] + user_args + ["pull", "--rebase", authed_url, branch]
+            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+            if res.returncode == 0:
+                return True, "Synchronized successfully."
+            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+
+        elif action == "force-push":
+            cmd = ["git", "push", "--force", authed_url, f"HEAD:{branch}"]
+            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+            if res.returncode == 0:
+                return True, "Synchronized successfully."
+            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+
+        elif action == "sync":
+            # 1. Try pushing first. If remote is brand new/empty, or local is up-to-date, this succeeds immediately!
+            push_cmd = ["git", "push", authed_url, f"HEAD:{branch}"]
+            res = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+            if res.returncode == 0:
+                return True, "Synchronized successfully."
+
+            err_check = (res.stderr + res.stdout).lower()
+            # If rejected because remote has existing commits (non-fast-forward / fetch first)
+            if "fetch first" in err_check or "rejected" in err_check or "non-fast-forward" in err_check:
+                # 2. Pull remote commits with rebase
+                pull_cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", authed_url, branch]
+                pull_res = subprocess.run(pull_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if pull_res.returncode != 0:
+                    subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                    # Fallback for unrelated histories (e.g. GitHub repo created with an initial README)
+                    pull_merge_cmd = ["git"] + user_args + [
+                        "pull", "--no-rebase", "--allow-unrelated-histories", "-X", "theirs", authed_url, branch
+                    ]
+                    pull_res = subprocess.run(pull_merge_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                    if pull_res.returncode != 0:
+                        return False, _sanitize(pull_res.stderr) or _sanitize(pull_res.stdout) or "Git pull failed."
+
+                # 3. Re-push now that remote is integrated
+                final_push = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if final_push.returncode == 0:
+                    return True, "Synchronized successfully."
+                return False, _sanitize(final_push.stderr) or _sanitize(final_push.stdout) or f"Git push failed with code {final_push.returncode}"
+
+            # Any other error (e.g. authentication failed, bad URL)
+            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+
+        else:
+            cmd = ["git", "push", authed_url, f"HEAD:{branch}"]
+            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+            if res.returncode == 0:
+                return True, "Synchronized successfully."
+            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+
+    except subprocess.TimeoutExpired:
+        return False, "Connection timed out after 120s."
+    except Exception as e:
+        return False, str(e)
+
+def reconnect_team_databases():
+    """Reconnects the shared SQLite checkpoint database to the active team directory."""
+    global shared_db_conn, shared_memory, DB_PATH
+    team_dir = get_team_dir()
+    os.makedirs(team_dir, exist_ok=True)
+    DB_PATH = os.path.join(team_dir, ".federate_state.db")
+    try:
+        if 'shared_db_conn' in globals() and shared_db_conn:
+            try:
+                shared_db_conn.commit()
+                shared_db_conn.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    shared_db_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60.0)
+    shared_db_conn.execute("PRAGMA journal_mode=WAL;")
+    shared_memory = SqliteSaver(shared_db_conn)
+    shared_memory.setup()
 
 def get_locked_keyring():
     """
@@ -450,7 +754,7 @@ def check_abort():
             if "interrupted" in str(e).lower() or "aborted" in str(e).lower():
                 raise e
 
-DB_PATH = get_storage_path(str(Path.home()), ".federate", ".federate_state.db")
+DB_PATH = os.path.join(get_team_dir(), ".federate_state.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 shared_db_conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=60.0)
 shared_db_conn.execute("PRAGMA journal_mode=WAL;")  # Allows simultaneous reading & writing
@@ -2990,7 +3294,7 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
                 f.write("venv/\n__pycache__/\n*.pyc\n")
             # 3. Initial Commit
             subprocess.run(["git", "add", "."], cwd=active_dir, check=True, capture_output=True)
-            subprocess.run(["git", "commit", "-m", "Initial registration"], cwd=active_dir, check=True, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", "Initial registration"], cwd=active_dir, check=True, capture_output=True)
             git_status = "Version control initialized."
         except Exception as ge:
             git_status = f"Git Initialization failed: {ge}"
@@ -3102,7 +3406,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                 json.dump(schema_data, f, indent=4)
             
             subprocess.run(["git", "add", "schema.json"], cwd=active_dir, capture_output=True)
-            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Update schema.json for {tool_name}"], cwd=active_dir, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", f"Update schema.json for {tool_name}"], cwd=active_dir, capture_output=True)
         except Exception as e:
             return f"Error updating schema.json: {e}"
         
@@ -3169,7 +3473,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             git_rel_path = os.path.relpath(target_path, active_dir)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             subprocess.run(["git", "add", git_rel_path], cwd=active_dir, check=True, capture_output=True)
-            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-update: {file_path} (lines {start_line}-{end_line}) @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", f"Auto-update: {file_path} (lines {start_line}-{end_line}) @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
 
             total_lines = len(lines)
             if total_lines == 0:
@@ -3214,7 +3518,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             git_rel_path = os.path.relpath(target_path, active_dir)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             subprocess.run(["git", "add", git_rel_path], cwd=active_dir, check=True, capture_output=True)
-            subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-update: {file_path} @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
+            subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", f"Auto-update: {file_path} @ {timestamp}"], cwd=active_dir, check=False, capture_output=True)
             
             return f"File '{file_path}' has been replaced (from {'workspace' if source_path else 'string'}) and committed automatically."
 
@@ -3246,7 +3550,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                     
                     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     subprocess.run(["git", "add", "metadata.json"], cwd=active_dir, check=True, capture_output=True)
-                    subprocess.run(["git", "-c", "user.name='Maven'", "-c", "user.email='maven@internal'", "commit", "-m", f"Auto-dependency update @ {timestamp}"], cwd=active_dir, check=True, capture_output=True)
+                    subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", f"Auto-dependency update @ {timestamp}"], cwd=active_dir, check=True, capture_output=True)
                     
                 return f"Successfully installed dependencies: {', '.join(dependencies)}. Committed automatically."
             except subprocess.CalledProcessError as pe:
@@ -3255,7 +3559,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             
         elif action_clean == "commit":
             if not commit_message: return "Error: 'commit_message' required."
-            res = subprocess.run(["git", "commit", "-m", commit_message], cwd=active_dir, text=True, capture_output=True)
+            res = subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", commit_message], cwd=active_dir, text=True, capture_output=True)
             if res.returncode == 0:
                 return f"Changes committed: {res.stdout}"
             return f"Commit failed or nothing to commit:\n{res.stderr}"

@@ -60,7 +60,6 @@ DEFAULT_REDIRECT_PATH = "/auth/callback"
 
 # Mandatory scopes required by OpenAI to authorize ChatGPT Plus/Pro subscriptions
 DEFAULT_SCOPE = "openid profile email offline_access api.connectors.read api.connectors.invoke"
-DEFAULT_STORE_PATH = Path.home() / ".federate" / "chatgpt-auth.json"
 
 HTTP_HEADERS = {
     "Accept": "application/json",
@@ -130,8 +129,7 @@ CHUNK_PREFIX = "chatgpt_token_chunk_"
 LEGACY_KEY = "chatgpt_oauth_token"
 
 class _FileChatGPTOAuthTokenProvider:
-    def __init__(self, path: Path = DEFAULT_STORE_PATH):
-        self.path = path
+    def __init__(self):
         self._lock = threading.Lock()
 
     def _clear_chunks_unlocked(self, keyring_mod):

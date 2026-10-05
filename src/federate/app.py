@@ -101,8 +101,8 @@ except Exception as e:
 log_trace("Probing episodic memory SQLite database state")
 try:
     import sqlite3
-    db_path = os.path.join(str(Path.home()), ".federate", "episodic_memory.db")
-    # Open connection to test for disk locking/congestion hangs
+    import toolbox
+    db_path = os.path.join(toolbox.get_team_dir(), "episodic_memory.db")
     conn = sqlite3.connect(db_path, timeout=5.0)
     conn.close()
     log_trace("SQLite state path verified")
@@ -245,9 +245,14 @@ class Federate(App):
     """
     
     BINDINGS = [
+        Binding("f1", "open_teams", "Teams", priority=True),
         Binding("f8", "change_directory", "Change Dir", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
+
+    def action_open_teams(self):
+        try: self.query_one("#ai_agent_view").action_open_teams()
+        except Exception: pass
     
     def notify(self, message, *args, **kwargs):
         """Catch-all to prevent bracket-parsing crashes in UI toasts."""
@@ -262,8 +267,8 @@ class Federate(App):
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
     
     def on_mount(self):
-        settings = toolbox.load_global_settings()
-        self.theme = settings.get("theme", "tokyo-night")
+        team_settings = toolbox.load_team_settings()
+        self.theme = team_settings.get("theme", "tokyo-night")
         if self.initial_path:
             path = Path(self.initial_path).resolve()
             if path.exists() and path.is_dir():
