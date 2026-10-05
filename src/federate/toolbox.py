@@ -548,7 +548,7 @@ def save_team_git_credentials(remote_url: str, username: str, pat: str, team_dir
 
 def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, str]:
     """
-    Executes an in-memory authenticated Git remote operation (push, pull, force-push, sync).
+    Executes an authenticated Git remote operation.
     The PAT is dynamically read from Keyring and never written to disk or git configs.
     Returns (success, message).
     """
@@ -564,82 +564,141 @@ def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, 
         
     try:
         from urllib.parse import urlparse, urlunparse, quote
+        import tempfile, stat, contextlib
+
+        # 1. Commit any uncommitted changes first so git operations don't fail with "unstaged changes"
+        try:
+            flush_sqlite_databases()
+            subprocess.run(["git", "add", "."], cwd=t_dir, capture_output=True)
+            status = subprocess.run(["git", "status", "--porcelain"], cwd=t_dir, capture_output=True, text=True)
+            if status.stdout.strip():
+                subprocess.run(
+                    ["git", "-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local", "commit", "-m", "Auto-commit before remote sync"],
+                    cwd=t_dir, capture_output=True
+                )
+        except Exception:
+            pass
+
         parsed = urlparse(remote_url)
         if not parsed.scheme or not parsed.netloc:
             return False, f"Invalid remote URL format: {remote_url}"
             
         user_part = quote(username.strip(), safe='') if username else "git"
-        pat_part = quote(pat.strip(), safe='')
-        auth_netloc = f"{user_part}:{pat_part}@{parsed.netloc}"
-        authed_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-        
-        env = os.environ.copy()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-
-        # Define _sanitize immediately so it is in scope everywhere below
-        def _sanitize(txt: str) -> str:
-            if not txt: return ""
-            clean = txt.replace(pat, "******")
-            if pat_part != pat:
-                clean = clean.replace(pat_part, "******")
-            return clean.strip()
+        auth_netloc = f"{user_part}@{parsed.netloc}"
+        safe_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
         
         branch_res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=t_dir, capture_output=True, text=True)
         branch = branch_res.stdout.strip() if branch_res.returncode == 0 and branch_res.stdout.strip() else "main"
         user_args = ["-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local"]
 
-        if action == "pull":
-            cmd = ["git"] + user_args + ["pull", "--rebase", authed_url, branch]
-            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-            if res.returncode == 0:
-                return True, "Synchronized successfully."
-            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+        @contextlib.contextmanager
+        def git_askpass_context(pat_str: str):
+            askpass_ext = ".bat" if os.name == "nt" else ".sh"
+            fd, askpass_path = tempfile.mkstemp(suffix=askpass_ext, text=True)
+            with os.fdopen(fd, "w") as f:
+                if os.name == "nt":
+                    f.write("@echo off\nif \"%~1\"==\"\" exit /b 0\necho %FEDERAIDE_GIT_PASSWORD%\n")
+                else:
+                    f.write("#!/bin/sh\necho \"$FEDERAIDE_GIT_PASSWORD\"\n")
+            if os.name != "nt":
+                os.chmod(askpass_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+            
+            env = os.environ.copy()
+            env["GIT_ASKPASS"] = askpass_path
+            env["FEDERAIDE_GIT_PASSWORD"] = pat_str
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            try:
+                yield env
+            finally:
+                try: os.remove(askpass_path)
+                except Exception: pass
 
-        elif action == "force-push":
-            cmd = ["git", "push", "--force", authed_url, f"HEAD:{branch}"]
-            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-            if res.returncode == 0:
-                return True, "Synchronized successfully."
-            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
-
-        elif action == "sync":
-            # 1. Try pushing first. If remote is brand new/empty, or local is up-to-date, this succeeds immediately!
-            push_cmd = ["git", "push", authed_url, f"HEAD:{branch}"]
-            res = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-            if res.returncode == 0:
-                return True, "Synchronized successfully."
-
-            err_check = (res.stderr + res.stdout).lower()
-            # If rejected because remote has existing commits (non-fast-forward / fetch first)
-            if "fetch first" in err_check or "rejected" in err_check or "non-fast-forward" in err_check:
-                # 2. Pull remote commits with rebase
-                pull_cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", authed_url, branch]
-                pull_res = subprocess.run(pull_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-                if pull_res.returncode != 0:
-                    subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
-                    # Fallback for unrelated histories (e.g. GitHub repo created with an initial README)
-                    pull_merge_cmd = ["git"] + user_args + [
-                        "pull", "--no-rebase", "--allow-unrelated-histories", "-X", "theirs", authed_url, branch
-                    ]
-                    pull_res = subprocess.run(pull_merge_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-                    if pull_res.returncode != 0:
-                        return False, _sanitize(pull_res.stderr) or _sanitize(pull_res.stdout) or "Git pull failed."
-
-                # 3. Re-push now that remote is integrated
-                final_push = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-                if final_push.returncode == 0:
+        with git_askpass_context(pat) as env:
+            if action == "pull":
+                cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", safe_url, branch]
+                res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if res.returncode == 0:
                     return True, "Synchronized successfully."
-                return False, _sanitize(final_push.stderr) or _sanitize(final_push.stdout) or f"Git push failed with code {final_push.returncode}"
+                
+                err_check = (res.stderr + res.stdout).lower()
+                subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                subprocess.run(["git", "merge", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                
+                conflict_indicators = [
+                    "conflict", "divergent", "unstaged changes", "cannot pull with rebase",
+                    "unrelated histories", "failed to merge", "could not apply", "patch failed",
+                    "non-fast-forward"
+                ]
+                if any(ind in err_check for ind in conflict_indicators):
+                    return False, "CONFLICT"
 
-            # Any other error (e.g. authentication failed, bad URL)
-            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
 
-        else:
-            cmd = ["git", "push", authed_url, f"HEAD:{branch}"]
-            res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-            if res.returncode == 0:
-                return True, "Synchronized successfully."
-            return False, _sanitize(res.stderr) or _sanitize(res.stdout) or f"Git exited with code {res.returncode}"
+            elif action == "push":
+                cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
+                res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if res.returncode == 0:
+                    return True, "Pushed successfully."
+                    
+                err_check = (res.stderr + res.stdout).lower()
+                conflict_indicators = [
+                    "non-fast-forward", "fetch first", "rejected", "behind", "conflict"
+                ]
+                if any(ind in err_check for ind in conflict_indicators):
+                    return False, "CONFLICT"
+
+                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+
+            elif action == "force-push":
+                cmd = ["git", "push", "--force", safe_url, f"HEAD:{branch}"]
+                res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if res.returncode == 0:
+                    return True, "Force pushed successfully."
+                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+
+            elif action == "hard-reset-remote":
+                fetch_cmd = ["git", "fetch", safe_url, branch]
+                fetch_res = subprocess.run(fetch_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if fetch_res.returncode != 0:
+                    return False, fetch_res.stderr.strip() or fetch_res.stdout.strip() or "Fetch failed."
+                    
+                reset_cmd = ["git", "reset", "--hard", "FETCH_HEAD"]
+                res = subprocess.run(reset_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if res.returncode == 0:
+                    return True, "Reset to remote state successfully."
+                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+
+            elif action == "sync":
+                # 1. Try pushing first. If remote is brand new/empty, or local is up-to-date, this succeeds immediately!
+                push_cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
+                res = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if res.returncode == 0:
+                    return True, "Synchronized successfully."
+
+                err_check = (res.stderr + res.stdout).lower()
+                if any(ind in err_check for ind in ["fetch first", "rejected", "non-fast-forward", "behind"]):
+                    # 2. Pull remote commits with rebase
+                    pull_cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", safe_url, branch]
+                    pull_res = subprocess.run(pull_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                    if pull_res.returncode != 0:
+                        subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                        return False, "CONFLICT"
+
+                    # 3. Re-push now that remote is integrated
+                    final_push = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                    if final_push.returncode == 0:
+                        return True, "Synchronized successfully."
+                        
+                    final_err = (final_push.stderr + final_push.stdout).lower()
+                    if any(ind in final_err for ind in ["fetch first", "rejected", "non-fast-forward", "behind"]):
+                        return False, "CONFLICT"
+                        
+                    return False, final_push.stderr.strip() or final_push.stdout.strip() or f"Git push failed with code {final_push.returncode}"
+
+                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+
+            else:
+                return False, f"Unknown action: {action}"
 
     except subprocess.TimeoutExpired:
         return False, "Connection timed out after 120s."

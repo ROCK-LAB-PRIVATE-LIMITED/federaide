@@ -294,6 +294,45 @@ class ClarificationModal(ModalScreen[str]):
     def on_cancel(self):
         self.dismiss("")
 
+def get_git_commit_times(team_dir: str = None) -> dict:
+    times = {}
+    t_dir = team_dir or toolbox.get_team_dir()
+    try:
+        res = subprocess.run(
+            ["git", "log", "--format=COMMIT:%ct", "--name-only", "--", "sessions", "nomem_sessions"],
+            cwd=t_dir,
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        if res.returncode == 0:
+            cur_time = 0.0
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("COMMIT:"):
+                    try: cur_time = float(line.split(":")[1])
+                    except Exception: cur_time = 0.0
+                elif line and cur_time:
+                    abs_p = os.path.normpath(os.path.join(t_dir, line))
+                    if abs_p not in times:
+                        times[abs_p] = cur_time
+    except Exception:
+        pass
+    return times
+
+def get_session_file_time(fpath: str, git_times: dict = None) -> float:
+    norm = os.path.normpath(fpath)
+    if git_times and norm in git_times:
+        return git_times[norm]
+    parts = os.path.basename(fpath).replace(".json", "").split("_")
+    for p in parts:
+        if p.isdigit() and len(p) >= 9:
+            return float(p)
+    try:
+        return os.path.getmtime(fpath)
+    except Exception:
+        return 0.0
+
 class ChatLoadModal(ModalScreen[str]):
     DEFAULT_CSS = """
     ChatLoadModal { align: center middle; background: $background 60%; }
@@ -310,7 +349,9 @@ class ChatLoadModal(ModalScreen[str]):
     def compose(self) -> ComposeResult:
         files_normal = glob.glob(toolbox.get_storage_path("sessions", "*.json"))
         files_nomem = glob.glob(toolbox.get_storage_path("nomem_sessions", "*.json"))
-        files = sorted(files_normal + files_nomem, key=os.path.getmtime, reverse=True)
+        raw_files = sorted(files_normal + files_nomem)
+        git_times = get_git_commit_times()
+        files = sorted(raw_files, key=lambda f: get_session_file_time(f, git_times), reverse=True)
         name_map = agent_core.get_session_name_map()
 
         def _extract_info(fpath):
@@ -1631,10 +1672,42 @@ class TeamDeleteModal(ModalScreen[str]):
         else:
             self.dismiss("cancel")
 
+class GitConflictModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    GitConflictModal { align: center middle; background: $background 60%; }
+    #conflict_dialog { width: 70; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    .conflict_msg { margin: 1 0; text-wrap: wrap; height: auto; }
+    .conflict_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
+    .conflict_buttons Button { margin-left: 1; }
+    """
+    def compose(self) -> ComposeResult:
+        with Vertical(id="conflict_dialog"):
+            yield Label(" Git History Conflict Detected!", classes="pane_title")
+            yield Label(
+                "The local and remote repository histories have diverged and cannot be automatically merged.\n\n"
+                "Which branch would you like to keep?\n"
+                "• Keep Local: Overwrites remote with your local files (Force Push).\n"
+                "• Keep Remote: Overwrites local files with the remote repository.",
+                classes="conflict_msg"
+            )
+            with Horizontal(classes="conflict_buttons"):
+                yield Button("Keep Local (Force Push)", id="btn_keep_local", variant="success")
+                yield Button("Keep Remote (Reset)", id="btn_keep_remote", variant="warning")
+                yield Button("Cancel", id="btn_abort", variant="error")
+
+    @on(Button.Pressed)
+    def handle_press(self, event: Button.Pressed):
+        if event.button.id == "btn_keep_local":
+            self.dismiss("local")
+        elif event.button.id == "btn_keep_remote":
+            self.dismiss("remote")
+        else:
+            self.dismiss("abort")
+
 class TeamsModal(ModalScreen[None]):
     DEFAULT_CSS = """
     TeamsModal { align: center middle; background: $background 60%; }
-    #teams_dialog { width: 80; height: 85%; border: thick $primary; background: $surface; padding: 1 2; }
+    #teams_dialog { width: 88; height: 85%; border: thick $primary; background: $surface; padding: 1 2; }
     #teams_main_scroll { height: 1fr; border: round $accent; padding: 1; background: $boost; margin-bottom: 1; }
     #team_form { height: auto; margin-bottom: 1; }
     #team_list { height: auto; }
@@ -1647,8 +1720,8 @@ class TeamsModal(ModalScreen[None]):
     #team_folder_input { width: 1fr; }
     #team_git_user_input { width: 1fr; margin-right: 1; }
     #team_git_pat_input { width: 1fr; }
-    .team_form_btns { layout: horizontal; height: auto; margin-top: 1; align: right middle; }
-    .team_form_btns Button { margin-left: 1; }
+    .team_form_row { layout: horizontal; height: auto; margin-top: 1; width: 100%; }
+    .team_form_row Button { width: 1fr; margin: 0 1; }
     #teams_bottom_buttons { height: auto; align: right middle; margin-top: 0; }
     #teams_bottom_buttons Button { margin-left: 1; }
     """
@@ -1674,11 +1747,15 @@ class TeamsModal(ModalScreen[None]):
                         yield Input(placeholder="Git Username", id="team_git_user_input")
                         yield Input(placeholder="Personal Access Token (PAT)", id="team_git_pat_input", password=True)
                     
-                    with Horizontal(classes="team_form_btns"):
+                    with Horizontal(classes="team_form_row"):
                         yield Button("Save Team", id="save_team_btn", variant="success")
                         yield Button("Restore", id="restore_btn", variant="primary")
-                        yield Button("Sync Now", id="sync_now_btn", variant="warning")
                         yield Button("Clear Form", id="clear_form_btn", variant="default")
+
+                    with Horizontal(classes="team_form_row"):
+                        yield Button("Pull", id="pull_btn", variant="warning")
+                        yield Button("Push", id="push_btn", variant="warning")
+                        yield Button("Sync", id="sync_now_btn", variant="warning")
                 
                 yield Label("Registered Teams:", classes="section_label")
                 yield Vertical(id="team_list")
@@ -1715,7 +1792,58 @@ class TeamsModal(ModalScreen[None]):
         self.query_one("#team_remote_url_input", Input).value = ""
         self.query_one("#team_git_user_input", Input).value = ""
         self.query_one("#team_git_pat_input", Input).value = ""
-        self.query_one("#save_team_btn", Button).label = "Create"
+        self.query_one("#save_team_btn", Button).label = "Save Team"
+
+    def _handle_git_action(self, action_name: str, target_team_dir: str):
+        def _run_action():
+            try:
+
+                ok, msg = toolbox.sync_team_remote(action=action_name, team_dir=target_team_dir)
+                if ok:
+                    self.app.call_from_thread(self.notify, f"Git {action_name} completed successfully!", severity="information")
+                    if action_name in ["pull", "sync", "hard-reset-remote"]:
+                        self.agent_view.agent_manager.load_agents()
+                        self.agent_view.session_manager.sync_all_sessions()
+                        self.agent_view.update_status_bar()
+                    self.app.call_from_thread(self.refresh_list)
+                elif msg == "CONFLICT":
+                    def _on_conflict():
+                        def _resolve(choice):
+                            if choice == "local":
+                                self.notify("Overwriting remote with local state (force push)...", severity="warning")
+                                self._handle_git_action("force-push", target_team_dir)
+                            elif choice == "remote":
+                                self.notify("Overwriting local state with remote...", severity="warning")
+                                self._handle_git_action("hard-reset-remote", target_team_dir)
+                            else:
+                                self.notify("Git operation cancelled by user.", severity="information")
+                                _reenable()
+                        self.app.push_screen(GitConflictModal(), _resolve)
+                    self.app.call_from_thread(_on_conflict)
+                    return
+                else:
+                    self.app.call_from_thread(self.notify, f"Git {action_name} Failed: {msg}", severity="error", timeout=10.0)
+            except Exception as e:
+                self.app.call_from_thread(self.notify, f"Git Error: {e}", severity="error", timeout=10.0)
+            finally:
+                if msg != "CONFLICT":
+                    self.app.call_from_thread(_reenable)
+
+        def _reenable():
+            try:
+                self.query_one("#sync_now_btn", Button).disabled = False
+                self.query_one("#pull_btn", Button).disabled = False
+                self.query_one("#push_btn", Button).disabled = False
+            except Exception: pass
+            
+        try:
+            self.query_one("#sync_now_btn", Button).disabled = True
+            self.query_one("#pull_btn", Button).disabled = True
+            self.query_one("#push_btn", Button).disabled = True
+        except Exception: pass
+
+        import threading
+        threading.Thread(target=_run_action, daemon=True).start()
 
     def refresh_list(self):
         container = self.query_one("#team_list")
@@ -1786,42 +1914,53 @@ class TeamsModal(ModalScreen[None]):
             def _run_restore():
                 try:
                     from urllib.parse import urlparse, urlunparse, quote
-                    import subprocess
+                    import subprocess, tempfile, stat, contextlib, os
                     
+                    @contextlib.contextmanager
+                    def git_askpass_context(pat_str: str):
+                        askpass_ext = ".bat" if os.name == "nt" else ".sh"
+                        fd, askpass_path = tempfile.mkstemp(suffix=askpass_ext, text=True)
+                        with os.fdopen(fd, "w") as f:
+                            if os.name == "nt":
+                                f.write("@echo off\nif \"%~1\"==\"\" exit /b 0\necho %FEDERAIDE_GIT_PASSWORD%\n")
+                            else:
+                                f.write("#!/bin/sh\necho \"$FEDERAIDE_GIT_PASSWORD\"\n")
+                        if os.name != "nt":
+                            os.chmod(askpass_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+                        
+                        env = os.environ.copy()
+                        env["GIT_ASKPASS"] = askpass_path
+                        env["FEDERAIDE_GIT_PASSWORD"] = pat_str
+                        env["GIT_TERMINAL_PROMPT"] = "0"
+                        try:
+                            yield env
+                        finally:
+                            try: os.remove(askpass_path)
+                            except Exception: pass
+
                     parsed = urlparse(url)
                     user_part = quote(user, safe='') if user else "git"
-                    pat_part = quote(pat, safe='')
-                    auth_netloc = f"{user_part}:{pat_part}@{parsed.netloc}"
-                    authed_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+                    auth_netloc = f"{user_part}@{parsed.netloc}"
+                    safe_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
-                    res = subprocess.run(["git", "clone", authed_url, target_path], capture_output=True, text=True)
+                    with git_askpass_context(pat) as env:
+                        res = subprocess.run(["git", "clone", safe_url, target_path], capture_output=True, text=True, env=env)
                     
                     if res.returncode == 0:
-                        # SECURITY FIX: Remove PAT from .git/config immediately after cloning
                         subprocess.run(["git", "remote", "set-url", "origin", url], cwd=target_path, capture_output=True)
                         def _on_success():
                             self.notify("Restore completed successfully!", severity="information")
                             t_name = self.query_one("#team_name_input", Input).value.strip() or os.path.basename(target_path)
                             self.dismiss()
                             
-                            # Switch to the newly cloned workspace
                             self.agent_view.switch_team(target_path, display_name=t_name)
-                            
-                            # Save credentials securely into the keyring
-                            import toolbox
                             toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
                             
-                            # Rebuild episodic and tool results databases in the background
-                            import threading
                             threading.Thread(target=self.agent_view.session_manager.sync_all_sessions, daemon=True).start()
                             
                         self.app.call_from_thread(_on_success)
                     else:
-                        def _sanitize(txt: str) -> str:
-                            if not txt: return ""
-                            clean = txt.replace(pat, "******") if pat else txt
-                            return clean.strip()
-                        err = _sanitize(res.stderr) or _sanitize(res.stdout) or "Clone failed."
+                        err = res.stderr.strip() or res.stdout.strip() or "Clone failed."
                         self.app.call_from_thread(self.notify, f"Restore Failed: {err}", severity="error", timeout=10.0)
                 except Exception as e:
                     self.app.call_from_thread(self.notify, f"Restore Error: {e}", severity="error", timeout=10.0)
@@ -1836,39 +1975,18 @@ class TeamsModal(ModalScreen[None]):
             import threading
             threading.Thread(target=_run_restore, daemon=True).start()
 
-        elif btn_id == "sync_now_btn":
+        elif btn_id in ("sync_now_btn", "pull_btn", "push_btn"):
             url = self.query_one("#team_remote_url_input", Input).value.strip()
             user = self.query_one("#team_git_user_input", Input).value.strip()
             pat = self.query_one("#team_git_pat_input", Input).value.strip()
             target_team_dir = self.editing_path or toolbox.get_team_dir()
             
             toolbox.save_team_git_credentials(url, user, pat, team_dir=target_team_dir)
-            self.notify(f"Syncing with Git remote for '{os.path.basename(target_team_dir)}'...", severity="information")
             
-            sync_btn = self.query_one("#sync_now_btn", Button)
-            sync_btn.disabled = True
-
-            def _run_sync():
-                try:
-                    ok, msg = toolbox.sync_team_remote(action="sync", team_dir=target_team_dir)
-                    if ok:
-                        self.app.call_from_thread(self.notify, "Git remote sync completed successfully!", severity="information")
-                        self.agent_view.agent_manager.load_agents()
-                        self.agent_view.session_manager.sync_all_sessions()
-                        self.agent_view.update_status_bar()
-                    else:
-                        self.app.call_from_thread(self.notify, f"Sync Failed: {msg}", severity="error", timeout=10.0)
-                except Exception as e:
-                    self.app.call_from_thread(self.notify, f"Sync Error: {e}", severity="error", timeout=10.0)
-                finally:
-                    def _reenable():
-                        try:
-                            self.query_one("#sync_now_btn", Button).disabled = False
-                        except Exception:
-                            pass
-                    self.app.call_from_thread(_reenable)
-
-            threading.Thread(target=_run_sync, daemon=True).start()
+            action_map = {"sync_now_btn": "sync", "pull_btn": "pull", "push_btn": "push"}
+            action = action_map[btn_id]
+            self.notify(f"{action.title()}ing with Git remote for '{os.path.basename(target_team_dir)}'...", severity="information")
+            self._handle_git_action(action, target_team_dir)
             
         elif btn_id == "save_team_btn":
             t_name = self.query_one("#team_name_input", Input).value.strip()
@@ -3457,9 +3575,10 @@ class AIAgentView(Vertical):
             self.log_to_ui("[bold red]No past chat sessions found to resume.[/bold red]")
             return
 
+        git_times = get_git_commit_times()
         sorted_sessions = sorted(
             sessions_map.items(),
-            key=lambda item: max(os.path.getmtime(f) for f in item[1]),
+            key=lambda item: max(get_session_file_time(f, git_times) for f in item[1]),
             reverse=True
         )
 
