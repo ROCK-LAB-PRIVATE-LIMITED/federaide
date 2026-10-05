@@ -251,6 +251,7 @@ jobs:
         with:
           name: wheel-${{ matrix.target }}
           path: dist/*.whl
+          retention-days: 1
 
   build_sdist:
     name: Build Source Distribution
@@ -298,6 +299,7 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
+          retention-days: 1
 
   publish:
     name: Publish Release to PyPI
