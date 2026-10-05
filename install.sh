@@ -150,7 +150,7 @@ install_federaide_unix() {
         touch "$BUILD_DIR/sqlite_vec/__init__.py"
         cat << 'EOF' > "$BUILD_DIR/pyproject.toml"
 [build-system]
-requires = ["hatchling==1.32.0"]
+requires = ["hatchling==1.29.0"]
 build-backend = "hatchling.build"
 
 [project]
