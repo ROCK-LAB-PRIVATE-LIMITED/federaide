@@ -27,10 +27,10 @@ from langchain_core.tools import tool
 import time
 # Import the shared tools from toolbox.py 
 # (dispatch_coding_subagent is explicitly NOT imported by the subagent to prevent inception/looping)
+import toolbox
 from toolbox import (
-    shared_memory,
     read_file, 
-    save_file, 
+    save_file,
     edit_file, 
     list_files, 
     run_terminal_command, 
@@ -128,7 +128,7 @@ def dispatch_coding_subagent(task_description: str) -> str:
         
         # Inject the generic tools from toolbox.py
         sub_tools =[read_file, save_file, edit_file, list_files, run_terminal_command]
-        sub_agent = create_react_agent(llm, sub_tools, checkpointer=shared_memory)
+        sub_agent = create_react_agent(llm, sub_tools, checkpointer=toolbox.shared_memory)
         # --- NEW: Create a unique Thread ID for this branch ---
         thread_id = f"swe_{branch_name.replace('/', '_')}"
         run_config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 5000}

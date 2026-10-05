@@ -33,8 +33,8 @@ from textual import on
 
 from audio_handler import clean_markdown_for_speech, load_audio_config
 
-FEDERATE_DIR = os.path.join(os.path.expanduser("~"), ".federate")
-TELEGRAM_CONFIG_FILE = os.path.join(FEDERATE_DIR, "telegram_config.json")
+from toolbox import FEDERAIDE_SYS_DIR
+TELEGRAM_CONFIG_FILE = os.path.join(FEDERAIDE_SYS_DIR, "telegram_config.json")
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def load_telegram_config():
@@ -260,8 +260,8 @@ class TelegramManager:
 
         if not self.kokoro_model:
             try: 
-                model_path = os.path.join(REPO_DIR, "kokoro-v1.0.onnx")
-                voices_path = os.path.join(REPO_DIR, "voices-v1.0.bin")
+                model_path = os.path.join(FEDERAIDE_SYS_DIR, "kokoro-v1.0.onnx")
+                voices_path = os.path.join(FEDERAIDE_SYS_DIR, "voices-v1.0.bin")
                 self.kokoro_model = Kokoro(model_path, voices_path)
             except Exception: return
 

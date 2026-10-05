@@ -116,7 +116,9 @@ SLASH_COMMAND_DESCS = {
     "/clear_all": "Wipe memory and history of all agents",
     "/skills": "List all passive and active skills for the active agent",
     "/settings": "Open global harness settings modal",
-    "/rollback": "Roll back ~/.federate Git state by N turns (e.g. /rollback or /rollback 2)",
+    "/team": "Switch, create, or manage team workspace directories",
+    "/teams": "Switch, create, or manage team workspace directories",
+    "/rollback": "Roll back active team Git state by N turns (e.g. /rollback or /rollback 2)",
     "/help": "Show this detailed help menu",
     "/backstory": "Force update and translate all agent backstories",
     "/consolidate": "Consolidate, summarize, and prune core memorylets",
@@ -1116,8 +1118,11 @@ class OnboardingModal(ModalScreen[dict]):
         self.query_one("#onboard_api_key", Input).focus()
 
     def compose(self) -> ComposeResult:
+        team_name = self.initial_data.get("team_name", "")
+        title = f" Configure {team_name}'s first agent" if team_name else " Welcome to Federate Multiagent Harness"
+
         with Vertical(id="onboard_dialog"):
-            yield Label(" Welcome to Federate Multiagent Harness", classes="pane_title")
+            yield Label(title, classes="pane_title")
             with VerticalScroll(id="onboard_scroll"):
                 with Vertical(classes="details_box"):
                     yield Label("Please configure your first agent to get started:", classes="section_label")
@@ -1556,20 +1561,18 @@ class ConfigModal(ModalScreen[str]):
 
     def _update_env(self, agent_name: str, primary_key: str, backup_key: str):
         import keyring
-        primary_user = f"agent_key_{agent_name.lower().replace(' ', '_')}"
-        backup_user = f"agent_backup_key_{agent_name.lower().replace(' ', '_')}"
+        primary_user = toolbox.get_agent_keyring_user(agent_name, is_backup=False)
+        backup_user = toolbox.get_agent_keyring_user(agent_name, is_backup=True)
 
         try:
             if primary_key:
                 keyring.set_password("Federate", primary_user, primary_key)
-                os.environ[f"AGENT_KEY_{agent_name.upper().replace(' ', '_')}"] = primary_key
             else:
                 try: keyring.delete_password("Federate", primary_user)
                 except Exception: pass
 
             if backup_key:
                 keyring.set_password("Federate", backup_user, backup_key)
-                os.environ[f"AGENT_BACKUP_KEY_{agent_name.upper().replace(' ', '_')}"] = backup_key
             else:
                 try: keyring.delete_password("Federate", backup_user)
                 except Exception: pass
@@ -1596,6 +1599,402 @@ class ConfigModal(ModalScreen[str]):
     @on(Button.Pressed, "#ai_cancel_btn")
     def cancel_btn(self):
         self.dismiss(("cancel", None))
+
+class TeamDeleteModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    TeamDeleteModal { align: center middle; background: $background 60%; }
+    #team_del_dialog { width: 68; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    .del_msg { margin: 1 0; }
+    .del_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
+    .del_buttons Button { margin-left: 1; }
+    """
+    def __init__(self, team_name: str, team_path: str):
+        super().__init__()
+        self.team_name = team_name
+        self.team_path = team_path
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="team_del_dialog"):
+            yield Label(f" Delete Team: [bold cyan]{self.team_name}[/bold cyan]", classes="pane_title")
+            yield Label(f"Target Path: [dim]{self.team_path}[/dim]\n\nChoose how you want to remove this team workspace:", classes="del_msg")
+            with Horizontal(classes="del_buttons"):
+                yield Button("Unregister Only", id="btn_unregister", variant="warning")
+                yield Button("Delete Files from Disk", id="btn_purge", variant="error")
+                yield Button("Cancel", id="btn_cancel")
+
+    @on(Button.Pressed)
+    def handle_press(self, event: Button.Pressed):
+        if event.button.id == "btn_unregister":
+            self.dismiss("unregister")
+        elif event.button.id == "btn_purge":
+            self.dismiss("purge")
+        else:
+            self.dismiss("cancel")
+
+class TeamsModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    TeamsModal { align: center middle; background: $background 60%; }
+    #teams_dialog { width: 80; height: 85%; border: thick $primary; background: $surface; padding: 1 2; }
+    #teams_main_scroll { height: 1fr; border: round $accent; padding: 1; background: $boost; margin-bottom: 1; }
+    #team_form { height: auto; margin-bottom: 1; }
+    #team_list { height: auto; }
+    .section_label { text-style: bold; margin-top: 1; margin-bottom: 0; color: $text; }
+    .team_item { layout: horizontal; height: auto; padding: 1; border-bottom: solid $primary 50%; }
+    .team_info { width: 1fr; }
+    .team_btn { width: 10; margin-left: 1; margin-top: 1; }
+    .form_row { layout: horizontal; height: auto; margin-top: 1; margin-bottom: 0; }
+    #team_name_input { width: 1fr; margin-right: 1; }
+    #team_folder_input { width: 1fr; }
+    #team_git_user_input { width: 1fr; margin-right: 1; }
+    #team_git_pat_input { width: 1fr; }
+    .team_form_btns { layout: horizontal; height: auto; margin-top: 1; align: right middle; }
+    .team_form_btns Button { margin-left: 1; }
+    #teams_bottom_buttons { height: auto; align: right middle; margin-top: 0; }
+    #teams_bottom_buttons Button { margin-left: 1; }
+    """
+    def __init__(self, agent_view):
+        super().__init__()
+        self.agent_view = agent_view
+        self.editing_path = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="teams_dialog"):
+            yield Label(" Team Workspaces & Remote Git", classes="pane_title")
+            
+            with VerticalScroll(id="teams_main_scroll"):
+                with Vertical(id="team_form"):
+                    yield Label("Create or Edit Team Workspace:", id="form_header_label", classes="section_label")
+                    with Horizontal(classes="form_row"):
+                        yield Input(placeholder="Team Name (e.g. Scraper Team)", id="team_name_input")
+                        yield Input(placeholder="Folder Name or Path (e.g. .teamScraper)", id="team_folder_input")
+                    
+                    yield Label("Git Remote Configuration (PAT stored strictly in Keyring):", classes="section_label")
+                    yield Input(placeholder="Remote URL (e.g. https://github.com/org/repo.git)", id="team_remote_url_input")
+                    with Horizontal(classes="form_row"):
+                        yield Input(placeholder="Git Username", id="team_git_user_input")
+                        yield Input(placeholder="Personal Access Token (PAT)", id="team_git_pat_input", password=True)
+                    
+                    with Horizontal(classes="team_form_btns"):
+                        yield Button("Save Team", id="save_team_btn", variant="success")
+                        yield Button("Restore", id="restore_btn", variant="primary")
+                        yield Button("Sync Now", id="sync_now_btn", variant="warning")
+                        yield Button("Clear Form", id="clear_form_btn", variant="default")
+                
+                yield Label("Registered Teams:", classes="section_label")
+                yield Vertical(id="team_list")
+                
+            with Horizontal(id="teams_bottom_buttons"):
+                yield Button("Close", id="close_teams_btn", variant="error")
+
+    def on_mount(self):
+        self.load_team_into_form(toolbox.get_team_dir())
+        self.refresh_list()
+
+    def load_team_into_form(self, t_path: str):
+        self.editing_path = os.path.abspath(os.path.expanduser(t_path))
+        settings = toolbox.load_global_settings()
+        registered = settings.get("registered_teams", [])
+        team_entry = next((t for t in registered if os.path.abspath(os.path.expanduser(t.get("path", ""))) == self.editing_path), None)
+        t_name = team_entry.get("name") if team_entry else os.path.basename(self.editing_path).lstrip(".")
+
+        remote_url, git_user, git_pat = toolbox.get_team_git_credentials(self.editing_path)
+        
+        self.query_one("#form_header_label", Label).update(f"Editing Team Workspace: [bold cyan]{t_name}[/bold cyan]")
+        self.query_one("#team_name_input", Input).value = t_name
+        self.query_one("#team_folder_input", Input).value = self.editing_path
+        self.query_one("#team_remote_url_input", Input).value = remote_url
+        self.query_one("#team_git_user_input", Input).value = git_user
+        self.query_one("#team_git_pat_input", Input).value = git_pat
+        self.query_one("#save_team_btn", Button).label = "Update Team"
+
+    def clear_form(self):
+        self.editing_path = None
+        self.query_one("#form_header_label", Label).update("Create New Team Workspace:")
+        self.query_one("#team_name_input", Input).value = ""
+        self.query_one("#team_folder_input", Input).value = ""
+        self.query_one("#team_remote_url_input", Input).value = ""
+        self.query_one("#team_git_user_input", Input).value = ""
+        self.query_one("#team_git_pat_input", Input).value = ""
+        self.query_one("#save_team_btn", Button).label = "Create"
+
+    def refresh_list(self):
+        container = self.query_one("#team_list")
+        container.query("*").remove()
+        
+        settings = toolbox.load_global_settings()
+        registered = settings.get("registered_teams", [])
+        current_active = toolbox.get_team_dir()
+        
+        default_dir = os.path.abspath(os.path.expanduser("~/.federate"))
+        if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == default_dir for t in registered):
+            registered.insert(0, {"name": "Default", "path": default_dir})
+            
+        for idx, t in enumerate(registered):
+            t_path = os.path.abspath(os.path.expanduser(t.get("path", "")))
+            t_name = t.get("name") or os.path.basename(t_path).lstrip(".")
+            is_active = (t_path == current_active)
+            
+            remote_url, _, _ = toolbox.get_team_git_credentials(t_path)
+            remote_info = f"\n[dim yellow]Remote: {remote_url}[/dim yellow]" if remote_url else ""
+            status_tag = "[bold green](Active Team)[/bold green]" if is_active else ""
+            info = f"[bold cyan]{t_name}[/bold cyan] {status_tag}\n[dim]{t_path}[/dim]{remote_info}"
+            
+            switch_btn = Button("Active", variant="default", disabled=True, classes="team_btn") if is_active else Button("Switch", id=f"switch_{idx}", variant="primary", classes="team_btn")
+            edit_btn = Button("Edit", id=f"edit_{idx}", variant="warning", classes="team_btn")
+            del_btn = Button("Delete", id=f"del_{idx}", variant="error", classes="team_btn")
+            
+            row = Horizontal(
+                Label(info, classes="team_info"),
+                switch_btn,
+                edit_btn,
+                del_btn,
+                classes="team_item"
+            )
+            container.mount(row)
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        btn_id = event.button.id
+        if not btn_id:
+            return
+            
+        if btn_id == "close_teams_btn":
+            self.dismiss()
+            
+        elif btn_id == "clear_form_btn":
+            self.clear_form()
+            
+        elif btn_id == "restore_btn":
+            url = self.query_one("#team_remote_url_input", Input).value.strip()
+            folder_val = self.query_one("#team_folder_input", Input).value.strip()
+            user = self.query_one("#team_git_user_input", Input).value.strip()
+            pat = self.query_one("#team_git_pat_input", Input).value.strip()
+            
+            if not url or not folder_val:
+                self.notify("Folder and Remote URL are required to restore from Git.", severity="error")
+                return
+                
+            target_path = folder_val if os.path.isabs(folder_val) else os.path.join(str(Path.home()), folder_val)
+            
+            if os.path.exists(target_path) and os.listdir(target_path):
+                self.notify("Target folder must be empty or non-existent to restore via clone.", severity="error")
+                return
+
+            self.notify(f"Cloning from remote to {target_path}...", severity="information")
+            self.query_one("#restore_btn", Button).disabled = True
+
+            def _run_restore():
+                try:
+                    from urllib.parse import urlparse, urlunparse, quote
+                    import subprocess
+                    
+                    parsed = urlparse(url)
+                    user_part = quote(user, safe='') if user else "git"
+                    pat_part = quote(pat, safe='')
+                    auth_netloc = f"{user_part}:{pat_part}@{parsed.netloc}"
+                    authed_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+                    res = subprocess.run(["git", "clone", authed_url, target_path], capture_output=True, text=True)
+                    
+                    if res.returncode == 0:
+                        # SECURITY FIX: Remove PAT from .git/config immediately after cloning
+                        subprocess.run(["git", "remote", "set-url", "origin", url], cwd=target_path, capture_output=True)
+                        def _on_success():
+                            self.notify("Restore completed successfully!", severity="information")
+                            t_name = self.query_one("#team_name_input", Input).value.strip() or os.path.basename(target_path)
+                            self.dismiss()
+                            
+                            # Switch to the newly cloned workspace
+                            self.agent_view.switch_team(target_path, display_name=t_name)
+                            
+                            # Save credentials securely into the keyring
+                            import toolbox
+                            toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
+                            
+                            # Rebuild episodic and tool results databases in the background
+                            import threading
+                            threading.Thread(target=self.agent_view.session_manager.sync_all_sessions, daemon=True).start()
+                            
+                        self.app.call_from_thread(_on_success)
+                    else:
+                        def _sanitize(txt: str) -> str:
+                            if not txt: return ""
+                            clean = txt.replace(pat, "******") if pat else txt
+                            return clean.strip()
+                        err = _sanitize(res.stderr) or _sanitize(res.stdout) or "Clone failed."
+                        self.app.call_from_thread(self.notify, f"Restore Failed: {err}", severity="error", timeout=10.0)
+                except Exception as e:
+                    self.app.call_from_thread(self.notify, f"Restore Error: {e}", severity="error", timeout=10.0)
+                finally:
+                    def _reenable():
+                        try:
+                            self.query_one("#restore_btn", Button).disabled = False
+                        except Exception:
+                            pass
+                    self.app.call_from_thread(_reenable)
+
+            import threading
+            threading.Thread(target=_run_restore, daemon=True).start()
+
+        elif btn_id == "sync_now_btn":
+            url = self.query_one("#team_remote_url_input", Input).value.strip()
+            user = self.query_one("#team_git_user_input", Input).value.strip()
+            pat = self.query_one("#team_git_pat_input", Input).value.strip()
+            target_team_dir = self.editing_path or toolbox.get_team_dir()
+            
+            toolbox.save_team_git_credentials(url, user, pat, team_dir=target_team_dir)
+            self.notify(f"Syncing with Git remote for '{os.path.basename(target_team_dir)}'...", severity="information")
+            
+            sync_btn = self.query_one("#sync_now_btn", Button)
+            sync_btn.disabled = True
+
+            def _run_sync():
+                try:
+                    ok, msg = toolbox.sync_team_remote(action="sync", team_dir=target_team_dir)
+                    if ok:
+                        self.app.call_from_thread(self.notify, "Git remote sync completed successfully!", severity="information")
+                        self.agent_view.agent_manager.load_agents()
+                        self.agent_view.session_manager.sync_all_sessions()
+                        self.agent_view.update_status_bar()
+                    else:
+                        self.app.call_from_thread(self.notify, f"Sync Failed: {msg}", severity="error", timeout=10.0)
+                except Exception as e:
+                    self.app.call_from_thread(self.notify, f"Sync Error: {e}", severity="error", timeout=10.0)
+                finally:
+                    def _reenable():
+                        try:
+                            self.query_one("#sync_now_btn", Button).disabled = False
+                        except Exception:
+                            pass
+                    self.app.call_from_thread(_reenable)
+
+            threading.Thread(target=_run_sync, daemon=True).start()
+            
+        elif btn_id == "save_team_btn":
+            t_name = self.query_one("#team_name_input", Input).value.strip()
+            folder_val = self.query_one("#team_folder_input", Input).value.strip()
+            url = self.query_one("#team_remote_url_input", Input).value.strip()
+            user = self.query_one("#team_git_user_input", Input).value.strip()
+            pat = self.query_one("#team_git_pat_input", Input).value.strip()
+            
+            if not folder_val and not self.editing_path:
+                self.notify("Please specify a folder name or path.", severity="error")
+                return
+
+            if self.editing_path:
+                # Updating an existing team
+                target_path = self.editing_path
+                name = t_name or os.path.basename(target_path).lstrip(".")
+                
+                settings = toolbox.load_global_settings()
+                registered = settings.get("registered_teams", [])
+                for t in registered:
+                    if os.path.abspath(os.path.expanduser(t.get("path", ""))) == target_path:
+                        t["name"] = name
+                        break
+                settings["registered_teams"] = registered
+                toolbox.save_global_settings(settings)
+                
+                toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
+                self.refresh_list()
+                self.notify(f"Team '{name}' updated successfully.", severity="information")
+            else:
+                # Creating a new team
+                target_path = folder_val if os.path.isabs(folder_val) else os.path.join(str(Path.home()), folder_val)
+                name = t_name or os.path.basename(target_path).lstrip(".")
+                
+                self.dismiss()
+                self.agent_view.switch_team(target_path, display_name=name)
+                toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
+                self.agent_view.show_onboarding_modal({"team_name": name})
+
+        elif btn_id.startswith("edit_"):
+            idx = int(btn_id.split("_")[1])
+            settings = toolbox.load_global_settings()
+            registered = settings.get("registered_teams", [])
+            default_dir = os.path.abspath(os.path.expanduser("~/.federate"))
+            if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == default_dir for t in registered):
+                registered.insert(0, {"name": "Default", "path": default_dir})
+            if 0 <= idx < len(registered):
+                t_path = registered[idx].get("path")
+                self.load_team_into_form(t_path)
+                self.notify(f"Loaded '{registered[idx].get('name')}' into form.", severity="information")
+
+        elif btn_id.startswith("del_"):
+            idx = int(btn_id.split("_")[1])
+            settings = toolbox.load_global_settings()
+            registered = settings.get("registered_teams", [])
+            default_dir = os.path.abspath(os.path.expanduser("~/.federate"))
+            if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == default_dir for t in registered):
+                registered.insert(0, {"name": "Default", "path": default_dir})
+                
+            if len(registered) <= 1:
+                self.notify("Cannot delete the only remaining team.", severity="error")
+                return
+                
+            if 0 <= idx < len(registered):
+                target_team = registered[idx]
+                t_path = os.path.abspath(os.path.expanduser(target_team.get("path", "")))
+                t_name = target_team.get("name") or os.path.basename(t_path).lstrip(".")
+
+                def on_delete_choice(choice: str):
+                    if not choice or choice == "cancel":
+                        return
+
+                    st = toolbox.load_global_settings()
+                    reg = st.get("registered_teams", [])
+                    st["registered_teams"] = [t for t in reg if os.path.abspath(os.path.expanduser(t.get("path", ""))) != t_path]
+                    toolbox.save_global_settings(st)
+
+                    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(t_path)).lower().lstrip("_") or "default"
+                    try:
+                        import keyring
+                        keyring.delete_password("Federate", f"git_user_{team_tag}")
+                        keyring.delete_password("Federate", f"git_pat_{team_tag}")
+                        try:
+                            import mcp_handler
+                            mcp_handler._clear_mcp_keyring_chunks(keyring, team_dir=t_path)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+
+                    # Switch active team before deleting files to ensure SQLite file locks are released cleanly
+                    if t_path == toolbox.get_team_dir():
+                        remaining = st["registered_teams"][0]
+                        next_path = os.path.abspath(os.path.expanduser(remaining.get("path", "")))
+                        self.agent_view.switch_team(next_path, display_name=remaining.get("name"))
+                        self.load_team_into_form(next_path)
+                    elif self.editing_path == t_path:
+                        self.clear_form()
+
+                    if choice == "purge":
+                        import shutil
+                        if t_path != str(Path.home()) and os.path.exists(t_path) and len(t_path) > 3:
+                            try:
+                                shutil.rmtree(t_path, ignore_errors=True)
+                            except Exception as e:
+                                self.notify(f"Warning: Could not remove all files: {e}", severity="warning")
+
+                    self.refresh_list()
+                    action_str = "completely deleted from disk" if choice == "purge" else "unregistered"
+                    self.notify(f"Team '{t_name}' {action_str}.", severity="information")
+
+                self.app.push_screen(TeamDeleteModal(t_name, t_path), on_delete_choice)
+
+        elif btn_id.startswith("switch_"):
+            idx = int(btn_id.split("_")[1])
+            settings = toolbox.load_global_settings()
+            registered = settings.get("registered_teams", [])
+            default_dir = os.path.abspath(os.path.expanduser("~/.federate"))
+            if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == default_dir for t in registered):
+                registered.insert(0, {"name": "Default", "path": default_dir})
+                
+            if 0 <= idx < len(registered):
+                t = registered[idx]
+                t_path = os.path.abspath(os.path.expanduser(t.get("path", "")))
+                self.dismiss()
+                self.agent_view.switch_team(t_path, display_name=t.get("name"))
 
 class ScheduleModal(ModalScreen[None]):
     DEFAULT_CSS = """
@@ -1808,8 +2207,9 @@ class MCPConfigModal(ModalScreen[bool]):
     """
 
     def compose(self) -> ComposeResult:
+        team_name = os.path.basename(toolbox.get_team_dir()).lstrip(".")
         with Vertical(id="mcp_dialog"):
-            yield Label(" MCP Servers Configuration (JSON)", classes="pane_title")
+            yield Label(f" MCP Servers Configuration — {team_name} (JSON)", classes="pane_title")
             yield Label("Define your Model Context Protocol servers below:", classes="field_label")
             yield TextArea(id="mcp_json_edit")
             yield RichLog(id="mcp_log", markup=True, auto_scroll=True)
@@ -2438,7 +2838,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
         
         tips_text = Text.from_markup(
             "  [bold #f2a813]Tips for getting started:[/bold #f2a813]\n"
-            "  1. Ask questions, edit files, or run commands.\n"
+            "  1. Ctrl+G to cycle agents, Ctrl+T to toggle mode.\n"
             "  2. Use & to inject files. Use @ to invoke particular agents.\n"
             "  3. Press F4 to configure the active agent.\n"
             "  4. Press Ctrl+K to start a fresh conversation."
@@ -2573,7 +2973,7 @@ def get_welcome_banner(agent_view, specific_agent: str = None, return_renderable
 
     tips_text = Text.from_markup(
         "  [bold #f2a813]Tips for getting started:[/bold #f2a813]\n"
-        "  1. Ask questions, edit files, or run commands.\n"
+        "  1. Ctrl+G to cycle agents, Ctrl+T to toggle mode.\n"
         "  2. Use & to inject files. Use @ to invoke particular agents.\n"
         "  3. Press F4 to configure the active agent.\n"
         "  4. Press Ctrl+K to start a fresh conversation."
@@ -2622,6 +3022,7 @@ class AIAgentView(Vertical):
         Binding("ctrl+g", "cycle_agents", "Cycle Agents", priority=True),
         Binding("ctrl+a", "abort", "Abort", priority=True),
         Binding("f3", "open_global_settings", "Settings", priority=True),
+        Binding("f1", "open_teams", "Manage Teams", priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -3099,6 +3500,57 @@ class AIAgentView(Vertical):
             self.log_to_ui("[bold red] Operation Aborted by User.[/bold red]")
             self.query_one("#ai_chat_input").focus()
         
+    def action_open_teams(self):
+        self.app.push_screen(TeamsModal(self))
+
+    def switch_team(self, team_dir: str, display_name: str = None):
+        """Switches the active team folder, reinitializing git, database connections, and managers cleanly."""
+        self.action_abort()
+        toolbox.set_team_dir(team_dir)
+        toolbox.init_federate_git_repo()
+        toolbox.reconnect_team_databases()
+
+        # Update registered teams list in global settings
+        settings = toolbox.load_global_settings()
+        teams = settings.get("registered_teams", [])
+        clean_dir = toolbox.get_team_dir()
+        d_name = display_name or os.path.basename(clean_dir).lstrip(".")
+        if not any(os.path.abspath(os.path.expanduser(t.get("path", ""))) == clean_dir for t in teams):
+            teams.append({"name": d_name, "path": clean_dir})
+            settings["registered_teams"] = teams
+            toolbox.save_global_settings(settings)
+
+        # Re-instantiate managers and semantic search for the new team directory
+        self.agent_manager = AgentManager()
+        self.session_manager = SessionManager()
+        self.schedule_manager = ScheduleManager()
+        self.agent_executors.clear()
+        with self.turn_lock:
+            self.turn_queue.clear()
+            self.paused_queue.clear()
+
+        default_name = self.agent_manager.get_default_agent_name()
+        initial_agent = self.agent_manager.get_agent(default_name) or list(self.agent_manager.agents.values())[0]
+        self.select_agent(initial_agent.name)
+        self.clear_chat_ui()
+        invalidate_stats_cache()
+
+        # Apply team-specific theme
+        team_theme = toolbox.load_team_settings().get("theme", "tokyo-night")
+        try:
+            self.app.theme = team_theme
+        except Exception:
+            pass
+
+        # Reload MCP background sessions for the new team
+        toolbox.reload_mcp_servers()
+
+        self._write_log(Rule(title=f"[bold #f2a813]TEAM WORKSPACE: {d_name.upper()}", style="dim"))
+        self._write_log(get_welcome_banner(self))
+        self.update_tokens()
+        self.update_status_bar()
+        self.log_to_ui(f"[bold green]Switched active team to '{d_name}' ({clean_dir})[/bold green]")
+
     def action_open_chat_manager(self):
         def handle_chat_mgr(action):
             if action == "new_session":
@@ -3303,8 +3755,8 @@ class AIAgentView(Vertical):
                 
                 try:
                     import keyring
-                    keyring.delete_password("Federate", f"agent_key_{agent_to_delete.name.lower().replace(' ', '_')}")
-                    keyring.delete_password("Federate", f"agent_backup_key_{agent_to_delete.name.lower().replace(' ', '_')}")
+                    keyring.delete_password("Federate", toolbox.get_agent_keyring_user(agent_to_delete.name, is_backup=False))
+                    keyring.delete_password("Federate", toolbox.get_agent_keyring_user(agent_to_delete.name, is_backup=True))
                 except Exception:
                     pass
                 
@@ -4430,7 +4882,12 @@ class AIAgentView(Vertical):
         settings_path = os.path.join(self.agent_manager.agents_dir, "settings.json")
         is_pristine = not os.path.exists(settings_path)
         if is_pristine or (len(self.agent_manager.agents) == 1 and not self.active_agent.get_api_key()):
-            self.call_after_refresh(self.show_onboarding_modal)
+            settings = toolbox.load_global_settings()
+            registered = settings.get("registered_teams", [])
+            current_active = toolbox.get_team_dir()
+            current_team = next((t for t in registered if os.path.abspath(os.path.expanduser(t.get("path", ""))) == current_active), None)
+            team_name = current_team.get("name") if (current_team and len(registered) > 1) else ""
+            self.call_after_refresh(lambda: self.show_onboarding_modal({"team_name": team_name} if team_name else None))
 
     def show_onboarding_modal(self, initial_data: dict = None):
         def handle_onboarding(result):
@@ -4457,10 +4914,9 @@ class AIAgentView(Vertical):
 
     def _update_agent_keys(self, agent_name: str, primary_key: str):
         import keyring
-        primary_user = f"agent_key_{agent_name.lower().replace(' ', '_')}"
+        primary_user = toolbox.get_agent_keyring_user(agent_name, is_backup=False)
         try:
             if primary_key:
                 keyring.set_password("Federate", primary_user, primary_key)
-                os.environ[f"AGENT_KEY_{agent_name.upper().replace(' ', '_')}"] = primary_key
         except Exception as e:
             self.notify(f"Keychain Access Failed: Could not save credentials to OS Keyring.\nDetail: {e}", severity="error")

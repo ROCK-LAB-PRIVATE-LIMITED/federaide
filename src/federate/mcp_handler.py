@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any, List, Optional
 from pydantic import BaseModel, create_model, ConfigDict
 import platform
-
+import re
+import keyword
+from pydantic import Field
 from langchain_core.tools import StructuredTool
 
 try:
@@ -22,14 +24,26 @@ except Exception as e:
     print(f"MCP V2 Import Error: {e}")
     HAS_MCP = False
 
-MCP_CONFIG_PATH = os.path.join(str(Path.home()), ".federate", "mcp_servers.json")
-KNOWN_MCP_TOOLS_PATH = os.path.join(str(Path.home()), ".federate", "known_mcp_tools.json")
+from toolbox import get_team_dir, get_storage_path
+
+def _get_mcp_paths(team_dir=None):
+    t_dir = team_dir or get_team_dir()
+    return (
+        os.path.join(t_dir, "mcp_servers.json"),
+        os.path.join(t_dir, "known_mcp_tools.json")
+    )
+
+def _get_mcp_keyring_keys(team_dir=None):
+    t_dir = team_dir or get_team_dir()
+    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(t_dir)).lower().lstrip("_") or "default"
+    return (
+        f"mcp_chunk_count_{team_tag}",
+        f"mcp_chunk_{team_tag}_",
+        f"mcp_token_{team_tag}"
+    )
 
 CHUNK_SIZE = 256
 KEYRING_SERVICE = "Federate"
-MCP_CHUNK_COUNT_KEY = "mcp_config_chunk_count"
-MCP_CHUNK_PREFIX = "mcp_config_chunk_"
-MCP_LEGACY_KEY = "mcp_config_token"
 
 DEFAULT_MCP_CONFIG = '''{
   "mcpServers": {
@@ -37,33 +51,37 @@ DEFAULT_MCP_CONFIG = '''{
   }
 }'''
 
-def _clear_mcp_keyring_chunks(keyring_mod):
+def _clear_mcp_keyring_chunks(keyring_mod, team_dir=None):
     try:
-        count_str = keyring_mod.get_password(KEYRING_SERVICE, MCP_CHUNK_COUNT_KEY)
+        count_key, prefix_key, legacy_key = _get_mcp_keyring_keys(team_dir)
+        count_str = keyring_mod.get_password(KEYRING_SERVICE, count_key)
         max_chunks = int(count_str) if (count_str and count_str.isdigit()) else 64
         for idx in range(max_chunks):
             try:
-                keyring_mod.delete_password(KEYRING_SERVICE, f"{MCP_CHUNK_PREFIX}{idx}")
+                keyring_mod.delete_password(KEYRING_SERVICE, f"{prefix_key}{idx}")
             except Exception:
                 pass
         try:
-            keyring_mod.delete_password(KEYRING_SERVICE, MCP_CHUNK_COUNT_KEY)
+            keyring_mod.delete_password(KEYRING_SERVICE, count_key)
         except Exception:
             pass
         try:
-            keyring_mod.delete_password(KEYRING_SERVICE, MCP_LEGACY_KEY)
+            keyring_mod.delete_password(KEYRING_SERVICE, legacy_key)
         except Exception:
             pass
     except Exception:
         pass
 
-def load_mcp_config_raw() -> str:
+def load_mcp_config_raw(team_dir=None) -> str:
+    mcp_config_path, _ = _get_mcp_paths(team_dir)
+    count_key, prefix_key, legacy_key = _get_mcp_keyring_keys(team_dir)
+
     try:
         from toolbox import is_keyring_locked
         if is_keyring_locked():
-            if os.path.exists(MCP_CONFIG_PATH):
+            if os.path.exists(mcp_config_path):
                 try:
-                    with open(MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
+                    with open(mcp_config_path, "r", encoding="utf-8") as f:
                         return f.read()
                 except Exception:
                     pass
@@ -74,12 +92,12 @@ def load_mcp_config_raw() -> str:
     raw_str = None
     try:
         import keyring
-        count_str = keyring.get_password(KEYRING_SERVICE, MCP_CHUNK_COUNT_KEY)
+        count_str = keyring.get_password(KEYRING_SERVICE, count_key)
         if count_str and count_str.isdigit():
             total_chunks = int(count_str)
             parts = []
             for idx in range(total_chunks):
-                part = keyring.get_password(KEYRING_SERVICE, f"{MCP_CHUNK_PREFIX}{idx}")
+                part = keyring.get_password(KEYRING_SERVICE, f"{prefix_key}{idx}")
                 if part is None:
                     parts = []
                     break
@@ -92,19 +110,19 @@ def load_mcp_config_raw() -> str:
     if not raw_str:
         try:
             import keyring
-            legacy = keyring.get_password(KEYRING_SERVICE, MCP_LEGACY_KEY)
+            legacy = keyring.get_password(KEYRING_SERVICE, legacy_key)
             if legacy:
                 raw_str = legacy
         except Exception:
             pass
 
-    # Migration from legacy plaintext file
-    if not raw_str and os.path.exists(MCP_CONFIG_PATH):
+    # Migration from legacy plaintext file in team folder
+    if not raw_str and os.path.exists(mcp_config_path):
         try:
-            with open(MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
+            with open(mcp_config_path, "r", encoding="utf-8") as f:
                 raw_str = f.read()
             if raw_str and raw_str.strip():
-                save_mcp_config_raw(raw_str)
+                save_mcp_config_raw(raw_str, team_dir=team_dir)
         except Exception:
             pass
 
@@ -113,7 +131,7 @@ def load_mcp_config_raw() -> str:
 
     return raw_str
 
-def save_mcp_config_raw(raw_json: str) -> bool:
+def save_mcp_config_raw(raw_json: str, team_dir=None) -> bool:
     try:
         from toolbox import is_keyring_locked
         if is_keyring_locked():
@@ -122,17 +140,19 @@ def save_mcp_config_raw(raw_json: str) -> bool:
         pass
 
     import keyring
-    _clear_mcp_keyring_chunks(keyring)
+    _clear_mcp_keyring_chunks(keyring, team_dir=team_dir)
+    count_key, prefix_key, _ = _get_mcp_keyring_keys(team_dir)
 
     chunks = [raw_json[i:i + CHUNK_SIZE] for i in range(0, len(raw_json), CHUNK_SIZE)]
     for idx, chunk in enumerate(chunks):
-        keyring.set_password(KEYRING_SERVICE, f"{MCP_CHUNK_PREFIX}{idx}", chunk)
-    keyring.set_password(KEYRING_SERVICE, MCP_CHUNK_COUNT_KEY, str(len(chunks)))
+        keyring.set_password(KEYRING_SERVICE, f"{prefix_key}{idx}", chunk)
+    keyring.set_password(KEYRING_SERVICE, count_key, str(len(chunks)))
 
-    # Wipe plaintext file from disk
-    if os.path.exists(MCP_CONFIG_PATH):
+    # Wipe plaintext file from disk if present
+    mcp_config_path, _ = _get_mcp_paths(team_dir)
+    if os.path.exists(mcp_config_path):
         try:
-            os.remove(MCP_CONFIG_PATH)
+            os.remove(mcp_config_path)
         except Exception:
             pass
     return True
@@ -140,10 +160,11 @@ def save_mcp_config_raw(raw_json: str) -> bool:
 def _disable_new_mcp_tools(tools):
     if not tools:
         return
+    _, known_tools_path = _get_mcp_paths()
     known = set()
-    if os.path.exists(KNOWN_MCP_TOOLS_PATH):
+    if os.path.exists(known_tools_path):
         try:
-            with open(KNOWN_MCP_TOOLS_PATH, "r", encoding="utf-8") as f:
+            with open(known_tools_path, "r", encoding="utf-8") as f:
                 known = set(json.load(f))
         except Exception:
             pass
@@ -154,13 +175,13 @@ def _disable_new_mcp_tools(tools):
 
     known.update(new_tools)
     try:
-        os.makedirs(os.path.dirname(KNOWN_MCP_TOOLS_PATH), exist_ok=True)
-        with open(KNOWN_MCP_TOOLS_PATH, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(known_tools_path), exist_ok=True)
+        with open(known_tools_path, "w", encoding="utf-8") as f:
             json.dump(list(known), f, indent=2)
     except Exception:
         pass
 
-    agents_dir = os.path.join(str(Path.home()), ".federate", "agents")
+    agents_dir = get_storage_path("agents")
     if os.path.exists(agents_dir):
         for fname in os.listdir(agents_dir):
             if fname.endswith(".json") and fname not in ("settings.json", "translated_backstories.json", "schedules.json"):
@@ -207,9 +228,7 @@ def _mcp_bg_thread():
 if HAS_MCP:
     threading.Thread(target=_mcp_bg_thread, daemon=True).start()
 
-import re
-import keyword
-from pydantic import Field
+
 
 def _clean_field_name(name: str) -> str:
     clean = re.sub(r'[^a-zA-Z0-9_]', '_', str(name))

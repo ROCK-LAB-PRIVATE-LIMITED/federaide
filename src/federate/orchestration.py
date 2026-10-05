@@ -29,6 +29,7 @@ from semantic_search import SemanticSearchEngine
 
 from pathlib import Path
 from toolbox import get_storage_path, FEDERATE_DIR
+import toolbox
 
 def normalize_msg_content(content: str) -> str:
     if not content:
@@ -135,31 +136,33 @@ class AgentConfig:
     
     def get_api_key(self) -> str:
         try:
-            from toolbox import is_keyring_locked
+            from toolbox import is_keyring_locked, get_agent_keyring_user
             if not is_keyring_locked():
                 import keyring
-                user_key = f"agent_key_{self.name.lower().replace(' ', '_')}"
+                user_key = get_agent_keyring_user(self.name, is_backup=False)
                 val = keyring.get_password("Federate", user_key)
                 if val: return val
         except Exception:
             pass
-        # Fallback to .env / environment variables for legacy support
-        env_key = f"AGENT_KEY_{self.name.upper().replace(' ', '_')}"
-        return os.getenv(env_key, "")
+        import toolbox
+        team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(toolbox.get_team_dir())).upper().lstrip("_") or "DEFAULT"
+        env_key = f"AGENT_KEY_{team_tag}_{self.name.upper().replace(' ', '_')}"
+        return os.getenv(env_key, os.getenv(f"AGENT_KEY_{self.name.upper().replace(' ', '_')}", ""))
 
     def get_backup_api_key(self) -> str:
         try:
-            from toolbox import is_keyring_locked
+            from toolbox import is_keyring_locked, get_agent_keyring_user
             if not is_keyring_locked():
                 import keyring
-                user_key = f"agent_backup_key_{self.name.lower().replace(' ', '_')}"
+                user_key = get_agent_keyring_user(self.name, is_backup=True)
                 val = keyring.get_password("Federate", user_key)
                 if val: return val
         except Exception:
             pass
-        # Fallback to .env / environment variables for legacy support
-        env_key = f"AGENT_BACKUP_KEY_{self.name.upper().replace(' ', '_')}"
-        return os.getenv(env_key, "")
+        import toolbox
+        team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(toolbox.get_team_dir())).upper().lstrip("_") or "DEFAULT"
+        env_key = f"AGENT_BACKUP_KEY_{team_tag}_{self.name.upper().replace(' ', '_')}"
+        return os.getenv(env_key, os.getenv(f"AGENT_BACKUP_KEY_{self.name.upper().replace(' ', '_')}", ""))
 
     def get_full_system_prompt(self, all_agents: List['AgentConfig'] = None, is_no_memory: bool = False) -> str:
         date_str = datetime.now().strftime('%A, %B %d, %Y')
@@ -478,8 +481,8 @@ class SessionManager:
         self.aborted_batch_ids = set()
         self._lock = threading.Lock()
         
-        # Explicitly write the episodic memory DB to the global state folder
-        db_path = os.path.join(FEDERATE_DIR, "episodic_memory.db")
+        # Explicitly write the episodic memory DB to the active team directory
+        db_path = os.path.join(toolbox.get_team_dir(), "episodic_memory.db")
         self.semantic_engine = SemanticSearchEngine(db_path=db_path)
         
         # Private Tool Call Global Store via SQLite
@@ -514,35 +517,56 @@ class SessionManager:
                 self.aborted_batch_ids.add(batch_id)
 
     def sync_all_sessions(self):
-        """Indices existing session files in the background."""
+        """Reconstructs episodic semantic memory and .federate_state.db tool results from committed JSON sessions."""
         try:
-            files = [f for f in os.listdir(self.sessions_dir) if f.endswith(".json")]
-            for filename in files:
-                # Extract agent_name and session_id from filename
-                # Format: sess_171000000_Agent_Name.json
-                parts = filename.replace(".json", "").split("_")
-                if len(parts) < 3: continue
-                
-                session_id = f"{parts[0]}_{parts[1]}"
-                agent_name = "_".join(parts[2:]) # Handle names with underscores
-                
-                path = os.path.join(self.sessions_dir, filename)
-                try:
-                    with open(path, "r") as f:
-                        history = json.load(f)
+            for s_dir in [self.sessions_dir, self.nomem_sessions_dir]:
+                if not os.path.exists(s_dir): continue
+                files = [f for f in os.listdir(s_dir) if f.endswith(".json")]
+                for filename in files:
+                    parts = filename.replace(".json", "").split("_")
+                    if len(parts) < 3: continue
                     
-                    for idx, msg in enumerate(history):
-                        # Filter for dicts as history can sometimes be mixed in edge cases
-                        if not isinstance(msg, dict): continue
-                        if msg.get("role") == "system": continue
+                    if len(parts) >= 4 and parts[1] == "nomem":
+                        session_id = f"{parts[0]}_{parts[1]}_{parts[2]}"
+                        agent_name = "_".join(parts[3:])
+                    else:
+                        session_id = f"{parts[0]}_{parts[1]}"
+                        agent_name = "_".join(parts[2:])
+                    
+                    path = os.path.join(s_dir, filename)
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            history = json.load(f)
                         
-                        # Only index if not already present
-                        if not self.semantic_engine.is_indexed(agent_name, session_id, idx):
-                            content = msg.get("content", "")
-                            if content and content.strip():
-                                self.semantic_engine.index_message(agent_name, session_id, idx, content)
-                except Exception as e:
-                    print(f"Error syncing {filename}: {e}")
+                        cursor = self.db_conn.cursor()
+                        for idx, msg in enumerate(history):
+                            if not isinstance(msg, dict): continue
+                            if msg.get("role") == "system": continue
+                            
+                            # 1. Reconstruct episodic vector database (episodic_memory.db)
+                            if s_dir == self.sessions_dir:
+                                if not self.semantic_engine.is_indexed(agent_name, session_id, idx):
+                                    content = msg.get("content", "")
+                                    if content and content.strip():
+                                        self.semantic_engine.index_message(agent_name, session_id, idx, content)
+                            
+                            # 2. Reconstruct persistent tool results (.federate_state.db)
+                            tool_outputs = msg.get("tool_outputs") or []
+                            for out in tool_outputs:
+                                if isinstance(out, dict) and out.get("global_id"):
+                                    gid = out["global_id"]
+                                    t_name = out.get("name", "tool")
+                                    t_args = str(out.get("args") or "")
+                                    t_out = str(out.get("content") or "")
+                                    t_ts = str(out.get("timestamp") or "")
+                                    cursor.execute("""
+                                        INSERT OR IGNORE INTO global_tool_results 
+                                        (id, session_id, agent_name, tool_name, args, output, timestamp, is_public)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                                    """, (gid, session_id, agent_name, t_name, t_args, t_out, t_ts))
+                        self.db_conn.commit()
+                    except Exception as e:
+                        print(f"Error syncing {filename}: {e}")
         except Exception as e:
             print(f"Background sync error: {e}")
 

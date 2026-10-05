@@ -526,6 +526,7 @@ class FEDERaiDE(App):
 
     BINDINGS = [
         # Bubble up agent bindings so they are accessible directly from the Editor
+        Binding("f1", "open_teams", "Teams", priority=True),
         Binding("ctrl+k", "new_chat", "New Chat", priority=True),
         Binding("f2", "open_chat_manager", "Sessions", priority=True),
         Binding("f4", "open_active_config", "Manage Agents", priority=True),
@@ -572,7 +573,7 @@ class FEDERaiDE(App):
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
         self.exec_count = 0
         self.active_venv_name = "defaultVenv"
-        self.active_venv_path = os.path.join(os.path.expanduser("~"), ".federate", "defaultVenv")
+        self.active_venv_path = os.path.join(toolbox.get_team_dir(), "defaultVenv")
     
     def action_quit(self):
         """Signals background threads to stop, restores terminal state, and terminates process."""
@@ -639,8 +640,8 @@ class FEDERaiDE(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        settings = toolbox.load_global_settings()
-        self.theme = settings.get("theme", "monokai")
+        team_settings = toolbox.load_team_settings()
+        self.theme = team_settings.get("theme", "monokai")
         tabs_widget = self.query_one("#editor_tabs", TabbedContent).query_one(Tabs)
         tabs_widget.can_focus = False
         
@@ -686,6 +687,11 @@ class FEDERaiDE(App):
         except Exception:
             self.query_one("#dir_tree").focus()
     
+    def action_open_teams(self):
+        if HAS_AI_AGENT:
+            try: self.query_one("#ai_agent_view").action_open_teams()
+            except Exception: pass
+
     def action_open_chat_manager(self):
         if HAS_AI_AGENT:
             try: self.query_one("#ai_agent_view").action_open_chat_manager()
@@ -1173,7 +1179,7 @@ class FEDERaiDE(App):
         tree.root.expand_all()
 
     def get_venv_root(self) -> str:
-        path = os.path.join(os.path.expanduser("~"), ".federate")
+        path = toolbox.get_team_dir()
         os.makedirs(path, exist_ok=True)
         return path
 
