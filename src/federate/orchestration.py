@@ -127,6 +127,8 @@ class AgentConfig:
     enabled_tools: List[str] = field(default_factory=list)
     disabled_tools: List[str] = field(default_factory=lambda: ["visual_computer_operation", "send_file_to_telegram"])
     tts_voice: str = "af_sarah" # <-- NEW: Unique Agent Voice Field (Default: Sarah)
+    tts_ref_audio: str = "" # Reference audio clip for zero-shot cloning (F5-TTS/IndicF5)
+    tts_ref_text: str = "" # Reference transcript for zero-shot cloning (F5-TTS/IndicF5)
     pronouns: str = "she/her" # <-- NEW: Binary Pronoun Field (Default: she/her)
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
     reasoning_effort: str = "none"

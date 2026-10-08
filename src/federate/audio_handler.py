@@ -168,8 +168,57 @@ def _download_file(url: str, dest_path: str, log_cb=None, max_retries=3):
                 
                 time.sleep(2) # Wait 2 seconds before retrying
 
+def wav_bytes_to_float32_16k(wav_bytes: bytes) -> np.ndarray:
+    """Converts WAV file bytes of any sample rate, channels, or bit depth into 16kHz mono float32 for STT."""
+    import io, wave
+    try:
+        with wave.open(io.BytesIO(wav_bytes), 'rb') as wf:
+            num_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            n_frames = wf.getnframes()
+            raw_data = wf.readframes(n_frames)
+        if sampwidth == 2:
+            samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+        elif sampwidth == 4:
+            samples = np.frombuffer(raw_data, dtype=np.int32).astype(np.float32) / 2147483648.0
+        elif sampwidth == 1:
+            samples = (np.frombuffer(raw_data, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+        else:
+            samples = np.frombuffer(raw_data, dtype=np.float32)
+        if num_channels > 1:
+            samples = samples.reshape(-1, num_channels).mean(axis=1)
+        if framerate != 16000 and len(samples) > 0:
+            duration = len(samples) / framerate
+            target_len = int(duration * 16000)
+            samples = np.interp(
+                np.linspace(0, len(samples), target_len, endpoint=False),
+                np.arange(len(samples)),
+                samples
+            ).astype(np.float32)
+        return samples
+    except Exception:
+        return np.array([], dtype=np.float32)
+
+def samples_to_wav_bytes(samples: np.ndarray, sample_rate: int = 24000) -> bytes:
+    """Converts raw float32 samples into standard 16-bit PCM WAV bytes."""
+    import io, wave
+    audio_int16 = np.int16(np.clip(samples, -1.0, 1.0) * 32767)
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(audio_int16.tobytes())
+    return buf.getvalue()
+
 def load_audio_config():
     default_config = {
+        "tts_enabled": False,
+        "stt_enabled": False,
+        "tts_model": "int8",
+        "stt_whisper_model": "tiny.en",
+        "stt_hotword_model": "sherpa-onnx-streaming-zipformer-en-2023-02-21",
         "tts_voice": "af_sarah",
         "tts_speed": 1.1,
         "stt_start_words": "AGENT, ASSISTANT, COMPUTER",
@@ -476,13 +525,15 @@ class MicTestModal(ModalScreen[None]):
             agent_hotword = config.get("stt_agent_hotword", "ATTENTION")
             energy_threshold = config.get("stt_energy_threshold", 0.005)
             
+            active_model = getattr(self.stt_manager, 'whisper_model', config.get('stt_whisper_model', 'tiny.en'))
             with Vertical(id="mictest_header_box"):
+                yield Label(f"[bold cyan]Active Offline STT Model:[/] [bold yellow]{active_model}[/bold yellow]")
                 yield Label(f"[bold green]Dictation Triggers:[/] {start_words}")
                 yield Label(f"[bold yellow]Pause/Stop Hotwords:[/] {stop_words}")
                 yield Label(f"[bold red]Deletion Hotwords:[/] {delete_words}")
                 yield Label(f"[bold cyan]Send/Execute Hotwords:[/] {send_words}")
                 yield Label(f"[bold magenta]Agent Invocation Trigger:[/] {agent_hotword} <agent_name>")
-                yield Label(f"[bold]Settings:[/] Device ID: {config.get('stt_device') or 'Default'}, Energy Gate: {energy_threshold}, Silence Timeout: {config.get('stt_silence_timeout', 1.2)}s, Pre-Roll: {config.get('stt_pre_roll', 0.5)}s, Min Speech: {config.get('stt_min_speech_duration', 0.4)}s, Agent Hotword: {config.get('stt_agent_hotword', 'ATTENTION')}, Threads: {config.get('stt_num_threads', 2)}, Feature Dim: {config.get('stt_feature_dim', 80)}, Decoding: {config.get('stt_decoding_method', 'modified_beam_search')}, Max Paths: {config.get('stt_max_active_paths', 14)}")
+                yield Label(f"[bold]Settings:[/] Device ID: {config.get('stt_device') or 'Default'}, Energy Gate: {energy_threshold}, Silence Timeout: {config.get('stt_silence_timeout', 1.2)}s, Pre-Roll: {config.get('stt_pre_roll', 0.5)}s, Min Speech: {config.get('stt_min_speech_duration', 0.4)}s, Hotword Model: {config.get('stt_hotword_model')}")
                 
             yield RichLog(id="mictest_log", markup=True, wrap=True, auto_scroll=True)
             
@@ -497,7 +548,8 @@ class MicTestModal(ModalScreen[None]):
         
         self.query_one("#mictest_close_btn").focus()
         
-        self.write_log("[bold green]Starting Hotword STT engine in sandboxed test mode...[/]")
+        active_model = getattr(self.stt_manager, 'whisper_model', 'unknown')
+        self.write_log(f"[bold green]Starting Hotword STT engine in test mode with Offline ASR model: [bold yellow]{active_model}[/bold yellow]...[/]")
         started = self.stt_manager.start_hotword()
         if not started:
             self.write_log("[bold red]Failed to initialize STT hardware. Check your Mic Device ID.[/]")
@@ -554,14 +606,21 @@ class TTSManager:
         config = load_audio_config()
         self.voice = config.get("tts_voice", "af_sarah")
         self.speed = config.get("tts_speed", 1.1)
+        new_tts = config.get("tts_model", "int8")
+        if getattr(self, "tts_model", None) != new_tts:
+            self.tts_model = new_tts
+            self.model = None
 
     def load_model(self):
         if not Kokoro or not sd: return
         if not self.model:
-            model_path = os.path.join(FEDERAIDE_SYS_DIR, "kokoro-v1.0.onnx")
+            config = load_audio_config()
+            tts_model_type = config.get("tts_model", "int8")
+            model_name = f"kokoro-v1.0.{tts_model_type}.onnx" if tts_model_type in ["int8", "fp16"] else "kokoro-v1.0.onnx"
+            model_path = os.path.join(FEDERAIDE_SYS_DIR, model_name)
             voices_path = os.path.join(FEDERAIDE_SYS_DIR, "voices-v1.0.bin")
             try:
-                _download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx", model_path)
+                _download_file(f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{model_name}", model_path)
                 _download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", voices_path)
             except Exception:
                 return
@@ -624,12 +683,24 @@ class TTSManager:
             try:
                 self.load_model()
                 if self.model and not self.stop_event.is_set():
-                    # Sentence splitting right before synthesis to avoid phoneme limit crashes on large blocks
+                    generated_chunks = []
+                    sample_rate = 24000
                     for s in re.split(r'(?<=[.!?])\s+', text):
                         if s.strip() and not self.stop_event.is_set():
-                            samples, sample_rate = self.model.create(s.strip(), voice=voice_to_use, speed=self.speed, lang="en-us")
+                            samples, sr = self.model.create(s.strip(), voice=voice_to_use, speed=self.speed, lang="en-us")
+                            sample_rate = sr
+                            generated_chunks.append(samples)
                             if not self.stop_event.is_set():
                                 self.audio_queue.put((samples, sample_rate))
+                    if generated_chunks:
+                        full_audio = np.concatenate(generated_chunks)
+                        wav_data = samples_to_wav_bytes(full_audio, sample_rate)
+                        import base64
+                        self.last_audio_b64 = f"data:audio/wav;base64,{base64.b64encode(wav_data).decode('ascii')}"
+                        out_dir = os.path.join(os.getcwd(), "audio_output")
+                        os.makedirs(out_dir, exist_ok=True)
+                        with open(os.path.join(out_dir, "last_speech.wav"), "wb") as f:
+                            f.write(wav_data)
             except Exception:
                 pass
             finally:
@@ -679,11 +750,13 @@ class TTSManager:
 # --- STT MANAGER ---
 
 class STTManager:
-    def __init__(self, callback, log_callback=None, tts_manager=None):
+    def __init__(self, callback, log_callback=None, tts_manager=None, status_callback=None):
         self.callback = callback
         self.log_callback = log_callback
         self.tts_manager = tts_manager
+        self.status_callback = status_callback
         self.is_running = False
+        self.is_direct_listening = False
         self.mode = None
         self.thread = None
         self.audio_queue = queue.Queue()
@@ -698,6 +771,17 @@ class STTManager:
 
     def reload_config(self):
         config = load_audio_config()
+        
+        new_whisper = config.get("stt_whisper_model", "tiny.en")
+        if getattr(self, "whisper_model", None) != new_whisper:
+            self.whisper_model = new_whisper
+            self.whisper_recognizer = None
+            
+        new_hotword = config.get("stt_hotword_model", "sherpa-onnx-streaming-zipformer-en-2023-02-21")
+        if getattr(self, "hotword_model", None) != new_hotword:
+            self.hotword_model = new_hotword
+            self.trigger_recognizer = None
+
         self.start_words = [w.strip().upper() for w in config.get("stt_start_words", "").split(",") if w.strip()]
         self.stop_words = [w.strip().upper() for w in config.get("stt_stop_words", "").split(",") if w.strip()]
         self.send_words = [w.strip().upper() for w in config.get("stt_send_words", "").split(",") if w.strip()]
@@ -749,36 +833,67 @@ class STTManager:
             raise ImportError("sherpa-onnx or sounddevice is not installed.")
             
         if not self.whisper_recognizer:
-            whisper_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-whisper-tiny.en")
-            try:
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main/tiny.en-encoder.onnx", os.path.join(whisper_dir, "tiny.en-encoder.onnx"), self.log_callback)
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main/tiny.en-decoder.onnx", os.path.join(whisper_dir, "tiny.en-decoder.onnx"), self.log_callback)
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/main/tiny.en-tokens.txt", os.path.join(whisper_dir, "tiny.en-tokens.txt"), self.log_callback)
-            except Exception as e:
-                raise RuntimeError(f"Failed to load Whisper STT model files: {e}")
-                
-            self.whisper_recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
-                encoder=f"{whisper_dir}/tiny.en-encoder.onnx",
-                decoder=f"{whisper_dir}/tiny.en-decoder.onnx",
-                tokens=f"{whisper_dir}/tiny.en-tokens.txt",
-                num_threads=4
-            )
+            model_id = self.whisper_model
+            if model_id == "indicconformer":
+                model_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-indicconformer-hi")
+                try:
+                    _download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/tokens.txt", os.path.join(model_dir, "tokens.txt"), self.log_callback)
+                    _download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi/model.int8.onnx", os.path.join(model_dir, "model.int8.onnx"), self.log_callback)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load IndicConformer model files: {e}")
+
+                self.whisper_recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
+                    model=os.path.join(model_dir, "model.int8.onnx"),
+                    tokens=os.path.join(model_dir, "tokens.txt"),
+                    num_threads=4,
+                    decoding_method="greedy_search"
+                )
+            elif model_id == "indicwhisper":
+                model_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-indicwhisper-hi-hinglish")
+                try:
+                    _download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/encoder.int8.onnx", os.path.join(model_dir, "encoder.int8.onnx"), self.log_callback)
+                    _download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/decoder.int8.onnx", os.path.join(model_dir, "decoder.int8.onnx"), self.log_callback)
+                    _download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/tokens.txt", os.path.join(model_dir, "tokens.txt"), self.log_callback)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load IndicWhisper model files: {e}")
+
+                self.whisper_recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
+                    encoder=os.path.join(model_dir, "encoder.int8.onnx"),
+                    decoder=os.path.join(model_dir, "decoder.int8.onnx"),
+                    tokens=os.path.join(model_dir, "tokens.txt"),
+                    num_threads=4
+                )
+            else:
+                whisper_dir = os.path.join(FEDERAIDE_SYS_DIR, f"sherpa-onnx-whisper-{model_id}")
+                try:
+                    _download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{model_id}/resolve/main/{model_id}-encoder.onnx", os.path.join(whisper_dir, f"{model_id}-encoder.onnx"), self.log_callback)
+                    _download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{model_id}/resolve/main/{model_id}-decoder.onnx", os.path.join(whisper_dir, f"{model_id}-decoder.onnx"), self.log_callback)
+                    _download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{model_id}/resolve/main/{model_id}-tokens.txt", os.path.join(whisper_dir, f"{model_id}-tokens.txt"), self.log_callback)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load Whisper STT model files: {e}")
+
+                self.whisper_recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
+                    encoder=os.path.join(whisper_dir, f"{model_id}-encoder.onnx"),
+                    decoder=os.path.join(whisper_dir, f"{model_id}-decoder.onnx"),
+                    tokens=os.path.join(whisper_dir, f"{model_id}-tokens.txt"),
+                    num_threads=4
+                )
             
         if not self.trigger_recognizer and self.mode == "hotword":
-            model_dir = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-streaming-zipformer-en-2023-02-21")
+            model_dir = os.path.join(FEDERAIDE_SYS_DIR, self.hotword_model)
             try:
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/tokens.txt", os.path.join(model_dir, "tokens.txt"), self.log_callback)
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/encoder-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"), self.log_callback)
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/decoder-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"), self.log_callback)
-                _download_file("https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-02-21/resolve/main/joiner-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"), self.log_callback)
+                _download_file(f"https://huggingface.co/csukuangfj/{self.hotword_model}/resolve/main/tokens.txt", os.path.join(model_dir, "tokens.txt"), self.log_callback)
+                _download_file(f"https://huggingface.co/csukuangfj/{self.hotword_model}/resolve/main/encoder-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"), self.log_callback)
+                _download_file(f"https://huggingface.co/csukuangfj/{self.hotword_model}/resolve/main/decoder-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"), self.log_callback)
+                _download_file(f"https://huggingface.co/csukuangfj/{self.hotword_model}/resolve/main/joiner-epoch-99-avg-1.int8.onnx", os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"), self.log_callback)
             except Exception as e:
                 raise RuntimeError(f"Failed to load streaming hotword transducer model files: {e}")
                 
             self.trigger_recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
-                tokens=f"{model_dir}/tokens.txt",
-                encoder=f"{model_dir}/encoder-epoch-99-avg-1.int8.onnx",
-                decoder=f"{model_dir}/decoder-epoch-99-avg-1.int8.onnx",
-                joiner=f"{model_dir}/joiner-epoch-99-avg-1.int8.onnx",
+                tokens=os.path.join(model_dir, "tokens.txt"),
+                encoder=os.path.join(model_dir, "encoder-epoch-99-avg-1.int8.onnx"),
+                decoder=os.path.join(model_dir, "decoder-epoch-99-avg-1.int8.onnx"),
+                joiner=os.path.join(model_dir, "joiner-epoch-99-avg-1.int8.onnx"),
                 num_threads=getattr(self, "num_threads", 2),
                 sample_rate=self.SAMPLE_RATE,
                 feature_dim=getattr(self, "feature_dim", 80),
@@ -817,6 +932,96 @@ class STTManager:
             if self.log_callback: self.log_callback(f"[bold red]STT Error:[/bold red] {e}")
             return False
 
+    def start_direct_dictation(self, action: str = "append", on_complete=None):
+        """Starts continuous push-to-talk recording without noise gate or silence timeouts."""
+        self.stop(join=True)
+        self.direct_stt_action = action
+        self.on_direct_complete = on_complete
+        try:
+            self.mode = "direct"
+            self.is_running = True
+            self.audio_queue = queue.Queue()
+            self.thread = threading.Thread(target=self._direct_dictation_loop, daemon=True)
+            self.thread.start()
+            return True
+        except Exception as e:
+            self.mode = None
+            if self.log_callback: self.log_callback(f"[bold red]STT Error:[/bold red] {e}")
+            return False
+
+    def _direct_dictation_loop(self):
+        try:
+            self.load_models()
+        except Exception as e:
+            if self.log_callback: self.log_callback(f"[bold red]STT Model Error:[/bold red] {e}")
+            self.is_running = False
+            self.mode = None
+            return
+
+        chunk_samples = int(self.SAMPLE_RATE * self.CHUNK_DURATION)
+        audio_buffer = []
+
+        if self.tts_manager:
+            self.tts_manager.stop_all_audio()
+
+        def audio_callback(indata, frames, time_info, status):
+            if self.is_running:
+                self.audio_queue.put(indata.copy())
+
+        try:
+            with AUDIO_LOCK:
+                input_stream = sd.InputStream(
+                    samplerate=self.SAMPLE_RATE,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=chunk_samples,
+                    device=self.device,
+                    callback=audio_callback
+                )
+            with input_stream:
+                self.is_direct_listening = True
+                if getattr(self, "status_callback", None):
+                    self.status_callback()
+
+                while self.is_running:
+                    try:
+                        chunk = self.audio_queue.get(timeout=0.05)
+                        audio_buffer.append(chunk)
+                    except queue.Empty:
+                        continue
+
+            # Stream closed; listening stopped immediately
+            self.is_direct_listening = False
+            if getattr(self, "status_callback", None):
+                self.status_callback()
+
+            # Drain remaining chunks when F12 is released
+            while not self.audio_queue.empty():
+                try:
+                    audio_buffer.append(self.audio_queue.get_nowait())
+                except Exception:
+                    break
+
+            if audio_buffer:
+                full_audio = np.concatenate(audio_buffer).flatten()
+                if len(full_audio) >= (self.SAMPLE_RATE * 0.2):
+                    text = self._flush_whisper([full_audio], [])
+                    if text:
+                        action = getattr(self, "direct_stt_action", "append")
+                        self.callback(text, action=action)
+        except Exception as e:
+            if self.log_callback: self.log_callback(f"[bold red]Direct STT Hardware Error:[/bold red] {e}")
+        finally:
+            self.is_direct_listening = False
+            self.is_running = False
+            self.mode = None
+            if getattr(self, "status_callback", None):
+                self.status_callback()
+            comp_cb = getattr(self, "on_direct_complete", None)
+            if callable(comp_cb):
+                try: comp_cb()
+                except Exception: pass
+
     def start_smart_mic(self):
         if self.mode == "smart": return True
         self.stop()
@@ -832,11 +1037,53 @@ class STTManager:
             if self.log_callback: self.log_callback(f"[bold red]STT Error:[/bold red] {e}")
             return False
 
-    def stop(self):
+    def stop(self, join: bool = True):
         self.is_running = False
+        if join and self.thread and self.thread.is_alive() and threading.current_thread() != self.thread:
+            try:
+                self.thread.join(timeout=1.0)
+            except Exception:
+                pass
+            self.thread = None
         self.mode = None
         self.pending_prefix = ""
         self.active_agent_map = {}
+
+    def transcribe_wav_bytes(self, wav_bytes: bytes) -> str:
+        """Transcribes raw WAV audio bytes into text using offline Whisper."""
+        try:
+            self.load_models()
+            if not self.whisper_recognizer:
+                return ""
+            samples = wav_bytes_to_float32_16k(wav_bytes)
+            if len(samples) == 0:
+                return ""
+            w_stream = self.whisper_recognizer.create_stream()
+            w_stream.accept_waveform(self.SAMPLE_RATE, samples)
+            self.whisper_recognizer.decode_stream(w_stream)
+            return w_stream.result.text.strip()
+        except Exception as e:
+            return f"[Transcription error: {e}]"
+
+    def transcribe_file(self, filepath: str) -> str:
+        """Transcribes a local WAV file into text."""
+        if not os.path.exists(filepath):
+            return ""
+        try:
+            with open(filepath, "rb") as f:
+                return self.transcribe_wav_bytes(f.read())
+        except Exception as e:
+            return f"[Transcription error: {e}]"
+
+    def transcribe_base64(self, b64_str: str) -> str:
+        """Decodes and transcribes a base64 audio URI."""
+        import base64
+        try:
+            clean_b64 = re.sub(r'^data:audio/[a-zA-Z]+;base64,', '', b64_str.strip())
+            wav_bytes = base64.b64decode(clean_b64)
+            return self.transcribe_wav_bytes(wav_bytes)
+        except Exception as e:
+            return f"[Transcription error: {e}]"
 
     def _flush_whisper(self, audio_buffer, words_to_strip):
         """Helper to transcribe the buffer and strip trigger words."""
@@ -1066,6 +1313,19 @@ class STTManager:
                             self.trigger_recognizer.reset(trigger_stream)
                             trigger_stream = self.trigger_recognizer.create_stream()
 
+                while not self.audio_queue.empty():
+                    try:
+                        c = self.audio_queue.get_nowait()
+                        if is_recording: audio_buffer.append(c)
+                    except Exception:
+                        break
+
+                if is_recording and audio_buffer:
+                    text = self._flush_whisper(audio_buffer, self.stop_words)
+                    if text:
+                        final_text = self.pending_prefix + text
+                        self.callback(final_text, action="append")
+
         except Exception as e:
             import traceback
             dbg(f"FATAL EXCEPTION inside input_stream context: {e}")
@@ -1093,6 +1353,7 @@ class STTManager:
         preroll_chunks_limit = int(self.pre_roll / self.CHUNK_DURATION)
         
         audio_buffer = []
+        total_session_chunks = []
         preroll_buffer = collections.deque(maxlen=preroll_chunks_limit)
         
         is_speaking = False
@@ -1104,9 +1365,10 @@ class STTManager:
         try:
             with sd.InputStream(samplerate=self.SAMPLE_RATE, channels=1, dtype="float32", blocksize=chunk_samples, device=self.device, callback=audio_callback):
                 while self.is_running:
-                    try: chunk = self.audio_queue.get(timeout=0.5)
+                    try: chunk = self.audio_queue.get(timeout=0.1)
                     except queue.Empty: continue
                         
+                    total_session_chunks.append(chunk)
                     rms = np.sqrt(np.mean(np.square(chunk)))
                     
                     if rms > self.energy_threshold:
@@ -1126,14 +1388,32 @@ class STTManager:
                                 
                                 full_audio = np.concatenate(audio_buffer).flatten()
                                 audio_buffer = []
+                                total_session_chunks = []
                                 silence_counter = 0
                                 
                                 if len(full_audio) > (self.SAMPLE_RATE * self.min_speech_duration):
                                     text = self._flush_whisper([full_audio], [])
                                     if text:
-                                        self.callback(text, action="append") # Append to UI so you can edit
+                                        self.callback(text, action="append")
                         else:
                             preroll_buffer.append(chunk)
+
+                # Loop exited (user pressed F12 to stop): drain remaining audio and transcribe
+                while not self.audio_queue.empty():
+                    try:
+                        c = self.audio_queue.get_nowait()
+                        if is_speaking: audio_buffer.append(c)
+                        total_session_chunks.append(c)
+                    except Exception:
+                        break
+
+                pending = audio_buffer if (is_speaking and audio_buffer) else total_session_chunks
+                if pending:
+                    full_audio = np.concatenate(pending).flatten()
+                    if len(full_audio) >= (self.SAMPLE_RATE * 0.2):
+                        text = self._flush_whisper([full_audio], [])
+                        if text:
+                            self.callback(text, action="append")
         except Exception as e:
             self.is_running = False
             self.mode = None

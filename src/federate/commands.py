@@ -31,7 +31,7 @@ SLASH_COMMANDS =[
     "/copy",
     "/directory", "/dir",
     "/theme",
-    "/tts", "/stt", "/readback", "/speech",
+    "/tts", "/stt", "/readback", "/speech", "/models",
     "/mictest",
     "/telegram",
     "/mcp",
@@ -312,19 +312,46 @@ def process_slash_command(command: str, agent_view):
     elif cmd == "/tts":
         agent_view.tts_enabled = not getattr(agent_view, "tts_enabled", False)
         status = "ON" if agent_view.tts_enabled else "OFF"
+        import audio_handler
+        cfg = audio_handler.load_audio_config()
+        cfg["tts_enabled"] = agent_view.tts_enabled
+        audio_handler.save_audio_config(cfg)
+        agent_view.update_status_bar()
         agent_view.log_to_ui(f"[bold cyan] Text-to-Speech (TTS) is now {status}.[/bold cyan]")
 
     elif cmd == "/stt":
-        # Toggle HOTWORD mode
+        if args and args[0].lower() in ["send", "autosend", "submit"]:
+            import toolbox
+            g_cfg = toolbox.load_global_settings()
+            g_cfg["direct_stt_send_on_release"] = True
+            toolbox.save_global_settings(g_cfg)
+            agent_view.log_to_ui("[bold green] Hold-to-Talk (F12) set to: Send immediately on release.[/bold green]")
+            return
+        elif args and args[0].lower() in ["preview", "append", "review"]:
+            import toolbox
+            g_cfg = toolbox.load_global_settings()
+            g_cfg["direct_stt_send_on_release"] = False
+            toolbox.save_global_settings(g_cfg)
+            agent_view.log_to_ui("[bold green] Hold-to-Talk (F12) set to: Preview in chat box on release.[/bold green]")
+            return
+
         if getattr(agent_view.stt_manager, "mode", None) == "hotword":
             agent_view.stt_manager.stop()
+            agent_view.stt_enabled = False
             agent_view.log_to_ui("[bold yellow] Hotword STT is now OFF.[/bold yellow]")
         else:
             started = agent_view.stt_manager.start_hotword()
             if started:
+                agent_view.stt_enabled = True
                 agent_view.log_to_ui("[bold green] Hotword STT is starting, standby ...[/bold green]")
             else:
+                agent_view.stt_enabled = False
                 agent_view.log_to_ui("[bold red]Failed to start Hotword STT. Check logs/dependencies.[/bold red]")
+        import audio_handler
+        cfg = audio_handler.load_audio_config()
+        cfg["stt_enabled"] = getattr(agent_view, "stt_enabled", False)
+        audio_handler.save_audio_config(cfg)
+        agent_view.update_status_bar()
     
     elif cmd == "/mictest":
         try:
@@ -342,6 +369,10 @@ def process_slash_command(command: str, agent_view):
                 
         from audio_handler import AudioConfigModal
         agent_view.app.push_screen(AudioConfigModal(), handle_audio_config)
+        
+    elif cmd == "/models":
+        from agent import ModelsModal
+        agent_view.app.push_screen(ModelsModal(agent_view))
     
     elif cmd == "/telegram":
         def handle_tele_config(result):
@@ -520,6 +551,7 @@ def handle_ampersand_commands(prompt: str, agent_view) -> str:
     pattern = r'&((?:\\ |\S)+)'
     
     IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf'}
+    AUDIO_EXTENSIONS = {'.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac'}
     
     def replacer(match):
         token = match.group(0)
@@ -533,6 +565,10 @@ def handle_ampersand_commands(prompt: str, agent_view) -> str:
             if ext in IMAGE_EXTENSIONS:
                 agent_view.log_to_ui(f"[#808080]Tool Result: Attached image `{path_str}`[/]")
                 return f"\n[Attached Image: {full_path}]\n"
+            elif ext in AUDIO_EXTENSIONS:
+                agent_view.log_to_ui(f"[#808080]Transcribing audio file `{path_str}`...[/]")
+                transcription = agent_view.stt_manager.transcribe_file(full_path)
+                return f"\n--- Audio Transcription of {path_str} ---\n{transcription}\n--- End Transcription of {path_str} ---\n"
                 
             try:
                 lines = []
