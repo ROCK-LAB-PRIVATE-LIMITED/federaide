@@ -794,6 +794,10 @@ class GlobalSettingsModal(ModalScreen[str]):
                     yield Label("Controls whether tool outputs shared between agents are hidden behind stubs (Private) or broadcasted immediately (Public).", classes="field_help")
                     yield Select([("Private (Token Efficient)", "private"), ("Public", "public")], value="private", id="tool_result_visibility", allow_blank=False)
 
+                yield Label("Direct Speech-to-Text (Hold-to-Talk)", classes="section_label")
+                with Vertical(classes="field_container"):
+                    yield Checkbox("Send prompt immediately upon releasing Hold-to-Talk (F12)", id="direct_stt_send_on_release")
+
                 yield Label("Context Compression", classes="section_label")
                 with Vertical(classes="field_container"):
                     yield Label("Pre-execution Compression Mode", classes="field_label")
@@ -840,6 +844,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#precompress_mode", Select).value = config.get("precompress_mode", "self")
         self.query_one("#keep_verbatim_count", Input).value = str(config.get("keep_verbatim_count", 1))
         self.query_one("#tool_result_visibility", Select).value = config.get("tool_result_visibility", "private")
+        self.query_one("#direct_stt_send_on_release", Checkbox).value = config.get("direct_stt_send_on_release", False)
         
         self.query_one("#research_images_max", Input).value = str(config.get("research_images_max", 10))
         self.query_one("#research_image_retries", Input).value = str(config.get("research_image_retries", 1))
@@ -974,8 +979,10 @@ class GlobalSettingsModal(ModalScreen[str]):
         tool_result_visibility = str(tool_result_vis_val) if tool_result_vis_val != Select.BLANK else "private"
         precompress_mode_val = self.query_one("#precompress_mode", Select).value
         precompress_mode = str(precompress_mode_val) if precompress_mode_val != Select.BLANK else "self"
+        direct_stt_send_on_release = self.query_one("#direct_stt_send_on_release", Checkbox).value
 
         config = {
+            "direct_stt_send_on_release": direct_stt_send_on_release,
             "tool_result_visibility": tool_result_visibility,
             "precompress_mode": precompress_mode,
             "user_name": user_name,
@@ -1675,31 +1682,52 @@ class TeamDeleteModal(ModalScreen[str]):
 class GitConflictModal(ModalScreen[str]):
     DEFAULT_CSS = """
     GitConflictModal { align: center middle; background: $background 60%; }
-    #conflict_dialog { width: 70; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    #conflict_dialog { width: 75; height: auto; border: thick $error; background: $surface; padding: 1 2; }
     .conflict_msg { margin: 1 0; text-wrap: wrap; height: auto; }
     .conflict_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
     .conflict_buttons Button { margin-left: 1; }
     """
+    def __init__(self, target_team_dir: str = None):
+        super().__init__()
+        self.target_team_dir = target_team_dir or toolbox.get_team_dir()
+
     def compose(self) -> ComposeResult:
         with Vertical(id="conflict_dialog"):
             yield Label(" Git History Conflict Detected!", classes="pane_title")
             yield Label(
-                "The local and remote repository histories have diverged and cannot be automatically merged.\n\n"
-                "Which branch would you like to keep?\n"
-                "• Keep Local: Overwrites remote with your local files (Force Push).\n"
+                "The local and remote repository histories have diverged.\n\n"
+                "• Attempt Merge: Let Git automatically combine changes from both sides.\n"
+                "• Keep Local: Overwrites remote with your local changes (Force Push).\n"
                 "• Keep Remote: Overwrites local files with the remote repository.",
+                id="conflict_desc_label",
                 classes="conflict_msg"
             )
             with Horizontal(classes="conflict_buttons"):
+                yield Button("Attempt Merge", id="btn_attempt_merge", variant="primary")
                 yield Button("Keep Local (Force Push)", id="btn_keep_local", variant="success")
                 yield Button("Keep Remote (Reset)", id="btn_keep_remote", variant="warning")
                 yield Button("Cancel", id="btn_abort", variant="error")
 
     @on(Button.Pressed)
     def handle_press(self, event: Button.Pressed):
-        if event.button.id == "btn_keep_local":
+        btn_id = event.button.id
+        if btn_id == "btn_attempt_merge":
+            btn = self.query_one("#btn_attempt_merge", Button)
+            btn.disabled = True
+            btn.label = "Merging..."
+            # Try Git-level clean merge
+            ok, msg = toolbox.sync_team_remote(action="auto-merge", team_dir=self.target_team_dir)
+            if ok:
+                self.dismiss("merged")
+            else:
+                btn.label = "Merge Failed"
+                self.query_one("#conflict_desc_label", Label).update(
+                    "[bold red]Automatic Git merge was not possible due to conflicting line changes.[/bold red]\n\n"
+                    "Please choose which version to retain:"
+                )
+        elif btn_id == "btn_keep_local":
             self.dismiss("local")
-        elif event.button.id == "btn_keep_remote":
+        elif btn_id == "btn_keep_remote":
             self.dismiss("remote")
         else:
             self.dismiss("abort")
@@ -1809,7 +1837,10 @@ class TeamsModal(ModalScreen[None]):
                 elif msg == "CONFLICT":
                     def _on_conflict():
                         def _resolve(choice):
-                            if choice == "local":
+                            if choice == "merged":
+                                self.notify("Changes merged cleanly by Git! Synchronizing...", severity="information")
+                                self._handle_git_action("sync", target_team_dir)
+                            elif choice == "local":
                                 self.notify("Overwriting remote with local state (force push)...", severity="warning")
                                 self._handle_git_action("force-push", target_team_dir)
                             elif choice == "remote":
@@ -1818,7 +1849,7 @@ class TeamsModal(ModalScreen[None]):
                             else:
                                 self.notify("Git operation cancelled by user.", severity="information")
                                 _reenable()
-                        self.app.push_screen(GitConflictModal(), _resolve)
+                        self.app.push_screen(GitConflictModal(target_team_dir=target_team_dir), _resolve)
                     self.app.call_from_thread(_on_conflict)
                     return
                 else:
@@ -2113,6 +2144,282 @@ class TeamsModal(ModalScreen[None]):
                 t_path = os.path.abspath(os.path.expanduser(t.get("path", "")))
                 self.dismiss()
                 self.agent_view.switch_team(t_path, display_name=t.get("name"))
+
+class ModelsModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    ModelsModal { align: center middle; background: $background 60%; }
+    #models_dialog { width: 95; height: 92%; border: thick $primary; background: $surface; padding: 1 2; }
+    .models_row { layout: horizontal; height: auto; margin-top: 1; align: left middle; }
+    .models_row Select { width: 1fr; }
+    .models_row Button { width: 20; margin-left: 1; }
+    #btn_convert_embed { width: 100%; margin-top: 1; }
+    .active_model_status { color: $accent; text-style: italic; margin-top: 0; }
+    #models_log { height: 1fr; border: round $accent; background: $boost; margin-top: 1; }
+    #models_actions { height: auto; align: right middle; margin-top: 1; }
+    """
+
+    def __init__(self, agent_view, **kwargs):
+        super().__init__(**kwargs)
+        self.agent_view = agent_view
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="models_dialog"):
+            yield Label(" Model Manager", classes="pane_title")
+            
+            yield Label("Text-to-Speech (Kokoro)", classes="section_label")
+            with Horizontal(classes="models_row"):
+                yield Select([("INT8 (Fast, Default)", "int8"), ("FP16 (High Quality)", "fp16"), ("FP32 (Max Quality)", "fp32")], value="int8", id="sel_tts_model", allow_blank=False)
+                yield Button("Redownload", id="btn_dl_tts", variant="warning")
+                yield Button("Test TTS", id="btn_test_tts", variant="primary")
+
+            yield Label("Speech-to-Text (Whisper & Indic Offline)", classes="section_label")
+            with Horizontal(classes="models_row"):
+                yield Select([
+                    ("Tiny English (Fastest, Default)", "tiny.en"),
+                    ("Base English", "base.en"),
+                    ("Small English", "small.en"),
+                    ("Medium English", "medium.en"),
+                    ("Medium Multilingual (99+ Langs)", "medium"),
+                    ("IndicWhisper (Hindi & Hinglish)", "indicwhisper"),
+                    ("IndicConformer (AI4Bharat Indic CTC)", "indicconformer")
+                ], value="tiny.en", id="sel_stt_whisper", allow_blank=False)
+                yield Button("Redownload", id="btn_dl_whisper", variant="warning")
+
+            yield Label("Hotword Engine (Zipformer)", classes="section_label")
+            with Horizontal(classes="models_row"):
+                yield Select([("English (Default)", "sherpa-onnx-streaming-zipformer-en-2023-02-21")], value="sherpa-onnx-streaming-zipformer-en-2023-02-21", id="sel_stt_hotword", allow_blank=False)
+                yield Button("Redownload", id="btn_dl_hotword", variant="warning")
+                yield Button("Test STT", id="btn_test_stt", variant="primary")
+
+            yield Label("Semantic Search / Embeddings (Cybertron)", classes="section_label")
+            yield Label("Currently Set: ...", id="active_embed_label", classes="active_model_status")
+            with Horizontal(classes="models_row"):
+                yield Select([
+                    ("all-MiniLM-L6-v2 (Fast, Default - 384d)", "sentence-transformers/all-MiniLM-L6-v2"), 
+                    ("all-MiniLM-L12-v2 (384d)", "sentence-transformers/all-MiniLM-L12-v2"),
+                    ("LaBSE (Multilingual 109 Langs - 768d)", "setu4993/LaBSE"),
+                    ("LEALLA-small (Fast Multilingual - 192d)", "setu4993/LEALLA-small"),
+                    ("LEALLA-base (Multilingual - 256d)", "setu4993/LEALLA-base"),
+                    ("LEALLA-large (Multilingual - 512d)", "setu4993/LEALLA-large")
+                ], value="sentence-transformers/all-MiniLM-L6-v2", id="sel_embed_model", allow_blank=False)
+                yield Button("Redownload", id="btn_dl_embed", variant="warning")
+                yield Button("Test Embeddings", id="btn_test_embed", variant="primary")
+
+            yield Button("Convert Episodic Memory", id="btn_convert_embed", variant="success")
+            yield RichLog(id="models_log", auto_scroll=True, markup=True)
+            
+            with Horizontal(id="models_actions"):
+                yield Button("Save Configurations", id="btn_save_models", variant="success")
+                yield Button("Close", id="btn_close_models", variant="error")
+
+    def on_mount(self):
+        import audio_handler, toolbox
+        config = audio_handler.load_audio_config()
+        self.query_one("#sel_tts_model", Select).value = config.get("tts_model", "int8")
+        self.query_one("#sel_stt_whisper", Select).value = config.get("stt_whisper_model", "tiny.en")
+        self.query_one("#sel_stt_hotword", Select).value = config.get("stt_hotword_model", "sherpa-onnx-streaming-zipformer-en-2023-02-21")
+        
+        g_config = toolbox.load_global_settings()
+        current_embed = g_config.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+        self.query_one("#sel_embed_model", Select).value = current_embed
+        self._update_active_label(current_embed)
+
+    def _update_active_label(self, model_name: str):
+        try:
+            lbl = self.query_one("#active_embed_label", Label)
+            lbl.update(f"Currently Set: [bold green]{model_name}[/bold green]")
+        except Exception:
+            pass
+
+    def write_log(self, msg: str):
+        try:
+            log_widget = self.query_one("#models_log", RichLog)
+            self.app.call_from_thread(log_widget.write, msg)
+        except Exception:
+            pass
+
+    @work(thread=True)
+    def download_embeddings(self):
+        val = self.query_one("#sel_embed_model", Select).value
+        import shutil
+        from toolbox import FEDERAIDE_SYS_DIR
+        
+        model_path = os.path.join(FEDERAIDE_SYS_DIR, "models", val)
+        if os.path.exists(model_path):
+            try:
+                shutil.rmtree(model_path)
+                self.write_log(f"[yellow]Deleted existing embedding model cache for {val}.[/yellow]")
+            except Exception as e:
+                self.write_log(f"[red]Failed to delete existing model cache: {e}[/red]")
+                
+        self.write_log(f"[cyan]Triggering redownload for {val}...[/cyan]")
+        self.test_embeddings()
+
+    @work(thread=True)
+    def test_embeddings(self):
+        val = self.query_one("#sel_embed_model", Select).value
+        self.write_log(f"[yellow]Testing embeddings with model '{val}'...[/yellow]")
+        try:
+            import toolbox
+            from semantic_search import SemanticSearchEngine
+            db_path = os.path.join(toolbox.get_team_dir(), "episodic_memory.db")
+            engine = SemanticSearchEngine(db_path=db_path)
+            res = engine.get_embeddings("This is a test sentence for semantic embeddings.", model_name=val, log_cb=self.write_log)
+            
+            if res and len(res) > 0 and "vector" in res[0]:
+                vec_dim = len(res[0]["vector"])
+                self.write_log(f"[bold green]✓ Success! Generated {vec_dim}-dimensional embedding vector with '{val}'.[/bold green]")
+            else:
+                self.write_log("[red]Failed to get valid embeddings. Check debug messages above.[/red]")
+        except Exception as e:
+            self.write_log(f"[red]Error testing embeddings: {e}[/red]")
+
+    @work(thread=True)
+    def convert_episodic_memory(self):
+        val = self.query_one("#sel_embed_model", Select).value
+        self.write_log(f"[bold cyan]Starting episodic memory conversion to '{val}'...[/bold cyan]")
+        
+        # Save model configuration first so subsequent operations know the target model
+        import toolbox
+        g_config = toolbox.load_global_settings()
+        g_config["embedding_model"] = val
+        toolbox.save_global_settings(g_config)
+        self.app.call_from_thread(self._update_active_label, val)
+        
+        try:
+            from semantic_search import SemanticSearchEngine
+            db_path = os.path.join(toolbox.get_team_dir(), "episodic_memory.db")
+            engine = SemanticSearchEngine(db_path=db_path)
+            sessions_dir = toolbox.get_storage_path("sessions")
+            
+            def on_progress(current, total, pct, msg):
+                self.write_log(f"[cyan][{current}/{total}] ({pct:.1f}%)[/cyan] {msg}")
+                
+            count = engine.reindex_all_sessions(sessions_dir, model_name=val, progress_cb=on_progress, log_cb=self.write_log)
+            self.write_log(f"[bold green]✓ Episodic memory conversion complete! {count} messages re-indexed into '{val}'.[/bold green]")
+            self.agent_view.log_to_ui(f"[bold green]Episodic memory converted to {val} ({count} messages).[/bold green]")
+        except Exception as e:
+            self.write_log(f"[bold red]Conversion failed: {e}[/bold red]")
+
+    @work(thread=True)
+    def download_tts(self):
+        val = self.query_one("#sel_tts_model", Select).value
+        import audio_handler
+        from toolbox import FEDERAIDE_SYS_DIR
+        model_name = f"kokoro-v1.0.{val}.onnx" if val in ["int8", "fp16"] else "kokoro-v1.0.onnx"
+        mp = os.path.join(FEDERAIDE_SYS_DIR, model_name)
+        vp = os.path.join(FEDERAIDE_SYS_DIR, "voices-v1.0.bin")
+        if os.path.exists(mp): os.remove(mp)
+        if os.path.exists(vp): os.remove(vp)
+        self.write_log(f"[yellow]Deleted existing TTS files. Redownloading {model_name}...[/yellow]")
+        try:
+            audio_handler._download_file(f"https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/{model_name}", mp, log_cb=self.write_log)
+            audio_handler._download_file("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", vp, log_cb=self.write_log)
+            self.write_log("[green]TTS Download complete![/green]")
+            self.agent_view.tts_manager.model = None
+        except Exception as e:
+            self.write_log(f"[red]Error: {e}[/red]")
+
+    @work(thread=True)
+    def download_whisper(self):
+        val = self.query_one("#sel_stt_whisper", Select).value
+        import audio_handler, shutil
+        from toolbox import FEDERAIDE_SYS_DIR
+        if val == "indicconformer":
+            wp = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-indicconformer-hi")
+        elif val == "indicwhisper":
+            wp = os.path.join(FEDERAIDE_SYS_DIR, "sherpa-onnx-indicwhisper-hi-hinglish")
+        else:
+            wp = os.path.join(FEDERAIDE_SYS_DIR, f"sherpa-onnx-whisper-{val}")
+
+        if os.path.exists(wp): shutil.rmtree(wp)
+        self.write_log(f"[yellow]Deleted existing STT model files. Redownloading {val}...[/yellow]")
+        try:
+            if val == "indicconformer":
+                audio_handler._download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/tokens.txt", os.path.join(wp, "tokens.txt"), log_cb=self.write_log)
+                audio_handler._download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi/model.int8.onnx", os.path.join(wp, "model.int8.onnx"), log_cb=self.write_log)
+            elif val == "indicwhisper":
+                audio_handler._download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/encoder.int8.onnx", os.path.join(wp, "encoder.int8.onnx"), log_cb=self.write_log)
+                audio_handler._download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/decoder.int8.onnx", os.path.join(wp, "decoder.int8.onnx"), log_cb=self.write_log)
+                audio_handler._download_file("https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main/hi-hinglish-apex/tokens.txt", os.path.join(wp, "tokens.txt"), log_cb=self.write_log)
+            else:
+                audio_handler._download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{val}/resolve/main/{val}-encoder.onnx", os.path.join(wp, f"{val}-encoder.onnx"), log_cb=self.write_log)
+                audio_handler._download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{val}/resolve/main/{val}-decoder.onnx", os.path.join(wp, f"{val}-decoder.onnx"), log_cb=self.write_log)
+                audio_handler._download_file(f"https://huggingface.co/csukuangfj/sherpa-onnx-whisper-{val}/resolve/main/{val}-tokens.txt", os.path.join(wp, f"{val}-tokens.txt"), log_cb=self.write_log)
+            self.write_log(f"[green]STT Model ({val}) Download complete![/green]")
+            self.agent_view.stt_manager.whisper_recognizer = None
+        except Exception as e:
+            self.write_log(f"[red]Error: {e}[/red]")
+
+    @work(thread=True)
+    def download_hotword(self):
+        val = self.query_one("#sel_stt_hotword", Select).value
+        import audio_handler, shutil
+        from toolbox import FEDERAIDE_SYS_DIR
+        wp = os.path.join(FEDERAIDE_SYS_DIR, val)
+        if os.path.exists(wp): shutil.rmtree(wp)
+        self.write_log(f"[yellow]Deleted existing Hotword model. Redownloading {val}...[/yellow]")
+        try:
+            audio_handler._download_file(f"https://huggingface.co/csukuangfj/{val}/resolve/main/tokens.txt", os.path.join(wp, "tokens.txt"), log_cb=self.write_log)
+            audio_handler._download_file(f"https://huggingface.co/csukuangfj/{val}/resolve/main/encoder-epoch-99-avg-1.int8.onnx", os.path.join(wp, "encoder-epoch-99-avg-1.int8.onnx"), log_cb=self.write_log)
+            audio_handler._download_file(f"https://huggingface.co/csukuangfj/{val}/resolve/main/decoder-epoch-99-avg-1.int8.onnx", os.path.join(wp, "decoder-epoch-99-avg-1.int8.onnx"), log_cb=self.write_log)
+            audio_handler._download_file(f"https://huggingface.co/csukuangfj/{val}/resolve/main/joiner-epoch-99-avg-1.int8.onnx", os.path.join(wp, "joiner-epoch-99-avg-1.int8.onnx"), log_cb=self.write_log)
+            self.write_log("[green]Hotword Download complete![/green]")
+            self.agent_view.stt_manager.trigger_recognizer = None
+        except Exception as e:
+            self.write_log(f"[red]Error: {e}[/red]")
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        btn_id = event.button.id
+        if btn_id == "btn_close_models":
+            self.dismiss()
+        elif btn_id == "btn_dl_tts":
+            self.download_tts()
+        elif btn_id == "btn_dl_whisper":
+            self.download_whisper()
+        elif btn_id == "btn_dl_hotword":
+            self.download_hotword()
+        elif btn_id == "btn_dl_embed":
+            self.download_embeddings()
+        elif btn_id == "btn_test_tts":
+            self.agent_view.tts_manager.speak("This is a test of the text to speech model.")
+            self.write_log("[cyan]Playing TTS test...[/cyan]")
+        elif btn_id == "btn_test_stt":
+            import audio_handler
+            a_config = audio_handler.load_audio_config()
+            a_config["stt_whisper_model"] = self.query_one("#sel_stt_whisper", Select).value
+            a_config["stt_hotword_model"] = self.query_one("#sel_stt_hotword", Select).value
+            audio_handler.save_audio_config(a_config)
+            self.agent_view.stt_manager.reload_config()
+            self.agent_view.stt_manager.whisper_recognizer = None
+
+            from audio_handler import MicTestModal
+            self.app.push_screen(MicTestModal(self.agent_view.stt_manager))
+        elif btn_id == "btn_test_embed":
+            self.test_embeddings()
+        elif btn_id == "btn_convert_embed":
+            self.convert_episodic_memory()
+        elif btn_id == "btn_save_models":
+            import audio_handler, toolbox
+            a_config = audio_handler.load_audio_config()
+            a_config["tts_model"] = self.query_one("#sel_tts_model", Select).value
+            a_config["stt_whisper_model"] = self.query_one("#sel_stt_whisper", Select).value
+            a_config["stt_hotword_model"] = self.query_one("#sel_stt_hotword", Select).value
+            audio_handler.save_audio_config(a_config)
+            
+            selected_embed = self.query_one("#sel_embed_model", Select).value
+            g_config = toolbox.load_global_settings()
+            g_config["embedding_model"] = selected_embed
+            toolbox.save_global_settings(g_config)
+            
+            self._update_active_label(selected_embed)
+            self.agent_view.tts_manager.reload_config()
+            self.agent_view.stt_manager.reload_config()
+            self.write_log(f"[bold green]Configurations saved! Active embedding model set to: '{selected_embed}'.[/bold green]")
+            self.agent_view.log_to_ui(f"[bold green]Model configurations updated. Embedding model: {selected_embed}[/bold green]")
+
+    
 
 class ScheduleModal(ModalScreen[None]):
     DEFAULT_CSS = """
@@ -3136,6 +3443,7 @@ class AIAgentView(Vertical):
         Binding("ctrl+k", "clear_all_contexts", "New Chat", priority=True),
         Binding("f4", "open_active_config", "Manage Agents", priority=True),
         Binding("f5", "switch_agent", "Switch Agent", priority=True),
+        Binding("f12", "toggle_direct_stt", "Hold to Talk", priority=True),
         Binding("ctrl+t", "cycle_arm_mode", "Cycle Mode", priority=True),
         Binding("ctrl+g", "cycle_agents", "Cycle Agents", priority=True),
         Binding("ctrl+a", "abort", "Abort", priority=True),
@@ -3334,15 +3642,20 @@ class AIAgentView(Vertical):
         self._running_task_count = 0
         self._running_agents = set()
         
-        self.tts_enabled = False
-        self.stt_enabled = False
+        import audio_handler
+        audio_cfg = audio_handler.load_audio_config()
+        self.tts_enabled = audio_cfg.get("tts_enabled", False)
+        self.stt_enabled = audio_cfg.get("stt_enabled", False)
         self.tts_manager = TTSManager()
         self.stt_append_history =[] 
         self.stt_manager = STTManager(
             callback=self.handle_stt_input, 
             log_callback=self.log_to_ui,
-            tts_manager=self.tts_manager
+            tts_manager=self.tts_manager,
+            status_callback=lambda: self.app.call_from_thread(self.update_status_bar)
         )
+        if self.stt_enabled:
+            self.stt_manager.start_hotword()
         
         self.telegram_manager = TelegramManager(
             callback=self.handle_telegram_input,
@@ -3368,6 +3681,7 @@ class AIAgentView(Vertical):
         self.set_interval(60.0, self.tick_scheduler)
         if toolbox.load_global_settings().get("autoupdate_on_launch", False):
             self.check_for_updates_bg(manual=False)
+        self.sync_remote_on_launch()
 
     def check_chatgpt_oauth_status(self, agent=None):
         if getattr(self, "_chatgpt_auth_modal_open", False):
@@ -3604,6 +3918,9 @@ class AIAgentView(Vertical):
 
         self.is_compressing = False
         self.pending_compress_prompts.clear()
+        self._f12_active = False
+        if hasattr(self, "_f12_timer") and self._f12_timer:
+            self._f12_timer.stop()
 
         toolbox.nuke_all_threads()
 
@@ -4245,8 +4562,21 @@ class AIAgentView(Vertical):
             except Exception:
                 base_dir = os.getcwd()
             nomem_badge = " [bold yellow][NO MEMORY][/bold yellow]" if hasattr(self, "session_manager") and self.session_manager.is_no_memory() else ""
+            
+            icons = []
+            if getattr(self, "tts_enabled", False):
+                icons.append("🔈")
+            
+            is_direct_listening = hasattr(self, "stt_manager") and getattr(self.stt_manager, "is_direct_listening", False)
+            if is_direct_listening:
+                icons.append("🎤")
+            elif getattr(self, "stt_enabled", False) or (hasattr(self, "stt_manager") and getattr(self.stt_manager, "is_running", False)):
+                icons.append("🎙️")
+
+            audio_icons_str = f"\n {''.join(icons)}" if icons else ""
+
             self.query_one("#ai_cwd_label", Label).update(Text(base_dir))
-            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}{nomem_badge}")
+            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}{nomem_badge}{audio_icons_str}")
             self.query_one("#ai_token_label", Label).update(agent_info)
         except Exception: pass
         self.update_prompt_label()
@@ -4293,6 +4623,61 @@ class AIAgentView(Vertical):
             else:
                 from textual.widgets import Static
                 self._write_log(Static(new_renderable, classes="welcome_banner_box"))
+
+    def action_toggle_direct_stt(self):
+        """Handles hold-to-talk: starts recording on initial press, refreshes on key repeat."""
+        now = time.time()
+        self._f12_last_press_time = now
+
+        if not getattr(self, "_f12_active", False):
+            self._f12_active = True
+            
+            # Check if hotword mode was active before hold-to-talk was pressed
+            self._was_hotword_active = (getattr(self.stt_manager, "mode", None) == "hotword" or getattr(self, "stt_enabled", False))
+
+            g_cfg = toolbox.load_global_settings()
+            send_on_release = g_cfg.get("direct_stt_send_on_release", False)
+            action = "submit" if send_on_release else "append"
+
+            def on_direct_complete():
+                if getattr(self, "_was_hotword_active", False):
+                    def _resume_hotword():
+                        started = self.stt_manager.start_hotword()
+                        self.stt_enabled = started
+                        self.update_status_bar()
+                        if started:
+                            self.log_to_ui("[dim green] Hotword detection resumed.[/dim green]")
+                    self.app.call_from_thread(_resume_hotword)
+
+            started = self.stt_manager.start_direct_dictation(action=action, on_complete=on_direct_complete)
+            if started:
+                mode_desc = "Auto-Send on release" if send_on_release else "Preview on release"
+                self.log_to_ui(f"[bold green]🎙️ Recording (Hold F12)... [{mode_desc}][/bold green]")
+                self.update_status_bar()
+                if hasattr(self, "_f12_timer") and self._f12_timer:
+                    self._f12_timer.stop()
+                self._f12_timer = self.set_interval(0.1, self._check_f12_release)
+            else:
+                self._f12_active = False
+                self.log_to_ui("[bold red]Failed to start recording. Check microphone.[/bold red]")
+
+    def _check_f12_release(self):
+        if not getattr(self, "_f12_active", False):
+            if hasattr(self, "_f12_timer") and self._f12_timer:
+                self._f12_timer.stop()
+            return
+
+        # 800ms threshold guarantees that OS typematic delays (up to 500ms) won't cause premature release cutoffs
+        if time.time() - getattr(self, "_f12_last_press_time", 0) > 0.8:
+            self._f12_active = False
+            if hasattr(self, "_f12_timer") and self._f12_timer:
+                self._f12_timer.stop()
+            self.stt_manager.is_direct_listening = False
+            self.stt_manager.stop(join=False)
+            if not getattr(self, "_was_hotword_active", False):
+                self.stt_enabled = False
+            self.update_status_bar()
+            self.log_to_ui("[dim cyan] Released F12. Transcribing...[/dim cyan]")
 
     def toggle_plan_mode(self):
         self.action_cycle_arm_mode()
@@ -4468,6 +4853,14 @@ class AIAgentView(Vertical):
 
         self._write_message_block(hdr, clean_prompt, u_color, is_markdown=True)
         
+        # Transcribe any inline base64 audio tags
+        if "[AudioBase64:" in clean_prompt:
+            def _replace_audio_b64(m):
+                b64_val = m.group(1).strip()
+                transcribed = self.stt_manager.transcribe_base64(b64_val)
+                return f"\n[Transcribed Audio: {transcribed}]\n" if transcribed else "[Audio empty]"
+            clean_prompt = re.sub(r'\[AudioBase64:\s*(data:audio/[a-zA-Z]+;base64,[^\]]+)\]', _replace_audio_b64, clean_prompt)
+
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
         processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
         
@@ -4743,7 +5136,32 @@ class AIAgentView(Vertical):
             self.app.push_screen(UpdateModal(installed_ver, latest_ver, release_notes), handle_update_result)
 
         self.app.call_from_thread(show_modal)
+    
+    @work(thread=True)
+    def sync_remote_on_launch(self):
+        """Silently syncs remote Git changes in the background and applies updated team settings."""
+        t_dir = toolbox.get_team_dir()
+        remote_url, _, pat = toolbox.get_team_git_credentials(t_dir)
+        if not remote_url or not pat:
+            return
 
+        ok, msg = toolbox.sync_team_remote(action="pull", team_dir=t_dir)
+        if ok:
+            def _apply_updates():
+                # 1. Update theme live if changed on remote
+                settings = toolbox.load_team_settings()
+                remote_theme = settings.get("theme")
+                if remote_theme and getattr(self.app, "theme", None) != remote_theme:
+                    try:
+                        self.app.theme = remote_theme
+                        self.log_to_ui(f"[dim green]Applied remote team theme: {remote_theme}[/dim green]")
+                    except Exception:
+                        pass
+                # 2. Reload agents and sessions in case other devices added/edited them
+                self.agent_manager.load_agents()
+                self.update_status_bar()
+            self.app.call_from_thread(_apply_updates)
+    
     def request_clarification(self, options: Optional[List[str]] = None, agent_name: str = "Agent") -> str:
         result_event = threading.Event()
         final_result = [""]

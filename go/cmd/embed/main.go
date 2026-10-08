@@ -36,13 +36,45 @@ type EmbeddingResult struct {
 	Vector []float64 `json:"vector"`
 }
 
+// patchTokenizerConfig flattens HuggingFace object-tokens back into standard strings
+func patchTokenizerConfig(modelsDir, modelName string) {
+	configPath := filepath.Join(modelsDir, modelName, "tokenizer_config.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return
+	}
+
+	changed := false
+	tokensToCheck := []string{"mask_token", "unk_token", "sep_token", "pad_token", "cls_token", "bos_token", "eos_token"}
+	for _, tok := range tokensToCheck {
+		if val, ok := config[tok].(map[string]interface{}); ok {
+			if content, ok := val["content"].(string); ok {
+				config[tok] = content
+				changed = true
+			}
+		}
+	}
+
+	if changed {
+		if newData, err := json.MarshalIndent(config, "", "  "); err == nil {
+			os.WriteFile(configPath, newData, 0644)
+		}
+	}
+}
+
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: federate_embed <text_to_embed>")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: federate_embed <model_name> <text_to_embed...>")
 		os.Exit(1)
 	}
 
-	inputText := strings.Join(os.Args[1:], " ")
+	modelName := os.Args[1]
+	inputText := strings.Join(os.Args[2:], " ")
 	ctx := context.Background()
 
 	// 1. Tokenize into sentences
@@ -54,7 +86,6 @@ func main() {
 	sentences := tokenizer.Tokenize(inputText)
 
 	// 2. Load Model
-	modelName := "sentence-transformers/all-MiniLM-L6-v2"
 	
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -71,34 +102,51 @@ func main() {
 	}
 
 	conf := &tasks.Config{
-		ModelsDir:      modelsDir,
-		ModelName:      modelName,
-		DownloadPolicy: tasks.DownloadMissing,
+		ModelsDir:        modelsDir,
+		ModelName:        modelName,
+		DownloadPolicy:   tasks.DownloadMissing,
+		ConversionPolicy: tasks.ConvertMissing,
 	}
 
 	obj, err := tasks.Load[textencoding.Interface](conf)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load model: %v\n", err)
-		os.Exit(1)
+		// Try to patch HuggingFace tokenizer config anomalies and retry
+		patchTokenizerConfig(modelsDir, modelName)
+		obj, err = tasks.Load[textencoding.Interface](conf)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to load model: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	var results []EmbeddingResult
+	results := make([]EmbeddingResult, 0)
 	for _, s := range sentences {
 		trimmed := strings.TrimSpace(s.Text)
 		if trimmed == "" {
 			continue
 		}
 
-		res, err := obj.Encode(ctx, trimmed, 0)
+		err = func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic during encoding: %v", r)
+				}
+			}()
+			res, err := obj.Encode(ctx, trimmed, 0)
+			if err != nil {
+				return err
+			}
+			results = append(results, EmbeddingResult{
+				Text:   trimmed,
+				Vector: res.Vector.Data().F64(),
+			})
+			return nil
+		}()
+
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to encode sentence: %v\n", err)
 			continue
 		}
-
-		results = append(results, EmbeddingResult{
-			Text:   trimmed,
-			Vector: res.Vector.Data().F64(),
-		})
 	}
 
 	// 3. Output as JSON

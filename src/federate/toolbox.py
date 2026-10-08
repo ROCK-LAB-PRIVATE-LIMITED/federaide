@@ -147,6 +147,8 @@ DEFAULT_GLOBAL_SETTINGS = {
     "autoupdate_on_launch": True,
     "tool_result_visibility": "private",
     "precompress_mode": "self",
+    "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+    "direct_stt_send_on_release": False
 }
 
 
@@ -566,12 +568,24 @@ def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, 
         from urllib.parse import urlparse, urlunparse, quote
         import tempfile, stat, contextlib
 
-        # 1. Commit any uncommitted changes first so git operations don't fail with "unstaged changes"
+        def _has_unmerged_index(target_dir: str) -> bool:
+            st = subprocess.run(["git", "status", "--porcelain"], cwd=target_dir, capture_output=True, text=True)
+            for line in st.stdout.splitlines():
+                code = line[:2]
+                if "U" in code or code in ("AA", "DD"):
+                    return True
+            return False
+
+        # If repo is already in a conflicted state, reject immediately
+        if _has_unmerged_index(t_dir):
+            return False, "CONFLICT"
+
+        # 1. Commit cleanly staged changes
         try:
             flush_sqlite_databases()
-            subprocess.run(["git", "add", "."], cwd=t_dir, capture_output=True)
             status = subprocess.run(["git", "status", "--porcelain"], cwd=t_dir, capture_output=True, text=True)
-            if status.stdout.strip():
+            if status.stdout.strip() and not _has_unmerged_index(t_dir):
+                subprocess.run(["git", "add", "."], cwd=t_dir, capture_output=True)
                 subprocess.run(
                     ["git", "-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local", "commit", "-m", "Auto-commit before remote sync"],
                     cwd=t_dir, capture_output=True
@@ -614,88 +628,72 @@ def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, 
                 except Exception: pass
 
         with git_askpass_context(pat) as env:
-            if action == "pull":
-                cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", safe_url, branch]
-                res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-                if res.returncode == 0:
-                    return True, "Synchronized successfully."
-                
-                err_check = (res.stderr + res.stdout).lower()
-                subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
-                subprocess.run(["git", "merge", "--abort"], cwd=t_dir, capture_output=True, env=env)
-                
-                conflict_indicators = [
-                    "conflict", "divergent", "unstaged changes", "cannot pull with rebase",
-                    "unrelated histories", "failed to merge", "could not apply", "patch failed",
-                    "non-fast-forward"
-                ]
-                if any(ind in err_check for ind in conflict_indicators):
-                    return False, "CONFLICT"
+            if action in ("pull", "auto-merge"):
+                # Fetch remote branch cleanly
+                fetch_res = subprocess.run(["git", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if fetch_res.returncode != 0:
+                    return False, fetch_res.stderr.strip() or "Fetch failed."
 
-                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+                # Attempt clean 3-way merge
+                merge_cmd = ["git"] + user_args + ["merge", "--no-edit", "FETCH_HEAD"]
+                merge_res = subprocess.run(merge_cmd, cwd=t_dir, capture_output=True, text=True, env=env)
+                if merge_res.returncode == 0 and not _has_unmerged_index(t_dir):
+                    return True, "Merged successfully."
+
+                # If merge failed, abort to keep working directory clean
+                subprocess.run(["git", "merge", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                return False, "CONFLICT"
 
             elif action == "push":
+                if _has_unmerged_index(t_dir):
+                    return False, "CONFLICT"
                 cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Pushed successfully."
-                    
-                err_check = (res.stderr + res.stdout).lower()
-                conflict_indicators = [
-                    "non-fast-forward", "fetch first", "rejected", "behind", "conflict"
-                ]
-                if any(ind in err_check for ind in conflict_indicators):
-                    return False, "CONFLICT"
-
-                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+                return False, "CONFLICT"
 
             elif action == "force-push":
                 cmd = ["git", "push", "--force", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Force pushed successfully."
-                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+                return False, res.stderr.strip() or f"Git exited with code {res.returncode}"
 
             elif action == "hard-reset-remote":
                 fetch_cmd = ["git", "fetch", safe_url, branch]
                 fetch_res = subprocess.run(fetch_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if fetch_res.returncode != 0:
-                    return False, fetch_res.stderr.strip() or fetch_res.stdout.strip() or "Fetch failed."
+                    return False, fetch_res.stderr.strip() or "Fetch failed."
                     
                 reset_cmd = ["git", "reset", "--hard", "FETCH_HEAD"]
                 res = subprocess.run(reset_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Reset to remote state successfully."
-                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+                return False, res.stderr.strip() or f"Git exited with code {res.returncode}"
 
             elif action == "sync":
-                # 1. Try pushing first. If remote is brand new/empty, or local is up-to-date, this succeeds immediately!
+                # Push first if up to date
                 push_cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Synchronized successfully."
 
-                err_check = (res.stderr + res.stdout).lower()
-                if any(ind in err_check for ind in ["fetch first", "rejected", "non-fast-forward", "behind"]):
-                    # 2. Pull remote commits with rebase
-                    pull_cmd = ["git"] + user_args + ["pull", "--rebase", "--autostash", safe_url, branch]
-                    pull_res = subprocess.run(pull_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
-                    if pull_res.returncode != 0:
-                        subprocess.run(["git", "rebase", "--abort"], cwd=t_dir, capture_output=True, env=env)
-                        return False, "CONFLICT"
+                # Behind remote: Fetch and attempt clean Git merge
+                fetch_res = subprocess.run(["git", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                if fetch_res.returncode != 0:
+                    return False, fetch_res.stderr.strip() or "Fetch failed."
 
-                    # 3. Re-push now that remote is integrated
+                merge_cmd = ["git"] + user_args + ["merge", "--no-edit", "FETCH_HEAD"]
+                merge_res = subprocess.run(merge_cmd, cwd=t_dir, capture_output=True, text=True, env=env)
+                if merge_res.returncode == 0 and not _has_unmerged_index(t_dir):
                     final_push = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                     if final_push.returncode == 0:
                         return True, "Synchronized successfully."
-                        
-                    final_err = (final_push.stderr + final_push.stdout).lower()
-                    if any(ind in final_err for ind in ["fetch first", "rejected", "non-fast-forward", "behind"]):
-                        return False, "CONFLICT"
-                        
-                    return False, final_push.stderr.strip() or final_push.stdout.strip() or f"Git push failed with code {final_push.returncode}"
 
-                return False, res.stderr.strip() or res.stdout.strip() or f"Git exited with code {res.returncode}"
+                # Merge conflict occurred: abort so tree stays pristine, then report conflict
+                subprocess.run(["git", "merge", "--abort"], cwd=t_dir, capture_output=True, env=env)
+                return False, "CONFLICT"
 
             else:
                 return False, f"Unknown action: {action}"
@@ -1305,7 +1303,7 @@ def format_numbered_lines(lines: List[str], start_line_num: int = 1, total_lines
     
 @tool
 def read_file(filepath: str) -> str:
-    """Reads a file and returns its content. Natively supports plain text, PDFs, PNGs, JPGs, and other images."""
+    """Reads a file and returns its content. Natively supports plain text, PDFs, images, and audio files."""
     try:
         safe_path, display_path = get_safe_path(filepath)
         ext = os.path.splitext(safe_path)[1].lower()
@@ -1314,6 +1312,16 @@ def read_file(filepath: str) -> str:
         if ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf'}:
             log_tool(f"Visualizing file: [cyan]{display_path}[/cyan]")
             return f"[Attached Image: {safe_path}]"
+        elif ext in {'.wav', '.mp3', '.ogg', '.flac', '.m4a', '.aac'}:
+            log_tool(f"Transcribing audio file: [cyan]{display_path}[/cyan]")
+            try:
+                if CURRENT_APP:
+                    agent_view = CURRENT_APP.query_one("#ai_agent_view")
+                    transcript = agent_view.stt_manager.transcribe_file(safe_path)
+                    return f"[Audio File: {display_path}]\n--- Audio Transcription ---\n{transcript}\n--- End Transcription ---"
+            except Exception:
+                pass
+            return f"[Audio File: {display_path}]"
             
         log_tool(f"Reading file: [cyan]{display_path}[/cyan]")
         with open(safe_path, 'r', encoding='utf-8') as f:

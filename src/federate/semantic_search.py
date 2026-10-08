@@ -60,20 +60,58 @@ class SemanticSearchEngine:
             conn.commit()
             conn.close()
 
-    def get_embeddings(self, text: str) -> List[Dict[str, Any]]:
-        """Calls the Go binary to get sentences and vectors."""
+    def get_embeddings(self, text: str, model_name: str = None, log_cb=None) -> List[Dict[str, Any]]:
+        """Calls the Go binary to get sentences and vectors with dedicated log routing."""
         try:
-            # We use absolute path for the binary if it's in the current dir
-            cmd = [self.binary_path, text]
-            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
-            return json.loads(result.stdout)
+            import toolbox
+            if not model_name:
+                settings = toolbox.load_global_settings()
+                model_name = settings.get("embedding_model", "sentence-transformers/all-MiniLM-L6-v2")
+            
+            cmd = [self.binary_path, model_name, text]
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            
+            # Pipe stderr / Cybertron download logs to the caller's log_cb if provided
+            if result.stderr and result.stderr.strip() and log_cb:
+                for line in result.stderr.strip().splitlines():
+                    if line.strip():
+                        try:
+                            log_data = json.loads(line)
+                            msg = log_data.get("message") or line
+                            log_cb(f"[dim]{msg}[/dim]")
+                        except Exception:
+                            log_cb(f"[dim]{line}[/dim]")
+
+            if result.returncode != 0:
+                err_msg = f"Embed binary failed (code {result.returncode}). Stderr: {result.stderr.strip()}"
+                if log_cb:
+                    log_cb(f"[red]{err_msg}[/red]")
+                return []
+                
+            out_str = result.stdout.strip()
+            if not out_str or out_str == "null" or out_str == "[]":
+                return []
+
+            if out_str.startswith("["):
+                return json.loads(out_str)
+                
+            import re
+            match = re.search(r'\[\s*\{.*\}\s*\]', out_str, re.DOTALL)
+            if match:
+                return json.loads(match.group(0))
+            
+            err_msg = f"No JSON array found in output: {out_str[:200]}"
+            if log_cb:
+                log_cb(f"[red]{err_msg}[/red]")
+            return []
         except Exception as e:
-            print(f"Error calling embed binary: {e}")
+            if log_cb:
+                log_cb(f"[red]Error calling embed binary: {e}[/red]")
             return []
 
-    def index_message(self, agent_name: str, session_id: str, message_idx: int, text: str):
+    def index_message(self, agent_name: str, session_id: str, message_idx: int, text: str, model_name: str = None, log_cb=None):
         """Embeds and stores a message in the database."""
-        results = self.get_embeddings(text)
+        results = self.get_embeddings(text, model_name=model_name, log_cb=log_cb)
         if not results:
             return
 
@@ -81,7 +119,6 @@ class SemanticSearchEngine:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             for s_idx, res in enumerate(results):
-                # Store vector as binary blob (float64)
                 vector_np = np.array(res["vector"], dtype=np.float64)
                 cursor.execute("""
                     INSERT INTO embeddings (agent_name, session_id, message_idx, sentence_idx, text, vector)
@@ -89,6 +126,69 @@ class SemanticSearchEngine:
                 """, (agent_name, session_id, message_idx, s_idx, res["text"], vector_np.tobytes()))
             conn.commit()
             conn.close()
+
+    def reindex_all_sessions(self, sessions_dir: str, model_name: str = None, progress_cb=None, log_cb=None) -> int:
+        """
+        Clears and re-indexes all historical session JSON messages into the vector database
+        using the selected embedding model.
+        """
+        if not os.path.exists(sessions_dir):
+            return 0
+            
+        import glob
+        session_files = glob.glob(os.path.join(sessions_dir, "*.json"))
+        
+        # 1. Collect all non-empty messages
+        tasks = []
+        for filepath in sorted(session_files):
+            filename = os.path.basename(filepath)
+            parts = filename.replace(".json", "").split("_")
+            if len(parts) < 3:
+                continue
+            session_id = f"{parts[0]}_{parts[1]}"
+            agent_name = "_".join(parts[2:])
+            
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+                if not isinstance(history, list):
+                    continue
+                for idx, msg in enumerate(history):
+                    if not isinstance(msg, dict) or msg.get("role") == "system":
+                        continue
+                    content = msg.get("content", "")
+                    if content and content.strip():
+                        tasks.append((agent_name, session_id, idx, content.strip()))
+            except Exception:
+                continue
+                
+        total = len(tasks)
+        if total == 0:
+            if log_cb:
+                log_cb("[yellow]No session messages found to re-index.[/yellow]")
+            return 0
+
+        # 2. Wipe the existing embeddings table to reset dimensions cleanly
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM embeddings;")
+            conn.commit()
+            cursor.execute("VACUUM;")
+            conn.close()
+
+        # 3. Re-index messages with live progress tracking
+        indexed_count = 0
+        for i, (agent_name, session_id, idx, content) in enumerate(tasks, start=1):
+            pct = (i / total) * 100.0
+            if progress_cb:
+                snippet = content[:45].replace("\n", " ") + ("..." if len(content) > 45 else "")
+                progress_cb(i, total, pct, f"{agent_name} ({session_id}) - \"{snippet}\"")
+            
+            self.index_message(agent_name, session_id, idx, content, model_name=model_name, log_cb=log_cb)
+            indexed_count += 1
+
+        return indexed_count
 
     def search(self, agent_name: str, query: str, limit: int = 5, exclude_session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Performs semantic search restricted to a specific agent, optionally excluding a session."""
@@ -125,6 +225,8 @@ class SemanticSearchEngine:
         matches = []
         for row_id, text, vec_blob, sess_id, msg_idx in rows:
             vec = np.frombuffer(vec_blob, dtype=np.float64)
+            if vec.shape != query_vec.shape:
+                continue
             # Cosine similarity: (A dot B) / (||A|| * ||B||)
             # Since vectors from Cybertron are usually normalized, we could just do dot
             # but let's be robust.

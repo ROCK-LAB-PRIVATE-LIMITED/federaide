@@ -260,7 +260,10 @@ class TelegramManager:
 
         if not self.kokoro_model:
             try: 
-                model_path = os.path.join(FEDERAIDE_SYS_DIR, "kokoro-v1.0.onnx")
+                config = load_audio_config()
+                tts_model_type = config.get("tts_model", "int8")
+                model_name = f"kokoro-v1.0.{tts_model_type}.onnx" if tts_model_type in ["int8", "fp16"] else "kokoro-v1.0.onnx"
+                model_path = os.path.join(FEDERAIDE_SYS_DIR, model_name)
                 voices_path = os.path.join(FEDERAIDE_SYS_DIR, "voices-v1.0.bin")
                 self.kokoro_model = Kokoro(model_path, voices_path)
             except Exception: return
