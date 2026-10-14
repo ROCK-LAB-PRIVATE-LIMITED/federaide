@@ -76,7 +76,6 @@ from textual import events
 
 _orig_scroll_down = Widget._on_mouse_scroll_down
 _orig_scroll_up = Widget._on_mouse_scroll_up
-_orig_on_key = Widget._on_key
 
 def _patched_mouse_scroll_down(self, event: events.MouseScrollDown):
     if getattr(event, "ctrl", False):
@@ -94,27 +93,8 @@ def _patched_mouse_scroll_up(self, event: events.MouseScrollUp):
         return
     return _orig_scroll_up(self, event)
 
-async def _patched_on_key(self, event: events.Key):
-    if hasattr(self, "scroll_relative"):
-        # Prevent hijacking word-navigation shortcuts inside text editors
-        if event.key in ("ctrl+left", "ctrl+right") and self.__class__.__name__ in ("TextArea", "Input", "ChatInput"):
-            return await _orig_on_key(self, event)
-
-        if event.key in ("ctrl+up", "ctrl+pageup", "ctrl+left"):
-            event.stop()
-            event.prevent_default()
-            self.scroll_relative(x=-15, animate=False)
-            return
-        elif event.key in ("ctrl+down", "ctrl+pagedown", "ctrl+right"):
-            event.stop()
-            event.prevent_default()
-            self.scroll_relative(x=15, animate=False)
-            return
-    return await _orig_on_key(self, event)
-
 Widget._on_mouse_scroll_down = _patched_mouse_scroll_down
 Widget._on_mouse_scroll_up = _patched_mouse_scroll_up
-Widget._on_key = _patched_on_key
 # -----------------------------------------------
 
 import toolbox
@@ -1336,7 +1316,7 @@ def get_positional_args(argv=None):
     return pos_args
 
 
-def main():
+def main(with_agent=True):
     import sys
     import shutil
     import subprocess
@@ -1368,7 +1348,7 @@ def main():
         sys.exit(res.returncode)
 
     # Auto-detect standalone IDE mode from flags or binary name
-    with_agent = True
+
     if any(flag in sys.argv for flag in ("--no-agent", "--ide")) or os.path.basename(sys.argv[0]) in ("ide", "ide.exe"):
         with_agent = False
 
