@@ -1313,19 +1313,6 @@ class STTManager:
                             self.trigger_recognizer.reset(trigger_stream)
                             trigger_stream = self.trigger_recognizer.create_stream()
 
-                while not self.audio_queue.empty():
-                    try:
-                        c = self.audio_queue.get_nowait()
-                        if is_recording: audio_buffer.append(c)
-                    except Exception:
-                        break
-
-                if is_recording and audio_buffer:
-                    text = self._flush_whisper(audio_buffer, self.stop_words)
-                    if text:
-                        final_text = self.pending_prefix + text
-                        self.callback(final_text, action="append")
-
         except Exception as e:
             import traceback
             dbg(f"FATAL EXCEPTION inside input_stream context: {e}")

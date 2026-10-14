@@ -721,6 +721,8 @@ class FEDERaiDE(App):
         self.query_one("#main_switcher").current = view_id
         
         if view_id == "code_view":
+            try: self.query_one("#dir_tree").reload()
+            except Exception: pass
             tabs = self.query_one("#editor_tabs", TabbedContent)
             if tabs.active:
                 try: self.query_one(f"#{tabs.active} TextArea").focus()
