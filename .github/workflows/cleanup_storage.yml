@@ -1,0 +1,131 @@
+name: Clean up Storage and Release Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      delete_release_assets:
+        description: 'Delete binary assets (.whl, .tar.gz, etc.) attached to GitHub Releases'
+        type: boolean
+        default: true
+      keep_latest_releases:
+        description: 'Number of latest releases whose attached assets to keep (0 = purge all releases)'
+        type: number
+        default: 1
+      delete_workflow_artifacts:
+        description: 'Delete all GitHub Actions workflow run artifacts (old CI wheel/sdist uploads)'
+        type: boolean
+        default: true
+      delete_actions_cache:
+        description: 'Purge all GitHub Actions cache entries'
+        type: boolean
+        default: true
+
+jobs:
+  cleanup:
+    name: Purge Storage Quota
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+
+    steps:
+      - name: Purge Actions Workflow Artifacts
+        if: ${{ inputs.delete_workflow_artifacts }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=========================================================="
+          echo "🔍 Scanning for Actions workflow artifacts..."
+          echo "=========================================================="
+          
+          ARTIFACT_IDS=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/artifacts" --jq '.artifacts[].id')
+          
+          if [ -z "$ARTIFACT_IDS" ]; then
+            echo "ℹ️ No workflow artifacts found."
+          else
+            COUNT=$(echo "$ARTIFACT_IDS" | wc -w)
+            echo "Found $COUNT artifacts. Commencing bulk deletion..."
+            for id in $ARTIFACT_IDS; do
+              echo "Deleting artifact ID: $id"
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" --silent || true
+            done
+            echo "✅ All workflow run artifacts purged successfully."
+          fi
+
+      - name: Purge GitHub Release Assets
+        if: ${{ inputs.delete_release_assets }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEP_COUNT: ${{ inputs.keep_latest_releases }}
+        run: |
+          echo "=========================================================="
+          echo "🔍 Scanning GitHub Release assets..."
+          echo "=========================================================="
+          
+          python3 - << 'EOF'
+          import os, json, subprocess
+
+          repo = os.environ.get("GITHUB_REPOSITORY")
+          keep_count = int(os.environ.get("KEEP_COUNT", "1"))
+
+          print(f"Querying releases for {repo}...")
+          try:
+              output = subprocess.check_output(
+                  ["gh", "api", "--paginate", f"repos/{repo}/releases"],
+                  text=True
+              )
+              releases = json.loads(output)
+          except Exception as e:
+              print(f"Error querying releases: {e}")
+              exit(0)
+
+          if not releases:
+              print("ℹ️ No releases found in this repository.")
+              exit(0)
+
+          print(f"Total releases found: {len(releases)}")
+          total_deleted = 0
+
+          # GitHub API returns releases sorted by recency (newest first)
+          for idx, rel in enumerate(releases):
+              tag = rel.get("tag_name", "unknown")
+              assets = rel.get("assets", [])
+
+              if idx < keep_count:
+                  print(f"🛡️  Preserving assets for release [{tag}] (Rank {idx + 1} <= {keep_count})")
+                  continue
+
+              if not assets:
+                  print(f"ℹ️  Release [{tag}] has no assets attached. Skipping.")
+                  continue
+
+              print(f"📦 Purging {len(assets)} assets from release [{tag}]...")
+              for asset in assets:
+                  asset_id = asset["id"]
+                  asset_name = asset["name"]
+                  try:
+                      subprocess.run(
+                          ["gh", "api", "-X", "DELETE", f"repos/{repo}/releases/assets/{asset_id}"],
+                          check=True,
+                          stdout=subprocess.DEVNULL
+                      )
+                      print(f"   ✓ Deleted asset: {asset_name} (ID: {asset_id})")
+                      total_deleted += 1
+                  except Exception as err:
+                      print(f"   ✗ Failed to delete {asset_name}: {err}")
+
+          print(f"\n✅ Release assets cleanup finished. Total assets deleted: {total_deleted}")
+          EOF
+
+      - name: Purge Actions Caches
+        if: ${{ inputs.delete_actions_cache }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=========================================================="
+          echo "🧹 Purging GitHub Actions caches..."
+          echo "=========================================================="
+          
+          # Delete all repository cache entries
+          gh cache delete --all || echo "ℹ️ No caches to delete or already empty."
+          echo "✅ Actions caches cleared."
