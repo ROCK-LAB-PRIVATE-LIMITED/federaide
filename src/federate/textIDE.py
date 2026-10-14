@@ -69,6 +69,54 @@ from textual.widgets import (
 )
 from textual.widgets.text_area import Selection
 from textual.message import Message
+
+# --- GLOBAL CTRL+SCROLL HORIZONTAL PAN PATCH ---
+from textual.widget import Widget
+from textual import events
+
+_orig_scroll_down = Widget._on_mouse_scroll_down
+_orig_scroll_up = Widget._on_mouse_scroll_up
+_orig_on_key = Widget._on_key
+
+def _patched_mouse_scroll_down(self, event: events.MouseScrollDown):
+    if getattr(event, "ctrl", False):
+        event.stop()
+        event.prevent_default()
+        self.scroll_relative(x=4, animate=False)
+        return
+    return _orig_scroll_down(self, event)
+
+def _patched_mouse_scroll_up(self, event: events.MouseScrollUp):
+    if getattr(event, "ctrl", False):
+        event.stop()
+        event.prevent_default()
+        self.scroll_relative(x=-4, animate=False)
+        return
+    return _orig_scroll_up(self, event)
+
+async def _patched_on_key(self, event: events.Key):
+    if hasattr(self, "scroll_relative"):
+        # Prevent hijacking word-navigation shortcuts inside text editors
+        if event.key in ("ctrl+left", "ctrl+right") and self.__class__.__name__ in ("TextArea", "Input", "ChatInput"):
+            return await _orig_on_key(self, event)
+
+        if event.key in ("ctrl+up", "ctrl+pageup", "ctrl+left"):
+            event.stop()
+            event.prevent_default()
+            self.scroll_relative(x=-15, animate=False)
+            return
+        elif event.key in ("ctrl+down", "ctrl+pagedown", "ctrl+right"):
+            event.stop()
+            event.prevent_default()
+            self.scroll_relative(x=15, animate=False)
+            return
+    return await _orig_on_key(self, event)
+
+Widget._on_mouse_scroll_down = _patched_mouse_scroll_down
+Widget._on_mouse_scroll_up = _patched_mouse_scroll_up
+Widget._on_key = _patched_on_key
+# -----------------------------------------------
+
 import toolbox
 from execution import ExecutionManager, SettingsModal, DEFAULT_RUN_CONFIGS
 
@@ -561,10 +609,11 @@ class FEDERaiDE(App):
         safe_msg = escape(str(message)) if isinstance(message, str) else message
         super().notify(safe_msg, *args, **kwargs)
     
-    def __init__(self, initial_file: str = None):
+    def __init__(self, initial_file: str = None, with_agent: bool = True):
         super().__init__()
         self.initial_file = initial_file
-        self.views =["ai_chat_view", "code_view", "exec_manager_view"]
+        self.with_agent = with_agent
+        self.views = ["ai_chat_view", "code_view", "exec_manager_view"] if with_agent else ["code_view", "exec_manager_view"]
         self.current_view_index = 0
         self.open_files = {} 
         self._outline_timer = None
@@ -619,7 +668,7 @@ class FEDERaiDE(App):
     
     def compose(self) -> ComposeResult:
         yield Header()
-        with ContentSwitcher(initial="ai_chat_view", id="main_switcher"):
+        with ContentSwitcher(initial="ai_chat_view" if self.with_agent else "code_view", id="main_switcher"):
             with Horizontal(id="code_view"):
                 with Vertical(id="explorer_pane"):
                     yield Static(" EXPLORER", classes="pane_title")
@@ -632,11 +681,12 @@ class FEDERaiDE(App):
             
             yield ExecutionManager(id="exec_manager_view")
             
-            with Vertical(id="ai_chat_view"):
-                if HAS_AI_AGENT:
-                    yield AIAgentView(id="ai_agent_view")
-                else:
-                    yield Static(" AI Assistant Chat System\n\n(Install requirements: langgraph, langchain-openai, duckduckgo-search, bs4)", id="ai_placeholder")
+            if self.with_agent:
+                with Vertical(id="ai_chat_view"):
+                    if HAS_AI_AGENT:
+                        yield AIAgentView(id="ai_agent_view")
+                    else:
+                        yield Static(" AI Assistant Chat System\n\n(Install requirements: langgraph, langchain-openai, duckduckgo-search, bs4)", id="ai_placeholder")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -731,6 +781,8 @@ class FEDERaiDE(App):
     
     def action_new_chat(self):
         """Switch to AI view and initiate a fresh multi-agent chat."""
+        if not self.with_agent:
+            return
         switcher = self.query_one("#main_switcher")
         self.current_view_index = self.views.index("ai_chat_view")
         switcher.current = "ai_chat_view"
@@ -1160,9 +1212,13 @@ class FEDERaiDE(App):
                     pass
                 
                 # Refresh agent UI (the fix from the previous step)
-                agent_view = self.query_one("#ai_agent_view", AIAgentView)
-                if hasattr(agent_view, "update_status_bar"):
-                    agent_view.update_status_bar()
+                if self.with_agent:
+                    try:
+                        agent_view = self.query_one("#ai_agent_view", AIAgentView)
+                        if hasattr(agent_view, "update_status_bar"):
+                            agent_view.update_status_bar()
+                    except Exception:
+                        pass
                     
         self.push_screen(DirectoryModal(current_path), handle_dir_selection)
     
@@ -1311,12 +1367,21 @@ def main():
         res = subprocess.run(["asciinema", "rec", "-c", quoted_cmd, cast_path])
         sys.exit(res.returncode)
 
+    # Auto-detect standalone IDE mode from flags or binary name
+    with_agent = True
+    if any(flag in sys.argv for flag in ("--no-agent", "--ide")) or os.path.basename(sys.argv[0]) in ("ide", "ide.exe"):
+        with_agent = False
+
     positional_args = get_positional_args(sys.argv[1:])
     initial_file = positional_args[0] if positional_args else None
-    toolbox.load_mcp_tools()
+    if with_agent:
+        toolbox.load_mcp_tools()
     stop_loading_spinner()
-    app = FEDERaiDE(initial_file=initial_file)
+    app = FEDERaiDE(initial_file=initial_file, with_agent=with_agent)
     app.run()
+
+def ide_main():
+    main(with_agent=False)
 
 if __name__ == "__main__":
     main()
