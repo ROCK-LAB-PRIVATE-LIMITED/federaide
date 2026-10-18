@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federaide"
-version = "2.0.7"
+version = "2.0.8"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "GNU Affero General Public License v3"}
@@ -53,6 +53,10 @@ dependencies = [
     "curl-cffi==0.15.0",   # Compulsory HTTP client with impersonation support (Cloudflare bypass)
     "pypdfium2",
     "mcp==2.3.0",
+    "orjson==3.12.0",
+    "cryptography==50.0.1",
+    "ormsgpack==1.12.2",
+    "rpds-py==2026.6.3",
     # Platform-specific hard dependencies
     "pywinpty; platform_system == 'Windows'",
 ]
