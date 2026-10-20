@@ -72,7 +72,7 @@ audio = [
 # Autonomous Visual Computer Use / Computer Vision (optional)
 vision = [
     "pyautogui",
-    "pillow",
+    "pillow==12.3.0",
 ]
 # PDF report generation for Deep Research (optional)
 pdf = [
