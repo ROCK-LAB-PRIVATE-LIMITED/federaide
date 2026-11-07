@@ -371,7 +371,7 @@ async def _connect_and_get_tools():
                                 _mcp_loop
                             )
                             try:
-                                result = future.result(timeout=120)
+                                result = future.result(timeout=36000)
                                 content = getattr(result, "content", [])
                                 is_err = getattr(result, "is_error", getattr(result, "isError", False))
                                 

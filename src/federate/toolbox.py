@@ -278,6 +278,30 @@ def get_team_dir() -> str:
     FEDERATE_DIR = _ACTIVE_TEAM_DIR
     return _ACTIVE_TEAM_DIR
 
+def get_team_name(team_dir: str = None) -> str:
+    """Returns the canonical display name of the team workspace (e.g. 'Default', 'BT')."""
+    t_dir = os.path.abspath(os.path.expanduser(team_dir or get_team_dir()))
+    ts_file = os.path.join(t_dir, "team_settings.json")
+    if os.path.exists(ts_file):
+        try:
+            with open(ts_file, "r", encoding="utf-8") as f:
+                name = json.load(f).get("team_name")
+                if name and name.strip():
+                    return name.strip()
+        except Exception:
+            pass
+    try:
+        g_settings = load_global_settings()
+        for t in g_settings.get("registered_teams", []):
+            if os.path.abspath(os.path.expanduser(t.get("path", ""))) == t_dir:
+                name = t.get("name")
+                if name and name.strip():
+                    return name.strip()
+    except Exception:
+        pass
+    base = os.path.basename(t_dir).lstrip(".")
+    return base if base else "Default"
+
 def set_team_dir(new_dir: str):
     """Sets and persists the active team workspace folder."""
     global _ACTIVE_TEAM_DIR, FEDERATE_DIR, DEFAULT_VENV_PATH, DB_PATH
@@ -315,6 +339,7 @@ def init_federate_git_repo():
 !/known_mcp_tools.json
 !/session_names.json
 !/team_settings.json
+!/README.md
 
 # 3. Whitelist only the 3 permitted root folders
 !/agents/
@@ -598,41 +623,27 @@ def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, 
             return False, f"Invalid remote URL format: {remote_url}"
             
         user_part = quote(username.strip(), safe='') if username else "git"
-        auth_netloc = f"{user_part}@{parsed.netloc}"
+        host = parsed.netloc.split("@")[-1]
+        auth_netloc = f"{user_part}@{host}"
         safe_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
         
         branch_res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=t_dir, capture_output=True, text=True)
         branch = branch_res.stdout.strip() if branch_res.returncode == 0 and branch_res.stdout.strip() else "main"
-        user_args = ["-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local"]
+        user_args = ["-c", "user.name=FEDERaiDE", "-c", "user.email=harness@local", "-c", "credential.helper="]
 
-        @contextlib.contextmanager
-        def git_askpass_context(pat_str: str):
-            askpass_ext = ".bat" if os.name == "nt" else ".sh"
-            fd, askpass_path = tempfile.mkstemp(suffix=askpass_ext, text=True)
-            with os.fdopen(fd, "w") as f:
-                if os.name == "nt":
-                    f.write("@echo off\nif \"%~1\"==\"\" exit /b 0\necho %FEDERAIDE_GIT_PASSWORD%\n")
-                else:
-                    f.write("#!/bin/sh\necho \"$FEDERAIDE_GIT_PASSWORD\"\n")
-            if os.name != "nt":
-                os.chmod(askpass_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-            
-            env = os.environ.copy()
-            env["GIT_ASKPASS"] = askpass_path
-            env["FEDERAIDE_GIT_PASSWORD"] = pat_str
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            try:
-                yield env
-            finally:
-                try: os.remove(askpass_path)
-                except Exception: pass
+        def _clean_err(err: str) -> str:
+            if pat:
+                err = err.replace(pat.strip(), "******").replace(quote(pat.strip(), safe=''), "******")
+            return err
+
+        from git_auth import git_askpass_context
 
         with git_askpass_context(pat) as env:
             if action in ("pull", "auto-merge"):
                 # Fetch remote branch cleanly
-                fetch_res = subprocess.run(["git", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                fetch_res = subprocess.run(["git", "-c", "credential.helper=", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if fetch_res.returncode != 0:
-                    return False, fetch_res.stderr.strip() or "Fetch failed."
+                    return False, _clean_err(fetch_res.stderr.strip() or "Fetch failed.")
 
                 # Attempt clean 3-way merge
                 merge_cmd = ["git"] + user_args + ["merge", "--no-edit", "FETCH_HEAD"]
@@ -647,42 +658,42 @@ def sync_team_remote(action: str = "push", team_dir: str = None) -> tuple[bool, 
             elif action == "push":
                 if _has_unmerged_index(t_dir):
                     return False, "CONFLICT"
-                cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
+                cmd = ["git", "-c", "credential.helper=", "push", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Pushed successfully."
                 return False, "CONFLICT"
 
             elif action == "force-push":
-                cmd = ["git", "push", "--force", safe_url, f"HEAD:{branch}"]
+                cmd = ["git", "-c", "credential.helper=", "push", "--force", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Force pushed successfully."
-                return False, res.stderr.strip() or f"Git exited with code {res.returncode}"
+                return False, _clean_err(res.stderr.strip() or f"Git exited with code {res.returncode}")
 
             elif action == "hard-reset-remote":
-                fetch_cmd = ["git", "fetch", safe_url, branch]
+                fetch_cmd = ["git", "-c", "credential.helper=", "fetch", safe_url, branch]
                 fetch_res = subprocess.run(fetch_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if fetch_res.returncode != 0:
-                    return False, fetch_res.stderr.strip() or "Fetch failed."
+                    return False, _clean_err(fetch_res.stderr.strip() or "Fetch failed.")
                     
                 reset_cmd = ["git", "reset", "--hard", "FETCH_HEAD"]
                 res = subprocess.run(reset_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Reset to remote state successfully."
-                return False, res.stderr.strip() or f"Git exited with code {res.returncode}"
+                return False, _clean_err(res.stderr.strip() or f"Git exited with code {res.returncode}")
 
             elif action == "sync":
                 # Push first if up to date
-                push_cmd = ["git", "push", safe_url, f"HEAD:{branch}"]
+                push_cmd = ["git", "-c", "credential.helper=", "push", safe_url, f"HEAD:{branch}"]
                 res = subprocess.run(push_cmd, cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if res.returncode == 0:
                     return True, "Synchronized successfully."
 
                 # Behind remote: Fetch and attempt clean Git merge
-                fetch_res = subprocess.run(["git", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
+                fetch_res = subprocess.run(["git", "-c", "credential.helper=", "fetch", safe_url, branch], cwd=t_dir, capture_output=True, text=True, env=env, timeout=120)
                 if fetch_res.returncode != 0:
-                    return False, fetch_res.stderr.strip() or "Fetch failed."
+                    return False, _clean_err(fetch_res.stderr.strip() or "Fetch failed.")
 
                 merge_cmd = ["git"] + user_args + ["merge", "--no-edit", "FETCH_HEAD"]
                 merge_res = subprocess.run(merge_cmd, cwd=t_dir, capture_output=True, text=True, env=env)
@@ -2871,6 +2882,18 @@ def get_go_state_path():
             return path
             
     return None
+
+@tool
+def send_team_dispatch(target_team: str, instruction: str, file_attachments: List[str] = None) -> str:
+    """
+    Sends an encrypted single-message dispatch with attachments to the channel relay repo for a target team.
+    Encrypted with channel PSK and signed. Auto-purged from the relay upon triple-tick receipt.
+    """
+    try:
+        import team_mesh
+        return team_mesh.send_dispatch(target_team, instruction, file_attachments or [], team_dir=get_team_dir())
+    except Exception as e:
+        return f"Error sending team dispatch to relay: {e}"
 
 @tool
 def send_file_to_telegram(filepath: str, caption: str = "") -> str:

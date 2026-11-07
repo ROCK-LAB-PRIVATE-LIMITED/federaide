@@ -105,6 +105,7 @@ AGENT INTERCOM RULES:
     - Federate is a team-work environment, correct and balanced delegation is the key to success as a team.
 - DO NOT USE @ or @@ to just talk about or mention a team member's name, as doing so will immediately handoff to the agent. For example: "Should I ask Robert" and not "Should I ask @Robert" (the second case will immediately handoff to Robert making the user facing question moot).
 
+{team_charter}
 --- TEAM COMPOSITION ---
 {team_info}
 
@@ -279,11 +280,34 @@ class AgentConfig:
             active_list_str = ", ".join(active_skills) if active_skills else "No executable tools learned yet."
 
 
+        team_readme_path = os.path.join(toolbox.get_team_dir(), "README.md")
+        team_charter = ""
+        if os.path.exists(team_readme_path):
+            try:
+                with open(team_readme_path, "r", encoding="utf-8") as f:
+                    readme_val = f.read().strip()
+                if readme_val:
+                    team_charter = f"--- TEAM IDENTITY ---\n{readme_val}\n\n"
+            except Exception:
+                pass
+
+        # Wire 2: Discover peer teams from relay repository
+        try:
+            import team_mesh
+            peers = team_mesh.discover_peer_teams()
+            if peers:
+                team_charter += "--- PEER TEAMS IN FLEET (via Mesh Relay) ---\n"
+                for peer_name, peer_charter in peers.items():
+                    team_charter += f"- Team `{peer_name}`:\n  {peer_charter}\n  Dispatch tool: send_team_dispatch(target_team=\"{peer_name}\", instruction=\"...\")\n"
+                team_charter += "\n"
+        except Exception:
+            pass
+
         if self.pronouns == "neither":
-            prompt = f"{self.backstory}\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
+            prompt = f"{self.backstory}\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_charter=team_charter, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
         else:
             gender_desc = "male" if self.pronouns == "he/him" else "female"
-            prompt = f"{self.backstory}\n\nIDENTITY RULES:\n- You are a {gender_desc} character.\n- Express yourself in a manner consistent with a {gender_desc} persona.\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
+            prompt = f"{self.backstory}\n\nIDENTITY RULES:\n- You are a {gender_desc} character.\n- Express yourself in a manner consistent with a {gender_desc} persona.\n\n{BASE_SYSTEM_PROMPT.format(date=date_str, team_charter=team_charter, team_info=team_info, agenda_section=agenda_section, computer_section=computer_section)}"
         
         # Inject Architecture
         if not is_no_memory:

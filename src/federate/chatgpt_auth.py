@@ -255,13 +255,11 @@ class _FileChatGPTOAuthTokenProvider:
 def is_chatgpt_oauth_agent(agent: Any) -> bool:
     if not agent: return False
     base_url = str(getattr(agent, "base_url", "") or "").lower()
-    api_key = str(getattr(agent, "get_api_key", lambda: "")() or "").strip()
-    if "chatgpt.com" in base_url or "oauth" in base_url or api_key == "CHATGPT_OAUTH_ACTIVE":
+    if "chatgpt.com" in base_url or "oauth" in base_url:
         return True
     if getattr(agent, "use_backup", False):
         b_base_url = str(getattr(agent, "backup_base_url", "") or "").lower()
-        b_api_key = str(getattr(agent, "get_backup_api_key", lambda: "")() or "").strip()
-        if "chatgpt.com" in b_base_url or "oauth" in b_base_url or b_api_key == "CHATGPT_OAUTH_ACTIVE":
+        if "chatgpt.com" in b_base_url or "oauth" in b_base_url:
             return True
     return False
 

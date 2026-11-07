@@ -24,6 +24,7 @@ import re
 from textual.suggester import Suggester
 
 SLASH_COMMANDS =[
+    "/send_team",
     "/tools",
     "/arm", "/config", "/safe",
     "/init",
@@ -496,6 +497,22 @@ def process_slash_command(command: str, agent_view):
     elif cmd == "/consolidate":
         agent_view.consolidate_memories(manual=True)
     
+    elif cmd == "/send_team":
+        if len(args) < 2:
+            agent_view.log_to_ui("[bold red]Usage: /send_team <target_team> <instruction> [&attachments...][/bold red]")
+            return
+        target = args[0]
+        attachments = [p.lstrip("&") for p in args[1:] if p.startswith("&")]
+        instruction = " ".join([p for p in args[1:] if not p.startswith("&")])
+        agent_view.log_to_ui(f"[dim cyan]Dispatching message to team '{target}'...[/dim cyan]")
+        def _send():
+            import toolbox
+            res = toolbox.send_team_dispatch(target, instruction, attachments)
+            agent_view.log_to_ui(res)
+        import threading
+        threading.Thread(target=_send, daemon=True).start()
+        return
+
     elif cmd == "/rollback":
         steps = args[0].strip() if args else "1"
         perform_rollback_command(agent_view, steps)
