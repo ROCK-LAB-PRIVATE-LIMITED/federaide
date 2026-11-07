@@ -427,7 +427,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                 return True
             return False
 
-        raw_tools = [toolbox.search_web, toolbox.perform_research, toolbox.render_pdf, toolbox.update_core_memory, toolbox.save_skill, toolbox.read_skill, toolbox.distill_journey, toolbox.delete_passive_skill, toolbox.list_skills, toolbox.mark_quagmire, toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory, toolbox.prepare_active_skill, toolbox.finalize_active_skill, toolbox.manage_active_skill, toolbox.fix_active_skill, toolbox.get_toolresult]
+        raw_tools = [toolbox.search_web, toolbox.perform_research, toolbox.render_pdf, toolbox.update_core_memory, toolbox.save_skill, toolbox.read_skill, toolbox.distill_journey, toolbox.delete_passive_skill, toolbox.list_skills, toolbox.mark_quagmire, toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory, toolbox.prepare_active_skill, toolbox.finalize_active_skill, toolbox.manage_active_skill, toolbox.fix_active_skill, toolbox.get_toolresult, toolbox.send_team_dispatch]
         if is_nomem:
             raw_tools = [t for t in raw_tools if getattr(t, "name", "") not in NOMEM_EXCLUDED_TOOLS]
         raw_tools.extend(toolbox.load_dynamic_tools(agent_config.name))

@@ -1732,6 +1732,44 @@ class GitConflictModal(ModalScreen[str]):
         else:
             self.dismiss("abort")
 
+class MeshSeedModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    MeshSeedModal { align: center middle; background: $background 60%; }
+    #seed_dialog { width: 75; height: auto; border: thick $primary; background: $surface; padding: 1 2; }
+    #seed_input { margin-top: 1; margin-bottom: 1; height: auto; min-height: 4; max-height: 8; }
+    .seed_help { color: $text-muted; margin-top: 0; margin-bottom: 1; text-wrap: wrap; height: auto; }
+    .seed_buttons { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
+    .seed_buttons Button { margin-left: 1; }
+    """
+
+    def __init__(self, current_seed: str = ""):
+        super().__init__()
+        self.current_seed = current_seed
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="seed_dialog"):
+            yield Label(" Mesh Master Seed Phrase", classes="pane_title")
+            yield Label(
+                "Enter your seed phrase or secret passphrase to synchronize identity and encryption keys across all your devices:",
+                classes="seed_help"
+            )
+            yield TextArea(self.current_seed, id="seed_input", show_line_numbers=False)
+            with Horizontal(classes="seed_buttons"):
+                yield Button("Save Seed", id="btn_save_seed", variant="success")
+                yield Button("Cancel", id="btn_cancel_seed", variant="error")
+
+    def on_mount(self):
+        self.query_one("#seed_input", TextArea).focus()
+
+    @on(Button.Pressed, "#btn_save_seed")
+    def on_save(self):
+        val = self.query_one("#seed_input", TextArea).text.strip()
+        self.dismiss(val)
+
+    @on(Button.Pressed, "#btn_cancel_seed")
+    def on_cancel(self):
+        self.dismiss(None)
+
 class TeamsModal(ModalScreen[None]):
     DEFAULT_CSS = """
     TeamsModal { align: center middle; background: $background 60%; }
@@ -1748,8 +1786,15 @@ class TeamsModal(ModalScreen[None]):
     #team_folder_input { width: 1fr; }
     #team_git_user_input { width: 1fr; margin-right: 1; }
     #team_git_pat_input { width: 1fr; }
-    .team_form_row { layout: horizontal; height: auto; margin-top: 1; width: 100%; }
-    .team_form_row Button { width: 1fr; margin: 0 1; }
+    .team_form_row { layout: horizontal; height: 3; margin-top: 1; width: 100%; }
+    .team_form_row Button { width: 1fr; margin: 0 1; height: 3; }
+    #team_readme_input { height: 8; min-height: 5; border: round $accent; background: $surface; margin-top: 1; margin-bottom: 1; }
+    #mesh_relay_url_input { margin-top: 1; margin-bottom: 0; }
+    #mesh_relay_user_input { width: 1fr; margin-right: 1; }
+    #mesh_relay_pat_input { width: 1fr; }
+    #mesh_seed_btn { width: 100%; height: 3; margin-top: 1; margin-bottom: 1; }
+    #channel_peers_display { border: round $accent; background: $surface; padding: 1; margin-top: 1; margin-bottom: 1; min-height: 3; }
+    #sync_channel_btn { width: 100%; height: 3; margin-bottom: 1; }
     #teams_bottom_buttons { height: auto; align: right middle; margin-top: 0; }
     #teams_bottom_buttons Button { margin-left: 1; }
     """
@@ -1784,6 +1829,20 @@ class TeamsModal(ModalScreen[None]):
                         yield Button("Pull", id="pull_btn", variant="warning")
                         yield Button("Push", id="push_btn", variant="warning")
                         yield Button("Sync", id="sync_now_btn", variant="warning")
+
+                    yield Label("Team Charter (README.md - Injected into all agents):", classes="section_label")
+                    yield TextArea(id="team_readme_input", show_line_numbers=False, soft_wrap=True)
+
+                    yield Label("Channel Relay Repository (Team-Specific Coordination Channel):", classes="section_label")
+                    yield Input(placeholder="Channel Relay Repo URL (e.g. https://github.com/user/fed-relay-a.git)", id="mesh_relay_url_input")
+                    with Horizontal(classes="form_row"):
+                        yield Input(placeholder="Channel Git Username", id="mesh_relay_user_input")
+                        yield Input(placeholder="Channel Git PAT", id="mesh_relay_pat_input", password=True)
+                    yield Button("Configure Channel PSK Seed Phrase", id="mesh_seed_btn", variant="primary")
+
+                    yield Label("Autodetected Channel Peers (via Relay):", classes="section_label")
+                    yield Static(id="channel_peers_display")
+                    yield Button("Sync Channel & Refresh Peers", id="sync_channel_btn", variant="primary")
                 
                 yield Label("Registered Teams:", classes="section_label")
                 yield Vertical(id="team_list")
@@ -1810,7 +1869,38 @@ class TeamsModal(ModalScreen[None]):
         self.query_one("#team_remote_url_input", Input).value = remote_url
         self.query_one("#team_git_user_input", Input).value = git_user
         self.query_one("#team_git_pat_input", Input).value = git_pat
+        readme_path = os.path.join(self.editing_path, "README.md")
+        readme_text = ""
+        if os.path.exists(readme_path):
+            try:
+                with open(readme_path, "r", encoding="utf-8") as f:
+                    readme_text = f.read()
+            except Exception: pass
+        self.query_one("#team_readme_input", TextArea).text = readme_text
+
+        import team_mesh
+        r_url, r_user, r_pat = team_mesh.get_relay_credentials(self.editing_path)
+        self.query_one("#mesh_relay_url_input", Input).value = r_url
+        self.query_one("#mesh_relay_user_input", Input).value = r_user
+        self.query_one("#mesh_relay_pat_input", Input).value = r_pat
+        self.refresh_channel_peers_ui(self.editing_path)
         self.query_one("#save_team_btn", Button).label = "Update Team"
+
+    def refresh_channel_peers_ui(self, t_path: str = None):
+        if not self.is_mounted:
+            return
+        target = t_path or self.editing_path or toolbox.get_team_dir()
+        import team_mesh
+        peers = team_mesh.discover_peer_teams(target)
+        try:
+            display = self.query_one("#channel_peers_display", Static)
+            if peers:
+                lines = [f"[bold green]● {name}[/bold green]: [dim]{desc[:120]}{'...' if len(desc)>120 else ''}[/dim]" for name, desc in peers.items()]
+                display.update("\n".join(lines))
+            else:
+                display.update("[dim]No peer teams detected on this channel yet. (Click 'Sync Channel & Refresh Peers')[/dim]")
+        except Exception:
+            pass
 
     def clear_form(self):
         self.editing_path = None
@@ -1820,8 +1910,12 @@ class TeamsModal(ModalScreen[None]):
         self.query_one("#team_remote_url_input", Input).value = ""
         self.query_one("#team_git_user_input", Input).value = ""
         self.query_one("#team_git_pat_input", Input).value = ""
+        self.query_one("#team_readme_input", TextArea).text = ""
+        self.query_one("#mesh_relay_url_input", Input).value = ""
+        self.query_one("#mesh_relay_user_input", Input).value = ""
+        self.query_one("#mesh_relay_pat_input", Input).value = ""
+        self.query_one("#channel_peers_display", Static).update("[dim]Save team to connect to channel.[/dim]")
         self.query_one("#save_team_btn", Button).label = "Save Team"
-
     def _handle_git_action(self, action_name: str, target_team_dir: str):
         def _run_action():
             try:
@@ -1945,37 +2039,17 @@ class TeamsModal(ModalScreen[None]):
             def _run_restore():
                 try:
                     from urllib.parse import urlparse, urlunparse, quote
-                    import subprocess, tempfile, stat, contextlib, os
-                    
-                    @contextlib.contextmanager
-                    def git_askpass_context(pat_str: str):
-                        askpass_ext = ".bat" if os.name == "nt" else ".sh"
-                        fd, askpass_path = tempfile.mkstemp(suffix=askpass_ext, text=True)
-                        with os.fdopen(fd, "w") as f:
-                            if os.name == "nt":
-                                f.write("@echo off\nif \"%~1\"==\"\" exit /b 0\necho %FEDERAIDE_GIT_PASSWORD%\n")
-                            else:
-                                f.write("#!/bin/sh\necho \"$FEDERAIDE_GIT_PASSWORD\"\n")
-                        if os.name != "nt":
-                            os.chmod(askpass_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-                        
-                        env = os.environ.copy()
-                        env["GIT_ASKPASS"] = askpass_path
-                        env["FEDERAIDE_GIT_PASSWORD"] = pat_str
-                        env["GIT_TERMINAL_PROMPT"] = "0"
-                        try:
-                            yield env
-                        finally:
-                            try: os.remove(askpass_path)
-                            except Exception: pass
+                    import subprocess, os
+                    from git_auth import git_askpass_context
 
                     parsed = urlparse(url)
                     user_part = quote(user, safe='') if user else "git"
-                    auth_netloc = f"{user_part}@{parsed.netloc}"
+                    host = parsed.netloc.split("@")[-1]
+                    auth_netloc = f"{user_part}@{host}"
                     safe_url = urlunparse((parsed.scheme, auth_netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
 
                     with git_askpass_context(pat) as env:
-                        res = subprocess.run(["git", "clone", safe_url, target_path], capture_output=True, text=True, env=env)
+                        res = subprocess.run(["git", "-c", "credential.helper=", "clone", safe_url, target_path], capture_output=True, text=True, env=env)
                     
                     if res.returncode == 0:
                         subprocess.run(["git", "remote", "set-url", "origin", url], cwd=target_path, capture_output=True)
@@ -2003,7 +2077,6 @@ class TeamsModal(ModalScreen[None]):
                             pass
                     self.app.call_from_thread(_reenable)
 
-            import threading
             threading.Thread(target=_run_restore, daemon=True).start()
 
         elif btn_id in ("sync_now_btn", "pull_btn", "push_btn"):
@@ -2019,7 +2092,77 @@ class TeamsModal(ModalScreen[None]):
             self.notify(f"{action.title()}ing with Git remote for '{os.path.basename(target_team_dir)}'...", severity="information")
             self._handle_git_action(action, target_team_dir)
             
+        elif btn_id == "sync_channel_btn":
+            target = self.editing_path or toolbox.get_team_dir()
+            import team_mesh
+            r_url = self.query_one("#mesh_relay_url_input", Input).value.strip()
+            r_user = self.query_one("#mesh_relay_user_input", Input).value.strip()
+            r_pat = self.query_one("#mesh_relay_pat_input", Input).value.strip()
+            if not r_url or not r_pat:
+                self.notify("Please enter the Channel Relay Repo URL and PAT first.", severity="error")
+                return
+
+            # Save channel credentials immediately from inputs
+            team_mesh.save_relay_credentials(url=r_url, user=r_user, pat=r_pat, team_dir=target)
+
+            readme_text = self.query_one("#team_readme_input", TextArea).text
+            if readme_text:
+                try:
+                    with open(os.path.join(target, "README.md"), "w", encoding="utf-8") as f:
+                        f.write(readme_text)
+                except Exception:
+                    pass
+
+            t_name = self.query_one("#team_name_input", Input).value.strip() or os.path.basename(target).lstrip(".")
+            self.notify("Publishing team manifest and syncing channel relay...", severity="information")
+
+            def _sync():
+                # Publish team manifest (clones/inits, writes identity.json + README, and pushes)
+                ok = team_mesh.publish_team_manifest(t_name, readme_text, team_dir=target)
+                if not ok:
+                    ok = team_mesh.sync_relay_repo(target)
+
+                self.app.call_from_thread(self.refresh_channel_peers_ui, target)
+                if ok:
+                    self.app.call_from_thread(self.notify, "Channel relay synced and team published!", severity="information")
+                else:
+                    self.app.call_from_thread(self.notify, "Channel sync failed. Check relay URL and PAT permissions.", severity="error")
+            threading.Thread(target=_sync, daemon=True).start()
+
+        elif btn_id == "mesh_seed_btn":
+            import team_mesh
+            target = self.editing_path or toolbox.get_team_dir()
+            current_seed = team_mesh.get_or_create_user_seed(target)
+            def handle_seed_save(new_seed):
+                if new_seed:
+                    team_mesh.set_user_seed(new_seed, target)
+                    self.notify("Channel PSK Seed updated successfully.", severity="information")
+            self.app.push_screen(MeshSeedModal(current_seed), handle_seed_save)
+            return
+
         elif btn_id == "save_team_btn":
+            readme_text = self.query_one("#team_readme_input", TextArea).text
+            import team_mesh
+            target = self.editing_path or toolbox.get_team_dir()
+            team_mesh.save_relay_credentials(
+                url=self.query_one("#mesh_relay_url_input", Input).value,
+                user=self.query_one("#mesh_relay_user_input", Input).value,
+                pat=self.query_one("#mesh_relay_pat_input", Input).value,
+                team_dir=target
+            )
+            if self.editing_path:
+                try:
+                    with open(os.path.join(self.editing_path, "README.md"), "w", encoding="utf-8") as f:
+                        f.write(readme_text)
+                except Exception: pass
+                
+                t_active_name = self.query_one("#team_name_input", Input).value.strip() or os.path.basename(self.editing_path).lstrip(".")
+                edit_path = self.editing_path
+                old_name_arg = old_team_name if (old_team_name and old_team_name.lower() != t_active_name.lower()) else None
+                def _bg_publish():
+                    team_mesh.publish_team_manifest(t_active_name, readme_text, team_dir=edit_path, old_team_name=old_name_arg)
+                    self.app.call_from_thread(self.refresh_channel_peers_ui, edit_path)
+                threading.Thread(target=_bg_publish, daemon=True).start()
             t_name = self.query_one("#team_name_input", Input).value.strip()
             folder_val = self.query_one("#team_folder_input", Input).value.strip()
             url = self.query_one("#team_remote_url_input", Input).value.strip()
@@ -2037,12 +2180,20 @@ class TeamsModal(ModalScreen[None]):
                 
                 settings = toolbox.load_global_settings()
                 registered = settings.get("registered_teams", [])
+                old_team_name = None
                 for t in registered:
                     if os.path.abspath(os.path.expanduser(t.get("path", ""))) == target_path:
+                        old_team_name = t.get("name")
                         t["name"] = name
                         break
                 settings["registered_teams"] = registered
                 toolbox.save_global_settings(settings)
+
+                ts = toolbox.load_team_settings() if target_path == toolbox.get_team_dir() else {}
+                if not old_team_name and ts.get("team_name"):
+                    old_team_name = ts.get("team_name")
+                ts["team_name"] = name
+                toolbox.save_team_settings(ts)
                 
                 toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
                 self.refresh_list()
@@ -2052,6 +2203,13 @@ class TeamsModal(ModalScreen[None]):
                 target_path = folder_val if os.path.isabs(folder_val) else os.path.join(str(Path.home()), folder_val)
                 name = t_name or os.path.basename(target_path).lstrip(".")
                 
+                if readme_text:
+                    os.makedirs(target_path, exist_ok=True)
+                    try:
+                        with open(os.path.join(target_path, "README.md"), "w", encoding="utf-8") as f:
+                            f.write(readme_text)
+                    except Exception: pass
+
                 self.dismiss()
                 self.agent_view.switch_team(target_path, display_name=name)
                 toolbox.save_team_git_credentials(url, user, pat, team_dir=target_path)
@@ -2100,6 +2258,9 @@ class TeamsModal(ModalScreen[None]):
                         import keyring
                         keyring.delete_password("Federate", f"git_user_{team_tag}")
                         keyring.delete_password("Federate", f"git_pat_{team_tag}")
+                        keyring.delete_password("Federate", f"mesh_relay_user_{team_tag}")
+                        keyring.delete_password("Federate", f"mesh_relay_pat_{team_tag}")
+                        keyring.delete_password("Federate", f"mesh_seed_{team_tag}")
                         try:
                             import mcp_handler
                             mcp_handler._clear_mcp_keyring_chunks(keyring, team_dir=t_path)
@@ -2117,8 +2278,19 @@ class TeamsModal(ModalScreen[None]):
                     elif self.editing_path == t_path:
                         self.clear_form()
 
+                    import team_mesh
+                    # Unpublish team manifest and remove from relay repo
+                    try:
+                        team_mesh.unpublish_team(t_name, team_dir=t_path)
+                    except Exception:
+                        pass
+
                     if choice == "purge":
                         import shutil
+                        relay_local = team_mesh.get_relay_local_dir(t_path)
+                        if os.path.exists(relay_local):
+                            try: shutil.rmtree(relay_local, ignore_errors=True)
+                            except Exception: pass
                         if t_path != str(Path.home()) and os.path.exists(t_path) and len(t_path) > 3:
                             try:
                                 shutil.rmtree(t_path, ignore_errors=True)
@@ -2571,6 +2743,76 @@ class ScheduleModal(ModalScreen[None]):
                 self.agent_view.schedule_manager.delete_task(task_id)
                 self.refresh_list()
                 self.notify("Loaded task into inputs for modification.", severity="information")
+
+class IncomingDispatchModal(ModalScreen[str]):
+    DEFAULT_CSS = """
+    IncomingDispatchModal { align: center middle; background: $background 60%; }
+    #dispatch_dialog { width: 75; height: auto; max-height: 80%; border: thick $accent; background: $surface; padding: 1 2; }
+    .dispatch_header { background: $accent; color: $text; text-style: bold; text-align: center; width: 100%; height: 1; margin-bottom: 1; }
+    .dispatch_body { 
+        margin: 1 0; 
+        max-height: 14; 
+        overflow-y: scroll; 
+        border: round $primary; 
+        background: $boost; 
+        padding: 1; 
+    }
+    .dispatch_body Label { 
+        text-wrap: wrap; 
+        width: 100%; 
+        height: auto; 
+    }
+    .dispatch_msg { margin: 1 0; text-style: bold; }
+    .buttons { height: auto; align: right middle; margin-top: 1; }
+    .buttons Button { margin-left: 1; }
+    """
+
+    def __init__(self, sender_team: str, instruction: str, attachments: list, **kwargs):
+        super().__init__(**kwargs)
+        self.sender_team = sender_team
+        self.instruction = instruction
+        self.attachments = attachments
+        self.time_left = 300
+        self.timer = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dispatch_dialog"):
+            yield Label(f" Incoming Dispatch from Team: {self.sender_team}", classes="dispatch_header")
+            with Vertical(classes="dispatch_body"):
+                yield Label(f"[bold cyan]Instruction:[/bold cyan]\n{self.instruction}\n")
+                if self.attachments:
+                    files_str = "\n".join(f"  • {os.path.basename(f)}" for f in self.attachments)
+                    yield Label(f"[bold yellow]Attachments ({len(self.attachments)}):[/bold yellow]\n{files_str}")
+                else:
+                    yield Label("[dim]No attachments accompanied this dispatch.[/dim]")
+            yield Label(f"Auto-accepting in [bold yellow]{self.time_left}s[/bold yellow] if no action taken...", id="dispatch_countdown", classes="dispatch_msg")
+            with Horizontal(classes="buttons"):
+                yield Button("Accept & Run", id="accept_btn", variant="success")
+                yield Button("Dismiss", id="dismiss_btn", variant="error")
+
+    def on_mount(self):
+        self.query_one("#accept_btn").focus()
+        self.timer = self.set_interval(1.0, self.update_countdown)
+
+    def update_countdown(self):
+        self.time_left -= 1
+        if self.time_left <= 0:
+            if self.timer:
+                self.timer.stop()
+            self.dismiss("accept")
+        else:
+            try:
+                self.query_one("#dispatch_countdown", Label).update(
+                    f"Auto-accepting in [bold yellow]{self.time_left}s[/bold yellow] if no action taken..."
+                )
+            except Exception:
+                pass
+
+    @on(Button.Pressed)
+    def handle_choice(self, event: Button.Pressed):
+        if self.timer:
+            self.timer.stop()
+        self.dismiss("accept" if event.button.id == "accept_btn" else "dismiss")
 
 class ScheduledTaskPromptModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -3981,6 +4223,14 @@ class AIAgentView(Vertical):
         # Reload MCP background sessions for the new team
         toolbox.reload_mcp_servers()
 
+        # Auto-publish identity manifest to relay for the newly activated team
+        def _bg_mesh_init():
+            try:
+                import team_mesh
+                team_mesh.auto_publish_manifest(clean_dir)
+            except Exception: pass
+        threading.Thread(target=_bg_mesh_init, daemon=True).start()
+
         self._write_log(Rule(title=f"[bold #f2a813]TEAM WORKSPACE: {d_name.upper()}", style="dim"))
         self._write_log(get_welcome_banner(self))
         self.update_tokens()
@@ -4985,7 +5235,103 @@ class AIAgentView(Vertical):
             candidate = nxt
         return candidate
 
+    @work(thread=True)
+    def check_mesh_inbox(self):
+        """Wire 3: Polls team channel relay, processes ACKs, and stages incoming dispatches."""
+        if getattr(self, "_inbox_worker_busy", False) or getattr(self, "_dispatch_prompt_active", False) or getattr(self, "_running_agents", None):
+            return
+
+        self._inbox_worker_busy = True
+        try:
+            self._do_check_mesh_inbox()
+        finally:
+            self._inbox_worker_busy = False
+
+    def _do_check_mesh_inbox(self):
+
+        try:
+            import team_mesh
+        except ImportError:
+            return
+
+        team_dir = toolbox.get_team_dir()
+        team_mesh.sync_relay_repo(team_dir)
+        team_mesh.process_acks_and_purge(team_dir)
+
+        my_team = toolbox.get_team_name(team_dir)
+        relay_dir = team_mesh.get_relay_local_dir(team_dir)
+        my_inbox = os.path.join(relay_dir, "messages", my_team)
+        if not os.path.exists(my_inbox):
+            return
+
+        fedmsg_files = [f for f in os.listdir(my_inbox) if f.endswith(".fedmsg")]
+        if not fedmsg_files:
+            return
+
+        remaining_count = len(fedmsg_files) - 1
+        fname = fedmsg_files[0]
+        fpath = os.path.join(my_inbox, fname)
+        processed_path = fpath + ".processed"
+        try:
+            # Rename immediately to prevent duplicate prompts on the next cycle
+            os.replace(fpath, processed_path)
+            with open(processed_path, "rb") as f:
+                raw = f.read()
+
+            header = json.loads(raw.split(b"\n---SIG---\n")[0].decode("utf-8"))
+            msg_id = header["msg_id"]
+            sender_team = header["from_team"]
+
+            stage_dir = os.path.join(team_dir, ".inbox_artifacts")
+            manifest, extracted = team_mesh.unpack_and_decrypt(raw, stage_dir, team_dir=team_dir)
+
+            # Single combined triple-tick ACK to avoid redundant network pushes
+            team_mesh.emit_ack(msg_id, sender_team, status="triple_tick", team_dir=team_dir)
+
+            task_prompt = (
+                f"[Dispatch from Team {sender_team}]: {manifest['instruction']}\n\n"
+                f"Note: To send a response back to Team {sender_team}, use the tool "
+                f"`send_team_dispatch(target_team='{sender_team}', instruction='...')`.\n"
+                f"Note: You will be responding on behalf of your team not personally, so formulate the response accordingly."
+            )
+            if extracted:
+                escaped_files = [f.replace(" ", r"\ ") for f in extracted]
+                task_prompt += "\n\nAttached Files (Pre-staged locally):\n" + "\n".join(f"&{ef}" for ef in escaped_files)
+
+            if remaining_count > 0:
+                self.notify(f"Note: {remaining_count} additional dispatch(es) queued in inbox.", severity="information")
+
+            self._dispatch_prompt_active = True
+            def prompt_user():
+                try:
+                    def handle_choice(choice: str):
+                        self._dispatch_prompt_active = False
+                        if choice == "accept":
+                            chat_input = self.query_one("#ai_chat_input", ChatInput)
+                            agent_name = getattr(self.active_agent, "name", "Rita")
+                            self.on_input_submitted(ChatInput.Submitted(chat_input, f"{task_prompt}"))
+                        else:
+                            staged_path = os.path.join(".inbox_artifacts", manifest.get("msg_id", ""))
+                            self.log_to_ui(
+                                f"[dim yellow]Incoming dispatch from Team '{sender_team}' was dismissed.\n"
+                                f"• Instruction: {manifest.get('instruction', '')[:120]}\n"
+                                f"• Staged files preserved at: {staged_path}[/dim yellow]"
+                            )
+                    self.app.push_screen(
+                        IncomingDispatchModal(sender_team, manifest.get("instruction", ""), extracted),
+                        handle_choice
+                    )
+                except Exception as pe:
+                    self._dispatch_prompt_active = False
+                    self.log_to_ui(f"[bold red]Failed to present dispatch modal: {pe}[/bold red]")
+
+            self.app.call_from_thread(prompt_user)
+            return
+        except Exception as e:
+            self.log_to_ui(f"[dim red]Mesh relay verification failed: {e}[/dim red]")
+
     def tick_scheduler(self):
+        self.check_mesh_inbox()
         if getattr(self, "shell_mode", False) or not hasattr(self, "schedule_manager") or getattr(self, "_scheduler_prompt_active", False):
             return
             
@@ -5144,6 +5490,12 @@ class AIAgentView(Vertical):
         remote_url, _, pat = toolbox.get_team_git_credentials(t_dir)
         if not remote_url or not pat:
             return
+
+        # 1. Auto-publish mesh manifest to channel relay if configured
+        try:
+            import team_mesh
+            team_mesh.auto_publish_manifest(t_dir)
+        except Exception: pass
 
         ok, msg = toolbox.sync_team_remote(action="pull", team_dir=t_dir)
         if ok:
