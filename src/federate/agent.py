@@ -94,6 +94,7 @@ def get_installed_version() -> str:
             return "1.2.9"
 
 SLASH_COMMAND_DESCS = {
+    "/secrets": "Open modal to manage Keyring secrets and mnemonics (%mnemonic%)",
     "/tools": "List status of all available AI tools",
     "/update": "Check for software updates and view release notes",
     "/version": "Show currently installed Federate version",
@@ -127,6 +128,133 @@ SLASH_COMMAND_DESCS = {
 }
 
 # --- MODAL SCREENS ---
+
+class SecretsModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    SecretsModal { align: center middle; background: $background 60%; }
+    #secrets_dialog { width: 88; height: 82%; border: thick $primary; background: $surface; padding: 1 2; }
+    #secrets_header_row { layout: horizontal; height: 3; background: $primary; color: $text; text-style: bold; align: left middle; padding: 0 1; margin-bottom: 1; }
+    #secrets_scroll { height: 1fr; border: round $accent; background: $boost; padding: 0 1; }
+    .secret_row { layout: horizontal; height: 3; align: left middle; margin-bottom: 1; }
+    .sec_col_num { width: 6; text-align: center; color: $accent; text-style: bold; content-align: center middle; height: 3; }
+    .sec_col_mnemonic { width: 30; margin-right: 1; }
+    .sec_col_secret { width: 1fr; margin-right: 1; }
+    .sec_col_del { width: 6; }
+    #secrets_actions { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
+    #secrets_actions Button { margin-left: 1; }
+    #chk_show_secrets { margin-right: 1; }
+    """
+
+    def compose(self) -> ComposeResult:
+        team_name = toolbox.get_team_name()
+        with Vertical(id="secrets_dialog"):
+            yield Label(f" Keyring Secrets & Mnemonics — {team_name}", classes="pane_title")
+            with Horizontal(id="secrets_header_row"):
+                yield Label("#", classes="sec_col_num")
+                yield Label("Mnemonic (%name%)", classes="sec_col_mnemonic")
+                yield Label("Secret", classes="sec_col_secret")
+                yield Label("", classes="sec_col_del")
+
+            with VerticalScroll(id="secrets_scroll"):
+                pass
+
+            with Horizontal(id="secrets_actions"):
+                yield Checkbox("Show Secrets", id="chk_show_secrets", value=False)
+                yield Button("+ Add Row", id="btn_add_secret_row", variant="primary")
+                yield Button("Save", id="btn_save_secrets", variant="success")
+                yield Button("Close", id="btn_close_secrets", variant="error")
+
+    def on_mount(self):
+        if toolbox.is_keyring_locked():
+            def handle_unlock(res):
+                if res and res[0] == "unlock" and res[1]:
+                    if toolbox.unlock_keyring(res[1]):
+                        self.load_rows()
+            self.app.push_screen(KeyringUnlockModal(), handle_unlock)
+        else:
+            self.load_rows()
+
+    def load_rows(self):
+        container = self.query_one("#secrets_scroll", VerticalScroll)
+        container.query("*").remove()
+        secrets = toolbox.load_team_secrets()
+        if not secrets:
+            secrets = [{"mnemonic": "", "secret": ""}]
+        show_secrets = self.query_one("#chk_show_secrets", Checkbox).value
+        for i, item in enumerate(secrets):
+            self.mount_row(container, i + 1, item.get("mnemonic", ""), item.get("secret", ""), show_secrets)
+
+    def mount_row(self, container, num: int, mnemonic: str = "", secret: str = "", show_secrets: bool = False):
+        row = Horizontal(
+            Label(str(num), classes="sec_col_num"),
+            Input(value=mnemonic, placeholder="MNEMONIC (e.g. API_KEY)", classes="sec_col_mnemonic"),
+            Input(value=secret, placeholder="Secret value", password=not show_secrets, classes="sec_col_secret"),
+            Button("X", variant="error", classes="sec_col_del"),
+            classes="secret_row"
+        )
+        container.mount(row)
+
+    def renumber_rows(self):
+        container = self.query_one("#secrets_scroll", VerticalScroll)
+        for idx, row in enumerate(container.query(".secret_row")):
+            row.query_one(".sec_col_num", Label).update(str(idx + 1))
+
+    @on(Checkbox.Changed, "#chk_show_secrets")
+    def on_toggle_show(self, event: Checkbox.Changed):
+        show = event.value
+        for secret_input in self.query(".sec_col_secret"):
+            secret_input.password = not show
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        btn = event.button
+        if btn.id == "btn_close_secrets":
+            self.dismiss()
+        elif btn.id == "btn_add_secret_row":
+            container = self.query_one("#secrets_scroll", VerticalScroll)
+            current_count = len(container.query(".secret_row"))
+            show = self.query_one("#chk_show_secrets", Checkbox).value
+            self.mount_row(container, current_count + 1, "", "", show)
+            self.call_after_refresh(lambda: container.scroll_end(animate=False))
+        elif btn.id == "btn_save_secrets":
+            self.save_rows()
+        elif "sec_col_del" in btn.classes:
+            row = btn.parent
+            row.remove()
+            self.call_after_refresh(self.renumber_rows)
+
+    def save_rows(self):
+        rows = self.query(".secret_row")
+        secrets_list = []
+        seen_mnemonics = set()
+        for idx, row in enumerate(rows):
+            m = row.query_one(".sec_col_mnemonic", Input).value.strip().strip("%")
+            s = row.query_one(".sec_col_secret", Input).value.strip()
+            if m or s:
+                if not m:
+                    self.notify(f"Row #{idx + 1}: Mnemonic cannot be empty.", severity="error")
+                    return
+                if m.upper() in seen_mnemonics:
+                    self.notify(f"Row #{idx + 1}: Duplicate mnemonic '%{m}%' detected.", severity="error")
+                    return
+                if len(s) < 3:
+                    self.notify(f"Row #{idx + 1} ({m}): Secret must be at least 3 characters.", severity="error")
+                    return
+                seen_mnemonics.add(m.upper())
+                secrets_list.append({"mnemonic": m, "secret": s})
+        try:
+            toolbox.save_team_secrets(secrets_list)
+            self.notify(f"Saved {len(secrets_list)} secret(s) to Keyring.", severity="information")
+            self.dismiss()
+        except Exception as e:
+            if "locked" in str(e).lower():
+                def handle_unlock(res):
+                    if res and res[0] == "unlock" and res[1]:
+                        if toolbox.unlock_keyring(res[1]):
+                            self.save_rows()
+                self.app.push_screen(KeyringUnlockModal(), handle_unlock)
+                return
+            self.notify(f"Failed to save secrets: {e}", severity="error")
 
 class ToolConfirmationModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -175,9 +303,9 @@ class ToolConfirmationModal(ModalScreen[str]):
     def __init__(self, tool_name: str, arguments: dict, agent_name: str = "Agent", diff: Optional[str] = None):
         super().__init__()
         self.tool_name = tool_name
-        self.arguments = arguments
+        self.arguments = toolbox.mask_secrets(arguments)
         self.agent_name = agent_name
-        self.diff = diff
+        self.diff = toolbox.mask_secrets(diff) if diff else None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm_dialog"):
@@ -4185,6 +4313,7 @@ class AIAgentView(Vertical):
         """Switches the active team folder, reinitializing git, database connections, and managers cleanly."""
         self.action_abort()
         toolbox.set_team_dir(team_dir)
+        toolbox.invalidate_secrets_cache()
         toolbox.init_federate_git_repo()
         toolbox.reconnect_team_databases()
 
@@ -4633,6 +4762,8 @@ class AIAgentView(Vertical):
 
     def _write_message_block(self, header_markup: str, content: str, color: str, is_markdown: bool = True):
         try:
+            header_markup = toolbox.mask_secrets(header_markup)
+            content = toolbox.mask_secrets(content)
             chat_body = self.query_one("#chat_messages")
             top_rule = Static(Rule(style=color))
             header_widget = Static(Text.from_markup(header_markup), classes="chat_msg", markup=False)
@@ -4662,6 +4793,7 @@ class AIAgentView(Vertical):
 
     def render_tool_result_box(self, owner_name, color, summary):
         try:
+            summary = toolbox.mask_secrets(summary)
             header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
             body_text = Text(str(summary))
             box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
@@ -4672,6 +4804,7 @@ class AIAgentView(Vertical):
             
     def render_tool_error_box(self, owner_name, color, summary):
         try:
+            summary = toolbox.mask_secrets(summary)
             header_text = Text(f"Tool Error ({owner_name}):\n", style="bold red")
             body_text = Text(str(summary), style="red")
             box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
@@ -4701,7 +4834,7 @@ class AIAgentView(Vertical):
     def update_ai_message(self, display_text):
         try:
             if hasattr(self, "current_ai_widget") and self.current_ai_widget:
-                self.current_ai_widget.update(Markdown(display_text))
+                self.current_ai_widget.update(Markdown(toolbox.mask_secrets(display_text)))
         except Exception:
             pass
 
@@ -4716,6 +4849,7 @@ class AIAgentView(Vertical):
     
     def _write_log(self, msg: Any, is_markdown: bool = False):
         try:
+            msg = toolbox.mask_secrets(msg)
             chat_body = self.query_one("#chat_messages")
             
             if isinstance(msg, str) and not is_markdown:

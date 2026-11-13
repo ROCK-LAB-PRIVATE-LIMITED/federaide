@@ -25,6 +25,7 @@ from textual.suggester import Suggester
 
 SLASH_COMMANDS =[
     "/send_team",
+    "/secrets",
     "/tools",
     "/arm", "/config", "/safe",
     "/init",
@@ -202,6 +203,11 @@ def process_slash_command(command: str, agent_view):
                 
         agent_view.log_to_ui(output, is_markdown=False)
         
+    elif cmd == "/secrets":
+        from agent import SecretsModal
+        agent_view.app.push_screen(SecretsModal())
+        return
+
     elif cmd == "/arm":
         agent_view.toggle_plan_mode()
             
@@ -524,6 +530,7 @@ def process_slash_command(command: str, agent_view):
 | Command | Description |
 |---|---|
 | `/help` | Show this detailed help menu. |
+| `/secrets` | Open modal to manage Keyring secrets and mnemonics (%mnemonic%). |
 | `/arm` | **Toggle tools state:** Switches between `PLAN` mode (Safe, Read-Only) and `EXECUTE` mode (Write/Execute enabled). |
 | `/safe` | Takes the system into `PLAN` (Read-Only) mode. |
 | `/directory` or `/dir` | Open the interactive workspace directory picker. |
