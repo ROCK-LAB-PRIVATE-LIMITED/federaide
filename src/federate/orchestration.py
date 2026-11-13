@@ -707,7 +707,14 @@ class SessionManager:
 
     def broadcast_message(self, sender_name: str, content: str, is_ai: bool = True, tool_outputs: Optional[List[Dict[str, Any]]] = None, tool_calls: Optional[List[Dict[str, Any]]] = None):
         with self._lock:
+            content = toolbox.mask_secrets(content)
             if tool_outputs:
+                for out in tool_outputs:
+                    out["content"] = toolbox.mask_secrets(out.get("content", ""))
+                    if "compressed_content" in out:
+                        out["compressed_content"] = toolbox.mask_secrets(out["compressed_content"])
+                    if "args" in out:
+                        out["args"] = toolbox.mask_secrets(out["args"])
                 cursor = self.db_conn.cursor()
                 for output in tool_outputs:
                     t_name = output.get("name", "")

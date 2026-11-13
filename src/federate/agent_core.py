@@ -40,6 +40,10 @@ try:
 
     def _patched_convert_message_to_dict(message, *args, **kwargs):
         msg_dict = _orig_convert_message_to_dict(message, *args, **kwargs)
+        if msg_dict.get("content"):
+            msg_dict["content"] = toolbox.mask_secrets(msg_dict["content"])
+        if msg_dict.get("tool_calls"):
+            msg_dict["tool_calls"] = toolbox.mask_secrets(msg_dict["tool_calls"])
         
         if msg_dict.get("role") == "tool" and not msg_dict.get("name"):
             msg_dict["name"] = "unknown_tool"
@@ -312,6 +316,10 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             return messages
         processed = []
         for msg in messages:
+            if hasattr(msg, "content"):
+                msg.content = toolbox.mask_secrets(msg.content)
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                msg.tool_calls = toolbox.mask_secrets(msg.tool_calls)
             processed.append(msg)
             if msg.__class__.__name__ == "ToolMessage" and isinstance(msg.content, str):
                 tool_name = getattr(msg, "name", None)

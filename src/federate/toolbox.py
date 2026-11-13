@@ -442,6 +442,309 @@ def auto_commit_state(message: str = "State update"):
 
     threading.Thread(target=_worker, daemon=True).start()
 
+_SECRETS_CACHE = None
+
+def _get_secrets_keyring_keys(team_dir=None):
+    t_dir = team_dir or get_team_dir()
+    team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(t_dir)).lower().lstrip("_") or "default"
+    return (
+        f"secrets_chunk_count_{team_tag}",
+        f"secrets_chunk_{team_tag}_",
+        f"secrets_token_{team_tag}"
+    )
+
+def invalidate_secrets_cache():
+    global _SECRETS_CACHE
+    _SECRETS_CACHE = None
+
+def load_team_secrets(team_dir=None) -> List[Dict[str, str]]:
+    global _SECRETS_CACHE
+    if _SECRETS_CACHE is not None and team_dir is None:
+        return _SECRETS_CACHE
+
+    try:
+        if is_keyring_locked():
+            return _SECRETS_CACHE or []
+    except Exception:
+        pass
+
+    count_key, prefix_key, legacy_key = _get_secrets_keyring_keys(team_dir)
+    raw_str = None
+    try:
+        import keyring
+        count_str = keyring.get_password("Federate", count_key)
+        if count_str and count_str.isdigit():
+            total_chunks = int(count_str)
+            parts = []
+            for idx in range(total_chunks):
+                part = keyring.get_password("Federate", f"{prefix_key}{idx}")
+                if part is None:
+                    parts = []
+                    break
+                parts.append(part)
+            if parts and len(parts) == total_chunks:
+                raw_str = "".join(parts)
+        if not raw_str:
+            raw_str = keyring.get_password("Federate", legacy_key)
+    except Exception:
+        raw_str = None
+
+    result = []
+    if raw_str:
+        try:
+            data = json.loads(raw_str)
+            if isinstance(data, list):
+                result = data
+        except Exception:
+            pass
+
+    if team_dir is None:
+        _SECRETS_CACHE = result
+    return result
+
+def save_team_secrets(secrets_list: List[Dict[str, str]], team_dir=None) -> bool:
+    global _SECRETS_CACHE
+    try:
+        if is_keyring_locked():
+            raise RuntimeError("Keyring is locked. Please unlock keyring first.")
+    except Exception as e:
+        if "locked" in str(e).lower():
+            raise e
+
+    import keyring
+    count_key, prefix_key, legacy_key = _get_secrets_keyring_keys(team_dir)
+
+    try:
+        count_str = keyring.get_password("Federate", count_key)
+        max_chunks = int(count_str) if (count_str and count_str.isdigit()) else 64
+        for idx in range(max_chunks):
+            try: keyring.delete_password("Federate", f"{prefix_key}{idx}")
+            except Exception: pass
+        try: keyring.delete_password("Federate", count_key)
+        except Exception: pass
+        try: keyring.delete_password("Federate", legacy_key)
+        except Exception: pass
+    except Exception:
+        pass
+
+    raw_json = json.dumps(secrets_list)
+    chunk_size = 256
+    chunks = [raw_json[i:i + chunk_size] for i in range(0, len(raw_json), chunk_size)]
+    for idx, chunk in enumerate(chunks):
+        keyring.set_password("Federate", f"{prefix_key}{idx}", chunk)
+    keyring.set_password("Federate", count_key, str(len(chunks)))
+
+    if team_dir is None:
+        _SECRETS_CACHE = secrets_list
+    return True
+
+def mask_secrets(text: Any) -> Any:
+    """Recursively searches for secret values and replaces them with %mnemonic%."""
+    if text is None:
+        return text
+    secrets = load_team_secrets()
+    if not secrets:
+        return text
+
+    valid_pairs = []
+    for item in secrets:
+        m = str(item.get("mnemonic", "")).strip().strip("%")
+        s = str(item.get("secret", "")).strip()
+        if m and s and len(s) >= 3:
+            valid_pairs.append((m, s))
+
+    if not valid_pairs:
+        return text
+
+    valid_pairs.sort(key=lambda x: len(x[1]), reverse=True)
+
+    def _replace_str(s_val: str) -> str:
+        for m, s in valid_pairs:
+            if s in s_val:
+                s_val = s_val.replace(s, f"%{m}%")
+        return s_val
+
+    if isinstance(text, str):
+        return _replace_str(text)
+    elif isinstance(text, list):
+        return [mask_secrets(item) for item in text]
+    elif isinstance(text, dict):
+        return {k: mask_secrets(v) for k, v in text.items()}
+    elif hasattr(text, "plain") and hasattr(text, "copy"):
+        try:
+            from rich.text import Text
+            new_plain = _replace_str(text.plain)
+            if new_plain != text.plain:
+                return Text(new_plain, style=text.style)
+        except Exception:
+            pass
+    return text
+
+import shlex
+
+def substitute_secrets(text: Any) -> Any:
+    """Replaces all %mnemonic% placeholders with actual secret values literally."""
+    if text is None:
+        return text
+    secrets = load_team_secrets()
+    if not secrets:
+        return text
+
+    valid_pairs = []
+    for item in secrets:
+        m = str(item.get("mnemonic", "")).strip().strip("%")
+        s = str(item.get("secret", ""))
+        if m and s:
+            valid_pairs.append((m, s))
+
+    if not valid_pairs:
+        return text
+
+    def _sub_str(s_val: str) -> str:
+        for m, s in valid_pairs:
+            pattern = re.compile(rf"%{re.escape(m)}%", re.IGNORECASE)
+            # Use lambda to prevent re.sub treating backslashes in secrets as group escapes
+            s_val = pattern.sub(lambda _, rep=s: rep, s_val)
+        return s_val
+
+    if isinstance(text, str):
+        return _sub_str(text)
+    elif isinstance(text, list):
+        return [substitute_secrets(item) for item in text]
+    elif isinstance(text, dict):
+        return {k: substitute_secrets(v) for k, v in text.items()}
+    return text
+
+
+
+import contextlib
+
+_SWAP_LOCK = threading.RLock()
+
+BINARY_EXTENSIONS = {
+    '.exe', '.bin', '.so', '.dylib', '.dll', '.a', '.o', '.obj',
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.zip', '.tar', '.gz',
+    '.sqlite', '.db', '.parquet', '.pkl', '.pyc', '.wasm'
+}
+
+@contextlib.contextmanager
+def swapped_secrets_context(target_dir: str):
+    """
+    Temporarily swaps %mnemonic% placeholders with actual secrets strictly during execution.
+    - Preserves exact bytes and line endings.
+    - Completely skips binary files and non-text assets to prevent corruption.
+    - Uses an execution lock to guarantee concurrency safety.
+    - In finally:, restores exact original bytes before releasing.
+    """
+    if not target_dir or not os.path.exists(target_dir):
+        yield
+        return
+
+    secrets = load_team_secrets()
+    if not secrets:
+        yield
+        return
+
+    valid_pairs = []
+    for item in secrets:
+        m = str(item.get("mnemonic", "")).strip().strip("%")
+        s = str(item.get("secret", ""))
+        if m and s:
+            valid_pairs.append((m, s))
+
+    if not valid_pairs:
+        yield
+        return
+
+    original_files = {}
+
+    def _collect_and_swap(fp):
+        ext = os.path.splitext(fp)[1].lower()
+        if ext in BINARY_EXTENSIONS:
+            return
+
+        try:
+            with open(fp, "rb") as rf:
+                raw_bytes = rf.read()
+
+            # Skip binary files (null byte detector)
+            if b"\x00" in raw_bytes[:4096]:
+                return
+
+            try:
+                content = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                return  # Skip files that are not valid UTF-8 text
+
+            needs_swap = any(f"%{m}%".lower() in content.lower() for m, _ in valid_pairs)
+            if needs_swap:
+                original_files[fp] = raw_bytes
+                swapped = substitute_secrets(content)
+                with open(fp, "wb") as wf:
+                    wf.write(swapped.encode("utf-8"))
+        except Exception:
+            pass
+
+    with _SWAP_LOCK:
+        try:
+            if os.path.isfile(target_dir):
+                _collect_and_swap(target_dir)
+            elif os.path.isdir(target_dir):
+                for root, dirs, files in os.walk(target_dir):
+                    dirs[:] = [d for d in dirs if d not in ("venv", ".git", "__pycache__", "node_modules", "target", "build", "bin")]
+                    for f in files:
+                        _collect_and_swap(os.path.join(root, f))
+            yield
+        finally:
+            failed_restorations = []
+            for fp, orig_bytes in original_files.items():
+                restored = False
+                # Retry loop to handle transient Windows process-exit file locking
+                for attempt in range(5):
+                    try:
+                        with open(fp, "wb") as wf:
+                            wf.write(orig_bytes)
+                        restored = True
+                        break
+                    except (PermissionError, OSError):
+                        time.sleep(0.05)
+                if not restored:
+                    failed_restorations.append(fp)
+
+            if failed_restorations:
+                err_msg = f"CRITICAL: Failed to restore %mnemonic% placeholders in files: {failed_restorations}. Secrets may remain on disk!"
+                log_tool(f"[bold red]{err_msg}[/bold red]")
+                try:
+                    if CURRENT_APP:
+                        CURRENT_APP.notify(err_msg, severity="error", timeout=10.0)
+                except Exception:
+                    pass
+                raise RuntimeError(err_msg)
+
+def revert_secrets_to_mnemonics_in_path(target_path: str):
+    """Scans and sanitizes any source files that previously had secrets written to disk."""
+    if not os.path.exists(target_path):
+        return
+
+    def _process_file(fp: str):
+        try:
+            with open(fp, "r", encoding="utf-8", errors="ignore") as rf:
+                content = rf.read()
+            masked = mask_secrets(content)
+            if masked != content:
+                with open(fp, "w", encoding="utf-8") as wf:
+                    wf.write(masked)
+        except Exception:
+            pass
+
+    if os.path.isfile(target_path):
+        _process_file(target_path)
+    elif os.path.isdir(target_path):
+        for root, dirs, files in os.walk(target_path):
+            dirs[:] = [d for d in dirs if d not in ("venv", ".git", "__pycache__", "node_modules")]
+            for f in files:
+                _process_file(os.path.join(root, f))
+
 def _bootstrap_scratchpad_venv():
     """Silently creates a default scratchpad virtual environment in the background if missing."""
     try:
@@ -967,7 +1270,16 @@ def resilient_invoke(model, messages):
                     time.sleep(0.1)
                     
         try:
-            res = model.invoke(messages)
+            masked_messages = []
+            for m in messages:
+                if hasattr(m, "content"):
+                    m.content = mask_secrets(m.content)
+                elif isinstance(m, dict) and "content" in m:
+                    m["content"] = mask_secrets(m["content"])
+                masked_messages.append(m)
+            res = model.invoke(masked_messages)
+            if hasattr(res, "content") and isinstance(res.content, str):
+                res.content = mask_secrets(res.content)
             # Successful call: rapidly decay the pacing delay back toward 0.0 for local/high-quota APIs
             if _DYNAMIC_PACING_DELAY > 0.0:
                 with _LLM_LOCK:
@@ -1121,15 +1433,16 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
                         env["VIRTUAL_ENV"] = t_dir
 
+                        # Sanitize any files that previously had secrets written to disk
+                        revert_secrets_to_mnemonics_in_path(get_storage_path(t_dir, "logic"))
+                        active_kwargs = substitute_secrets({k: v for k, v in kwargs.items() if v is not None})
+
                         if s_path.endswith(".py") and os.path.exists(p_exe):
                             cmd = [p_exe, s_path]
                         elif s_path.endswith(".sh"):
                             cmd = ["sh", s_path]
                         else:
                             cmd = [s_path]
-
-                        # Filter out unprovided / None arguments completely
-                        active_kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
                         # --- ARGUMENT PASSING: Direct & Non-destructive ---
                         if a_order:
@@ -1177,26 +1490,44 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
 
                         log_tool(f"Command: [dim]{' '.join(cmd)}[/]")
 
-                        proc = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            #stdin=subprocess.DEVNULL,
-                            text=True,
-                            cwd=get_storage_path(t_dir, "logic"),
-                            start_new_session=True,
-                            env=env
-                        )
+                        # Swap secrets right before execution and revert immediately when finished
+                        with swapped_secrets_context(get_storage_path(t_dir, "logic")):
+                            proc = subprocess.Popen(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                #stdin=subprocess.DEVNULL,
+                                text=True,
+                                cwd=get_storage_path(t_dir, "logic"),
+                                start_new_session=(os.name != "nt"),
+                                env=env
+                            )
 
-                        while True:
-                            check_abort()
                             try:
-                                stdout, stderr = proc.communicate(timeout=0.1)
-                                if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
-                                if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
-                                break
-                            except subprocess.TimeoutExpired:
-                                pass
+                                while True:
+                                    if ABORT_EVENT.is_set():
+                                        raise Exception("Operation forcefully aborted by user.")
+                                    check_persistent_abort()
+
+                                    try:
+                                        stdout, stderr = proc.communicate(timeout=0.1)
+                                        if isinstance(stdout, bytes): stdout = stdout.decode('utf-8', errors='replace')
+                                        if isinstance(stderr, bytes): stderr = stderr.decode('utf-8', errors='replace')
+                                        break
+                                    except subprocess.TimeoutExpired:
+                                        pass
+                            except Exception as proc_err:
+                                # Ensure child process is dead and reaped BEFORE context manager restores files
+                                try:
+                                    if os.name == "nt":
+                                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                                        proc.kill()
+                                    else:
+                                        os.killpg(os.getpgid(proc.pid), 9)
+                                    proc.wait(timeout=2.0)
+                                except Exception:
+                                    pass
+                                raise proc_err
 
                         # Loud execution report featuring concrete tool calling examples
                         executed_cmd_str = " ".join(cmd)
@@ -1231,7 +1562,7 @@ def load_dynamic_tools(agent_name: str) -> List[StructuredTool]:
                         if stderr.strip():
                             report.append(f"\nSTDERR:\n{stderr.strip()}")
 
-                        return "\n".join(report)
+                        return mask_secrets("\n".join(report))
 
                     except Exception as e:
                         if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
@@ -3163,6 +3494,13 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
             else:
                 shutil.copy2(src_abs, get_storage_path(staging_dir, "logic"))
         
+        # Clean any source files to guarantee only %mnemonic% is on disk
+        revert_secrets_to_mnemonics_in_path(get_storage_path(staging_dir, "logic"))
+        
+        # PRESERVE original test_input for metadata.json so secrets are NEVER written to disk
+        raw_test_input = mask_secrets(test_input) if test_input else {}
+        active_test_input = substitute_secrets(test_input) if test_input else {}
+
         # 2. Setup Venv
         venv_dir = get_storage_path(staging_dir, "venv")
         subprocess.run([sys.executable, "-m", "venv", venv_dir], check=True, stdin=subprocess.DEVNULL, capture_output=True, text=True)
@@ -3174,13 +3512,14 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         env["VIRTUAL_ENV"] = staging_dir
         env["GOWORK"] = "off" # Ensure Go builds inside skills are isolated
 
-        # 3. Pre-Install Commands (Custom build logic)
+        # 3. Pre-Install Commands (Compilation: swap in secrets right before compile and restore)
         if pre_install_commands:
             log_tool(f"Running pre-install commands for {tool_name}...")
-            for cmd_str in pre_install_commands:
-                log_tool(f"  Executing: {cmd_str}")
-                # We run these commands in the logic directory
-                subprocess.run(cmd_str, shell=True, check=True, env=env, cwd=get_storage_path(staging_dir, "logic"), stdin=subprocess.DEVNULL, capture_output=True, text=True)
+            with swapped_secrets_context(get_storage_path(staging_dir, "logic")):
+                for cmd_str in pre_install_commands:
+                    safe_cmd_str = substitute_secrets(cmd_str)
+                    log_tool(f"  Executing: {mask_secrets(safe_cmd_str)}")
+                    subprocess.run(safe_cmd_str, shell=True, check=True, env=env, cwd=get_storage_path(staging_dir, "logic"), stdin=subprocess.DEVNULL, capture_output=True, text=True)
 
         # 4. Install Dependencies
         # Phase 1: PyPI
@@ -3203,12 +3542,17 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
         env["VIRTUAL_ENV"] = staging_dir
 
-        cmd = [python_exe if entry_point.endswith(".py") else "sh", script_path]
+        if entry_point.endswith(".py"):
+            cmd = [python_exe, script_path]
+        elif entry_point.endswith(".sh"):
+            cmd = ["sh", script_path]
+        else:
+            cmd = [script_path]
         
         # --- ARGUMENT PASSING: Hybrid Logic ---
         if arg_order:
             # SAFETY CHECK: Catch partial arg_order configurations before running
-            mismatched = [k for k in test_input.keys() if k not in arg_order]
+            mismatched = [k for k in active_test_input.keys() if k not in arg_order]
             if mismatched:
                 return (
                     f"Error: Parameter(s) {mismatched} were provided in 'test_input' "
@@ -3219,26 +3563,20 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
                 )
 
             for arg_name in arg_order:
-                val = test_input.get(arg_name)
+                val = active_test_input.get(arg_name)
                 if val is not None:
                     if isinstance(val, list):
-                        # Variadic Spreading: ["a", "b"] -> ... a b
                         cmd.extend([str(item) for item in val])
                     else:
                         cmd.append(str(val))
         else:
             # Keyword Mode: Pass complex objects as JSON strings, simple ones as-is
-            for k, v in test_input.items():
-                # SAFETY NORMALIZATION: Strip any leading dashes from the key to prevent "----flag" compounding
+            for k, v in active_test_input.items():
                 clean_k = k.lstrip("-")
-                
-                # SMART FLAG PARSING: If value is boolean, treat as standard CLI switch/flag (e.g. --info)
                 if isinstance(v, bool):
                     if v:
                         cmd.append(f"--{clean_k}")
-                    # If False, omit the flag entirely (standard CLI behavior)
                 elif isinstance(v, list):
-                    # HYBRID LIST GUARD: Unpack simple file/string lists, but keep JSON dumps for complex nested arrays
                     if all(isinstance(item, (str, int, float)) for item in v):
                         cmd.append(f"--{clean_k}")
                         cmd.extend([str(item) for item in v])
@@ -3250,7 +3588,9 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
                     cmd.extend([f"--{clean_k}", val_str])
         # --------------------------------------
         
-        proc = subprocess.run(cmd, text=True, capture_output=True, cwd=get_storage_path(staging_dir, "logic"), env=env, stdin=subprocess.DEVNULL)
+        # Swap secrets right before test run and restore source files immediately in finally
+        with swapped_secrets_context(get_storage_path(staging_dir, "logic")):
+            proc = subprocess.run(cmd, text=True, capture_output=True, cwd=get_storage_path(staging_dir, "logic"), env=env, stdin=subprocess.DEVNULL)
         
         stdout = proc.stdout
         stderr = proc.stderr
@@ -3270,20 +3610,20 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
         else:
             result += f"FAILURE: Tool exited with code {proc.returncode}. Fix the logic and try again."
 
-        # Save metadata and test_input for Stage 2 auto-schema generation
+        # Save metadata with RAW/MASKED placeholders so secrets are NEVER written to disk or committed
         meta = {
             "entry_point": entry_point, 
             "dependencies": dependencies or [],
             "custom_dependency_paths": custom_dependency_paths or [],
             "pre_install_commands": pre_install_commands or [],
             "arg_order": arg_order,
-            "test_input": test_input,
+            "test_input": raw_test_input,
             "test_passed": test_passed
         }
         with open(get_storage_path(staging_dir, "metadata.json"), "w") as f:
-            json.dump(meta, f)
+            json.dump(mask_secrets(meta), f, indent=4)
             
-        return result
+        return mask_secrets(result)
         
     except subprocess.CalledProcessError as e:
         if os.path.exists(staging_dir):
@@ -3294,12 +3634,12 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
             err_msg += f"\nSTDERR:\n{e.stderr}"
         if e.stdout:
             err_msg += f"\nSTDOUT:\n{e.stdout}"
-        return f"Error during staging: {err_msg}"
+        return mask_secrets(f"Error during staging: {err_msg}")
     except Exception as e:
         if os.path.exists(staging_dir): 
             import shutil
             shutil.rmtree(staging_dir)
-        return f"Error during staging: {e}"
+        return mask_secrets(f"Error during staging: {e}")
 
 @tool
 def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: str, arg_order: List[str] = None, config: RunnableConfig = None) -> str:
@@ -3381,7 +3721,8 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
             subprocess.run(["git", "init"], cwd=active_dir, check=True, capture_output=True)
             # 2. Gitignore
             with open(get_storage_path(active_dir, ".gitignore"), "w") as f:
-                f.write("venv/\n__pycache__/\n*.pyc\n")
+                f.write("venv/\n__pycache__/\n*.pyc\n*.exe\n*.o\n*.so\n*.dylib\n*.dll\n*.a\ntarget/\nbuild/\n")
+
             # 3. Initial Commit
             subprocess.run(["git", "add", "."], cwd=active_dir, check=True, capture_output=True)
             subprocess.run(["git", "-c", "user.name=Rita", "-c", "user.email=rita@federaide.in", "commit", "-m", "Initial registration"], cwd=active_dir, check=True, capture_output=True)
@@ -3559,7 +3900,7 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
             with open(target_path, "w", encoding="utf-8") as f:
                 f.writelines(lines)
 
-            # Auto-stage and Auto-commit
+            # Auto-stage and Auto-commit (retains %mnemonic% on disk for clean git history)
             git_rel_path = os.path.relpath(target_path, active_dir)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             subprocess.run(["git", "add", git_rel_path], cwd=active_dir, check=True, capture_output=True)

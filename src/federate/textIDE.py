@@ -586,7 +586,7 @@ class FEDERaiDE(App):
     def notify(self, message, *args, **kwargs):
         """Catch-all to prevent bracket-parsing crashes in UI toasts."""
         from rich.markup import escape
-        safe_msg = escape(str(message)) if isinstance(message, str) else message
+        safe_msg = escape(str(toolbox.mask_secrets(message))) if isinstance(message, str) else toolbox.mask_secrets(message)
         super().notify(safe_msg, *args, **kwargs)
     
     def __init__(self, initial_file: str = None, with_agent: bool = True):
