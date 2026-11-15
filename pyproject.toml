@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federaide"
-version = "2.1.5"
+version = "2.1.6"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "GNU Affero General Public License v3"}
@@ -46,6 +46,7 @@ dependencies = [
     "numpy==2.4.6",
     "pydantic==2.13.4",
     "keyring>=25.7.0",
+    "keyrings.alt",
     "DDGS==9.16.0",
     "pycryptodome>=3.23.0",
     "pylatexenc==2.10",  # Compulsory LaTeX parser for mathematical unicode rendering
