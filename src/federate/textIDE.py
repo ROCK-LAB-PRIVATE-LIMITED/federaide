@@ -51,7 +51,11 @@ def stop_loading_spinner():
         sys.stdout.write("\r\033[K")
         sys.stdout.flush()
 
-if sys.stdout.isatty() and "-record" not in sys.argv:
+_is_ide_launch = (
+    any(flag in sys.argv for flag in ("--no-agent", "--ide"))
+    or os.path.basename(sys.argv[0]).lower() in ("ide", "ide.exe")
+)
+if sys.stdout.isatty() and "-record" not in sys.argv and not _is_ide_launch:
     _spinner_thread = threading.Thread(target=_run_loading_spinner, daemon=True)
     _spinner_thread.start()
 
@@ -97,14 +101,25 @@ Widget._on_mouse_scroll_down = _patched_mouse_scroll_down
 Widget._on_mouse_scroll_up = _patched_mouse_scroll_up
 # -----------------------------------------------
 
-import toolbox
 from execution import ExecutionManager, SettingsModal, DEFAULT_RUN_CONFIGS
+from ide_config import get_team_dir as _lite_get_team_dir, load_team_settings as _lite_load_team_settings
 
-try:
-    from agent import AIAgentView
-    HAS_AI_AGENT = True
-except ImportError:
-    HAS_AI_AGENT = False
+toolbox = None
+AIAgentView = None
+HAS_AI_AGENT = False
+
+def _load_agent_modules():
+    global toolbox, AIAgentView, HAS_AI_AGENT
+    if toolbox is None:
+        import toolbox as _toolbox
+        toolbox = _toolbox
+    if AIAgentView is None and not HAS_AI_AGENT:
+        try:
+            from agent import AIAgentView as _AIAgentView
+            AIAgentView = _AIAgentView
+            HAS_AI_AGENT = True
+        except ImportError:
+            HAS_AI_AGENT = False
 
 try:
     import pyperclip
@@ -586,11 +601,16 @@ class FEDERaiDE(App):
     def notify(self, message, *args, **kwargs):
         """Catch-all to prevent bracket-parsing crashes in UI toasts."""
         from rich.markup import escape
-        safe_msg = escape(str(toolbox.mask_secrets(message))) if isinstance(message, str) else toolbox.mask_secrets(message)
+        if self.with_agent and toolbox is not None:
+            safe_msg = escape(str(toolbox.mask_secrets(message))) if isinstance(message, str) else toolbox.mask_secrets(message)
+        else:
+            safe_msg = escape(str(message)) if isinstance(message, str) else message
         super().notify(safe_msg, *args, **kwargs)
     
     def __init__(self, initial_file: str = None, with_agent: bool = True):
         super().__init__()
+        if with_agent:
+            _load_agent_modules()
         self.initial_file = initial_file
         self.with_agent = with_agent
         self.views = ["ai_chat_view", "code_view", "exec_manager_view"] if with_agent else ["code_view", "exec_manager_view"]
@@ -602,31 +622,31 @@ class FEDERaiDE(App):
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
         self.exec_count = 0
         self.active_venv_name = "defaultVenv"
-        self.active_venv_path = os.path.join(toolbox.get_team_dir(), "defaultVenv")
+        team_dir = toolbox.get_team_dir() if (with_agent and toolbox is not None) else _lite_get_team_dir()
+        self.active_venv_path = os.path.join(team_dir, "defaultVenv")
     
     def action_quit(self):
         """Signals background threads to stop, restores terminal state, and terminates process."""
         import threading
         import os
         
-        # 1. Signal all internal logic to stop
-        try:
-            import toolbox
-            toolbox.ABORT_EVENT.set()
-        except Exception:
-            pass
-            
-        try:
-            self.query_one("#ai_agent_view").action_abort()
-        except Exception:
-            pass
+        if self.with_agent and toolbox is not None:
+            # 1. Signal all internal logic to stop
+            try:
+                toolbox.ABORT_EVENT.set()
+            except Exception:
+                pass
+                
+            try:
+                self.query_one("#ai_agent_view").action_abort()
+            except Exception:
+                pass
 
-        # 2. Purge checkpoint database (runs to completion regardless of time)
-        try:
-            import toolbox
-            toolbox.purge_db_checkpoints()
-        except Exception:
-            pass
+            # 2. Purge checkpoint database (runs to completion regardless of time)
+            try:
+                toolbox.purge_db_checkpoints()
+            except Exception:
+                pass
 
         # 3. Start a 'Dead Man's Switch' timer AFTER purge finishes
         def hard_kill():
@@ -670,7 +690,7 @@ class FEDERaiDE(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        team_settings = toolbox.load_team_settings()
+        team_settings = toolbox.load_team_settings() if (self.with_agent and toolbox is not None) else _lite_load_team_settings()
         self.theme = team_settings.get("theme", "monokai")
         tabs_widget = self.query_one("#editor_tabs", TabbedContent).query_one(Tabs)
         tabs_widget.can_focus = False
@@ -705,12 +725,13 @@ class FEDERaiDE(App):
             except Exception:
                 pass
 
-        try:
-            agent_view = self.query_one("#ai_agent_view", AIAgentView)
-            if hasattr(agent_view, "update_status_bar"):
-                agent_view.update_status_bar()
-        except Exception:
-            pass
+        if self.with_agent and HAS_AI_AGENT:
+            try:
+                agent_view = self.query_one("#ai_agent_view", AIAgentView)
+                if hasattr(agent_view, "update_status_bar"):
+                    agent_view.update_status_bar()
+            except Exception:
+                pass
 
         try:
             self.query_one("#ai_chat_input").focus()
@@ -718,22 +739,22 @@ class FEDERaiDE(App):
             self.query_one("#dir_tree").focus()
     
     def action_open_teams(self):
-        if HAS_AI_AGENT:
+        if self.with_agent and HAS_AI_AGENT:
             try: self.query_one("#ai_agent_view").action_open_teams()
             except Exception: pass
 
     def action_open_chat_manager(self):
-        if HAS_AI_AGENT:
+        if self.with_agent and HAS_AI_AGENT:
             try: self.query_one("#ai_agent_view").action_open_chat_manager()
             except Exception: pass
 
     def action_open_active_config(self):
-        if HAS_AI_AGENT:
+        if self.with_agent and HAS_AI_AGENT:
             try: self.query_one("#ai_agent_view").action_open_active_config()
             except Exception: pass
 
     def action_switch_agent(self):
-        if HAS_AI_AGENT:
+        if self.with_agent and HAS_AI_AGENT:
             try: self.query_one("#ai_agent_view").action_switch_agent()
             except Exception: pass
     
@@ -1192,7 +1213,7 @@ class FEDERaiDE(App):
                     pass
                 
                 # Refresh agent UI (the fix from the previous step)
-                if self.with_agent:
+                if self.with_agent and HAS_AI_AGENT:
                     try:
                         agent_view = self.query_one("#ai_agent_view", AIAgentView)
                         if hasattr(agent_view, "update_status_bar"):
@@ -1217,7 +1238,7 @@ class FEDERaiDE(App):
         tree.root.expand_all()
 
     def get_venv_root(self) -> str:
-        path = toolbox.get_team_dir()
+        path = toolbox.get_team_dir() if (self.with_agent and toolbox is not None) else _lite_get_team_dir()
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -1349,12 +1370,13 @@ def main(with_agent=True):
 
     # Auto-detect standalone IDE mode from flags or binary name
 
-    if any(flag in sys.argv for flag in ("--no-agent", "--ide")) or os.path.basename(sys.argv[0]) in ("ide", "ide.exe"):
+    if any(flag in sys.argv for flag in ("--no-agent", "--ide")) or os.path.basename(sys.argv[0]).lower() in ("ide", "ide.exe"):
         with_agent = False
 
     positional_args = get_positional_args(sys.argv[1:])
     initial_file = positional_args[0] if positional_args else None
     if with_agent:
+        _load_agent_modules()
         toolbox.load_mcp_tools()
     stop_loading_spinner()
     app = FEDERaiDE(initial_file=initial_file, with_agent=with_agent)

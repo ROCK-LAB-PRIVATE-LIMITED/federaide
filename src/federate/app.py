@@ -89,13 +89,73 @@ _cleanup_legacy_fedserve()
 
 # Profile Keyring loading separately BEFORE importing agent.py
 # (Since agent.py imports toolbox, which executes keyring checks)
-log_trace("Checking OS Keyring backend (evaluating DBus timeout risk)")
+log_trace("Checking Keyring backend (evaluating DBus timeout risk)")
 try:
     import keyring
+    import keyring.backend
+    gs_path = os.path.join(str(Path.home()), ".federaide", "global_settings.json")
+    use_os_keychain = True
+    if os.path.exists(gs_path):
+        try:
+            with open(gs_path, "r", encoding="utf-8") as _f:
+                use_os_keychain = json.load(_f).get("use_os_keychain", True)
+        except Exception:
+            pass
+    if not use_os_keychain:
+        try:
+            from keyrings.alt.file import EncryptedKeyring
+            keyring.set_keyring(EncryptedKeyring())
+        except ImportError:
+            pass
+    else:
+        _cur = keyring.get_keyring()
+        if type(_cur).__name__ == "ChainerBackend" or getattr(type(_cur), "__module__", "").startswith("keyrings.alt"):
+            _all_backends = keyring.backend.get_all_keyring()
+            _os_backends = [
+                b for b in _all_backends
+                if getattr(b, "priority", 0) > 0
+                and type(b).__name__ != "ChainerBackend"
+                and not getattr(type(b), "__module__", "").startswith("keyrings.alt")
+            ]
+            _os_backends.sort(key=keyring.backend.by_priority, reverse=True)
+            if _os_backends:
+                keyring.set_keyring(_os_backends[0])
+            else:
+                _enc_backends = [
+                    b for b in _all_backends
+                    if type(b).__name__ == "EncryptedKeyring" and getattr(b, "priority", 0) > 0
+                ]
+                if _enc_backends and type(_cur).__name__ == "ChainerBackend":
+                    keyring.set_keyring(_enc_backends[0])
     kr_backend = keyring.get_keyring()
+    _kr_chain = [kr_backend] + list(getattr(kr_backend, "backends", []))
+    if any(
+        type(b).__name__ == "PlaintextKeyring"
+        or (getattr(type(b), "__module__", "").startswith("keyrings.alt") and "plaintext" in type(b).__name__.lower())
+        for b in _kr_chain
+    ):
+        sys.stderr.write(
+            "\n[FEDERaiDE SECURITY ERROR] Insecure keyring backend 'PlaintextKeyring' (keyrings.alt) "
+            "was selected. Plaintext credential storage is strictly disallowed. Exiting.\n"
+        )
+        sys.stderr.flush()
+        raise SystemExit(1)
+    if (
+        getattr(type(kr_backend), "__module__", "") in ("keyring.backends.fail", "keyring.backends.null")
+        or getattr(kr_backend, "priority", 0) <= 0
+    ):
+        sys.stderr.write(
+            f"\n[FEDERaiDE SECURITY ERROR] No functional keyring backend available "
+            f"(detected: {type(kr_backend).__module__}.{type(kr_backend).__name__}). "
+            "A working OS Keychain or EncryptedKeyring is required. Exiting.\n"
+        )
+        sys.stderr.flush()
+        raise SystemExit(1)
     log_trace(f"Keyring active backend detected: {type(kr_backend).__name__}")
 except Exception as e:
-    log_trace(f"Keyring trace failed: {e}")
+    sys.stderr.write(f"\n[FEDERaiDE SECURITY ERROR] Cannot verify keyring backend: {e}\n")
+    sys.stderr.flush()
+    raise SystemExit(1)
 
 # Profile the sqlite episodic memory DB loading next
 log_trace("Probing episodic memory SQLite database state")

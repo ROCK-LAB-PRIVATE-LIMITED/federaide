@@ -49,7 +49,10 @@ def load_telegram_config():
     if os.path.exists(TELEGRAM_CONFIG_FILE):
         try:
             with open(TELEGRAM_CONFIG_FILE, "r", encoding="utf-8") as f:
-                default_config.update(json.load(f))
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    loaded.pop("bot_token", None)
+                    default_config.update(loaded)
         except Exception:
             pass
 

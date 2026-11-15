@@ -936,6 +936,23 @@ class GlobalSettingsModal(ModalScreen[str]):
                     yield Label("Verbatim Messages to Keep", classes="field_label")
                     yield Label("Number of recent dialogue messages kept verbatim at the end of the context (Minimum: 1).", classes="field_help")
                     yield Input(id="keep_verbatim_count", placeholder="e.g. 2")
+
+                yield Label("Team Mesh Relay", classes="section_label")
+                with Vertical(classes="field_container"):
+                    yield Label("Relay Check Interval (Seconds)", classes="field_label")
+                    yield Label("How often (in seconds) to poll the team channel relay repository for incoming dispatches (Minimum: 10).", classes="field_help")
+                    yield Input(id="mesh_poll_interval", placeholder="e.g. 60.0")
+
+                with Vertical(classes="field_container"):
+                    yield Label("Team Message Auto-Accept Wait (Seconds)", classes="field_label")
+                    yield Label("Time to wait in seconds before incoming team dispatches are automatically acted upon (Minimum: 10).", classes="field_help")
+                    yield Input(id="mesh_dispatch_wait_seconds", placeholder="e.g. 300")
+
+                yield Label("Security & Keyring", classes="section_label")
+                with Vertical(classes="field_container"):
+                    yield Label("Keyring Storage Backend", classes="field_label")
+                    yield Label("Use the native OS Keychain when available, or force the local EncryptedKeyring file fallback directly.", classes="field_help")
+                    yield Select([("OS Keychain (if available)", "os"), ("Encrypted File Fallback (Direct)", "fallback")], value="os", id="use_os_keychain", allow_blank=False)
                     
             with Horizontal(id="global_actions"):
                 yield Button("Save Changes", id="save_global_btn", variant="success")
@@ -973,6 +990,9 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#keep_verbatim_count", Input).value = str(config.get("keep_verbatim_count", 1))
         self.query_one("#tool_result_visibility", Select).value = config.get("tool_result_visibility", "private")
         self.query_one("#direct_stt_send_on_release", Checkbox).value = config.get("direct_stt_send_on_release", False)
+        self.query_one("#mesh_poll_interval", Input).value = str(config.get("mesh_poll_interval", 60.0))
+        self.query_one("#mesh_dispatch_wait_seconds", Input).value = str(config.get("mesh_dispatch_wait_seconds", 300))
+        self.query_one("#use_os_keychain", Select).value = "os" if config.get("use_os_keychain", True) else "fallback"
         
         self.query_one("#research_images_max", Input).value = str(config.get("research_images_max", 10))
         self.query_one("#research_image_retries", Input).value = str(config.get("research_image_retries", 1))
@@ -1109,10 +1129,35 @@ class GlobalSettingsModal(ModalScreen[str]):
         precompress_mode = str(precompress_mode_val) if precompress_mode_val != Select.BLANK else "self"
         direct_stt_send_on_release = self.query_one("#direct_stt_send_on_release", Checkbox).value
 
-        config = {
+        try: mesh_poll_interval = float(self.query_one("#mesh_poll_interval", Input).value.strip())
+        except ValueError: mesh_poll_interval = 60.0
+        if mesh_poll_interval < 10.0:
+            self.notify("Invalid: Relay Check Interval must be at least 10 seconds.", severity="error")
+            return
+
+        try: mesh_dispatch_wait = int(self.query_one("#mesh_dispatch_wait_seconds", Input).value.strip())
+        except ValueError: mesh_dispatch_wait = 300
+        if mesh_dispatch_wait < 10:
+            self.notify("Invalid: Team Message Auto-Accept Wait must be at least 10 seconds.", severity="error")
+            return
+
+        keychain_val = self.query_one("#use_os_keychain", Select).value
+        use_os_keychain = (str(keychain_val) != "fallback")
+        if not use_os_keychain:
+            try:
+                from keyrings.alt.file import EncryptedKeyring  # noqa: F401
+            except ImportError:
+                self.notify("Cannot use fallback directly: 'keyrings.alt' package is not installed.", severity="error")
+                return
+
+        config = toolbox.load_global_settings()
+        config.update({
             "direct_stt_send_on_release": direct_stt_send_on_release,
             "tool_result_visibility": tool_result_visibility,
             "precompress_mode": precompress_mode,
+            "mesh_poll_interval": mesh_poll_interval,
+            "mesh_dispatch_wait_seconds": mesh_dispatch_wait,
+            "use_os_keychain": use_os_keychain,
             "user_name": user_name,
             "autoupdate_on_launch": autoupdate_on_launch,
             "user_color": user_color,
@@ -1145,14 +1190,17 @@ class GlobalSettingsModal(ModalScreen[str]):
             "research_images_max": img_max,
             "research_image_retries": img_retries,
             "research_images_as_links": images_as_links
-        }
+        })
         toolbox.save_global_settings(config)
+        toolbox.apply_keyring_preference(use_os_keychain)
         
         toolbox._DYNAMIC_PACING_DELAY = pacing
         
         try:
             agent_view = self.app.query_one("AIAgentView")
             agent_view.pdf_dpi = pdf_dpi_val
+            if hasattr(agent_view, "reset_mesh_poll_timer"):
+                agent_view.reset_mesh_poll_timer()
         except Exception:
             pass
             
@@ -1912,6 +1960,7 @@ class TeamsModal(ModalScreen[None]):
     .form_row { layout: horizontal; height: auto; margin-top: 1; margin-bottom: 0; }
     #team_name_input { width: 1fr; margin-right: 1; }
     #team_folder_input { width: 1fr; }
+    #team_remote_url_input { margin-top: 1; margin-bottom: 0; }
     #team_git_user_input { width: 1fr; margin-right: 1; }
     #team_git_pat_input { width: 1fr; }
     .team_form_row { layout: horizontal; height: 3; margin-top: 1; width: 100%; }
@@ -1942,7 +1991,7 @@ class TeamsModal(ModalScreen[None]):
                         yield Input(placeholder="Team Name (e.g. Scraper Team)", id="team_name_input")
                         yield Input(placeholder="Folder Name or Path (e.g. .teamScraper)", id="team_folder_input")
                     
-                    yield Label("Git Remote Configuration (PAT stored strictly in Keyring):", classes="section_label")
+                    yield Label("Team Remote Repository Configuration:", classes="section_label")
                     yield Input(placeholder="Remote URL (e.g. https://github.com/org/repo.git)", id="team_remote_url_input")
                     with Horizontal(classes="form_row"):
                         yield Input(placeholder="Git Username", id="team_git_user_input")
@@ -1958,15 +2007,15 @@ class TeamsModal(ModalScreen[None]):
                         yield Button("Push", id="push_btn", variant="warning")
                         yield Button("Sync", id="sync_now_btn", variant="warning")
 
-                    yield Label("Team Charter (README.md - Injected into all agents):", classes="section_label")
+                    yield Label("Team Identity Statement:", classes="section_label")
                     yield TextArea(id="team_readme_input", show_line_numbers=False, soft_wrap=True)
 
-                    yield Label("Channel Relay Repository (Team-Specific Coordination Channel):", classes="section_label")
+                    yield Label("Multi-Team Coordination Repository:", classes="section_label")
                     yield Input(placeholder="Channel Relay Repo URL (e.g. https://github.com/user/fed-relay-a.git)", id="mesh_relay_url_input")
                     with Horizontal(classes="form_row"):
                         yield Input(placeholder="Channel Git Username", id="mesh_relay_user_input")
                         yield Input(placeholder="Channel Git PAT", id="mesh_relay_pat_input", password=True)
-                    yield Button("Configure Channel PSK Seed Phrase", id="mesh_seed_btn", variant="primary")
+                    yield Button("Team Coordination Password (PSK)", id="mesh_seed_btn", variant="primary")
 
                     yield Label("Autodetected Channel Peers (via Relay):", classes="section_label")
                     yield Static(id="channel_peers_display")
@@ -2900,7 +2949,10 @@ class IncomingDispatchModal(ModalScreen[str]):
         self.sender_team = sender_team
         self.instruction = instruction
         self.attachments = attachments
-        self.time_left = 300
+        try:
+            self.time_left = max(10, int(toolbox.load_global_settings().get("mesh_dispatch_wait_seconds", 300)))
+        except (ValueError, TypeError):
+            self.time_left = 300
         self.timer = None
 
     def compose(self) -> ComposeResult:
@@ -4049,6 +4101,8 @@ class AIAgentView(Vertical):
         self.spinner_idx = 0
         self.set_interval(0.1, self.tick_spinners)
         self.set_interval(60.0, self.tick_scheduler)
+        self._mesh_poll_timer = None
+        self.reset_mesh_poll_timer()
         if toolbox.load_global_settings().get("autoupdate_on_launch", False):
             self.check_for_updates_bg(manual=False)
         self.sync_remote_on_launch()
@@ -4738,6 +4792,31 @@ class AIAgentView(Vertical):
         def handle_global_config(result):
             if result == "update":
                 self.log_to_ui("[bold green] Global settings successfully updated.[/bold green]")
+                if toolbox.is_keyring_locked():
+                    def handle_unlock(res):
+                        if not res:
+                            return
+                        action, password = res
+                        if action == "unlock" and password:
+                            if toolbox.unlock_keyring(password):
+                                self.notify("Keyring unlocked.", severity="information")
+                            else:
+                                self.notify("Unlock failed.", severity="error")
+                        elif action == "reset" and password:
+                            try:
+                                import keyring
+                                backend = keyring.get_keyring()
+                                backends = [backend] + list(getattr(backend, "backends", []))
+                                for b in backends:
+                                    if type(b).__name__ == "EncryptedKeyring":
+                                        if hasattr(b, "file_path") and b.file_path and os.path.exists(b.file_path):
+                                            os.remove(b.file_path)
+                                        b.__dict__["keyring_key"] = password
+                                self.notify("Keyring initialized successfully.", severity="warning")
+                            except Exception as e:
+                                self.notify(f"Reset failed: {e}", severity="error")
+                        self.update_status_bar()
+                    self.app.push_screen(KeyringUnlockModal(), handle_unlock)
                 self.update_status_bar()
                 
         self.app.push_screen(GlobalSettingsModal(), handle_global_config)
@@ -5464,8 +5543,19 @@ class AIAgentView(Vertical):
         except Exception as e:
             self.log_to_ui(f"[dim red]Mesh relay verification failed: {e}[/dim red]")
 
+    def reset_mesh_poll_timer(self):
+        if getattr(self, "_mesh_poll_timer", None):
+            try:
+                self._mesh_poll_timer.stop()
+            except Exception:
+                pass
+        try:
+            interval = max(10.0, float(toolbox.load_global_settings().get("mesh_poll_interval", 60.0) or 60.0))
+        except (ValueError, TypeError):
+            interval = 60.0
+        self._mesh_poll_timer = self.set_interval(interval, self.check_mesh_inbox)
+
     def tick_scheduler(self):
-        self.check_mesh_inbox()
         if getattr(self, "shell_mode", False) or not hasattr(self, "schedule_manager") or getattr(self, "_scheduler_prompt_active", False):
             return
             

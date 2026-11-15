@@ -143,14 +143,10 @@ class AgentConfig:
             if not is_keyring_locked():
                 import keyring
                 user_key = get_agent_keyring_user(self.name, is_backup=False)
-                val = keyring.get_password("Federate", user_key)
-                if val: return val
+                return keyring.get_password("Federate", user_key) or ""
         except Exception:
             pass
-        import toolbox
-        team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(toolbox.get_team_dir())).upper().lstrip("_") or "DEFAULT"
-        env_key = f"AGENT_KEY_{team_tag}_{self.name.upper().replace(' ', '_')}"
-        return os.getenv(env_key, os.getenv(f"AGENT_KEY_{self.name.upper().replace(' ', '_')}", ""))
+        return ""
 
     def get_backup_api_key(self) -> str:
         try:
@@ -158,14 +154,10 @@ class AgentConfig:
             if not is_keyring_locked():
                 import keyring
                 user_key = get_agent_keyring_user(self.name, is_backup=True)
-                val = keyring.get_password("Federate", user_key)
-                if val: return val
+                return keyring.get_password("Federate", user_key) or ""
         except Exception:
             pass
-        import toolbox
-        team_tag = re.sub(r'[^a-zA-Z0-9_]', '_', os.path.basename(toolbox.get_team_dir())).upper().lstrip("_") or "DEFAULT"
-        env_key = f"AGENT_BACKUP_KEY_{team_tag}_{self.name.upper().replace(' ', '_')}"
-        return os.getenv(env_key, os.getenv(f"AGENT_BACKUP_KEY_{self.name.upper().replace(' ', '_')}", ""))
+        return ""
 
     def get_full_system_prompt(self, all_agents: List['AgentConfig'] = None, is_no_memory: bool = False) -> str:
         date_str = datetime.now().strftime('%A, %B %d, %Y')
