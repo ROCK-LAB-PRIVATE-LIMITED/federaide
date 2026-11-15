@@ -148,10 +148,13 @@ DEFAULT_GLOBAL_SETTINGS = {
     "tool_result_visibility": "private",
     "precompress_mode": "self",
     "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-    "direct_stt_send_on_release": False
+    "direct_stt_send_on_release": False,
+    "mesh_poll_interval": 60.0,
+    "mesh_dispatch_wait_seconds": 300,
+    "use_os_keychain": True
 }
 
-
+_FORCED_FALLBACK_KEYRING = False
 
 def load_global_settings() -> dict:
     settings = DEFAULT_GLOBAL_SETTINGS.copy()
@@ -170,6 +173,145 @@ def save_global_settings(settings: dict):
             json.dump(settings, f, indent=4)
     except Exception:
         pass
+
+def _is_plaintext_keyring(backend) -> bool:
+    if backend is None:
+        return False
+    cls = type(backend)
+    name = cls.__name__
+    mod = getattr(cls, "__module__", "")
+    if name == "PlaintextKeyring" or (mod.startswith("keyrings.alt") and "plaintext" in name.lower()):
+        return True
+    if hasattr(backend, "backends"):
+        return any(_is_plaintext_keyring(sub) for sub in getattr(backend, "backends", []))
+    return False
+
+def _abort_keyring_security(err_msg: str):
+    try:
+        sys.stderr.write(err_msg)
+        sys.stderr.flush()
+    except Exception:
+        pass
+    if CURRENT_APP is not None:
+        def _hard_exit():
+            try:
+                sys.stdout.write("\033[?25h\033[0m")
+                sys.stdout.flush()
+                sys.stderr.write(err_msg)
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(1)
+
+        kill_timer = threading.Timer(0.5, _hard_exit)
+        kill_timer.daemon = True
+        kill_timer.start()
+        try:
+            if threading.current_thread() is threading.main_thread():
+                CURRENT_APP.exit()
+            else:
+                CURRENT_APP.call_from_thread(CURRENT_APP.exit)
+        except Exception:
+            pass
+    raise SystemExit(1)
+
+def _is_unusable_keyring(backend) -> bool:
+    if backend is None:
+        return True
+    cls = type(backend)
+    mod = getattr(cls, "__module__", "")
+    if mod in ("keyring.backends.fail", "keyring.backends.null"):
+        return True
+    if hasattr(backend, "backends"):
+        subs = getattr(backend, "backends", [])
+        if not subs or all(_is_unusable_keyring(s) for s in subs):
+            return True
+    try:
+        if getattr(backend, "priority", 0) <= 0:
+            return True
+    except Exception:
+        return True
+    return False
+
+def assert_no_plaintext_keyring():
+    """Security guardrail: fails closed if keyring is unusable, unverified, or PlaintextKeyring."""
+    try:
+        import keyring
+        backend = keyring.get_keyring()
+    except Exception as e:
+        _abort_keyring_security(
+            f"\n[FEDERaiDE SECURITY ERROR] Cannot verify keyring backend. Refusing to continue: {e}\n"
+        )
+
+    if _is_plaintext_keyring(backend):
+        _abort_keyring_security(
+            "\n[FEDERaiDE SECURITY ERROR] Insecure keyring backend 'PlaintextKeyring' (keyrings.alt) "
+            "was selected. Plaintext credential storage is strictly disallowed. Exiting.\n"
+        )
+
+    if _is_unusable_keyring(backend):
+        _abort_keyring_security(
+            f"\n[FEDERaiDE SECURITY ERROR] No functional keyring backend available "
+            f"(detected: {type(backend).__module__}.{type(backend).__name__}). "
+            "A working OS Keychain or EncryptedKeyring is required. Exiting.\n"
+        )
+
+def apply_keyring_preference(use_os_keychain=None) -> tuple:
+    """Applies OS keychain vs direct EncryptedKeyring fallback preference."""
+    global _FORCED_FALLBACK_KEYRING
+    if use_os_keychain is None:
+        use_os_keychain = bool(load_global_settings().get("use_os_keychain", True))
+
+    result = (True, "Using OS Keychain (when available).")
+    try:
+        import keyring
+        import keyring.backend
+        import keyring.core
+        if not use_os_keychain:
+            try:
+                from keyrings.alt.file import EncryptedKeyring
+            except ImportError:
+                return False, "keyrings.alt is not installed; cannot use encrypted file fallback directly."
+            if type(keyring.get_keyring()).__name__ != "EncryptedKeyring":
+                keyring.set_keyring(EncryptedKeyring())
+                invalidate_secrets_cache()
+            _FORCED_FALLBACK_KEYRING = True
+            result = (True, "Using EncryptedKeyring fallback directly.")
+        else:
+            current = keyring.get_keyring()
+            current_mod = getattr(type(current), "__module__", "")
+            if _FORCED_FALLBACK_KEYRING or type(current).__name__ == "ChainerBackend" or current_mod.startswith("keyrings.alt"):
+                all_backends = keyring.backend.get_all_keyring()
+                os_backends = [
+                    b for b in all_backends
+                    if getattr(b, "priority", 0) > 0
+                    and type(b).__name__ != "ChainerBackend"
+                    and not getattr(type(b), "__module__", "").startswith("keyrings.alt")
+                ]
+                os_backends.sort(key=keyring.backend.by_priority, reverse=True)
+                if os_backends:
+                    keyring.set_keyring(os_backends[0])
+                else:
+                    if _FORCED_FALLBACK_KEYRING:
+                        keyring.core.init_backend()
+                        all_backends = keyring.backend.get_all_keyring()
+                    # Strip PlaintextKeyring from any ChainerBackend by pinning EncryptedKeyring directly
+                    enc_backends = [
+                        b for b in all_backends
+                        if type(b).__name__ == "EncryptedKeyring" and getattr(b, "priority", 0) > 0
+                    ]
+                    if enc_backends and _is_plaintext_keyring(keyring.get_keyring()):
+                        keyring.set_keyring(enc_backends[0])
+                _FORCED_FALLBACK_KEYRING = False
+                invalidate_secrets_cache()
+            result = (True, "Using OS Keychain (when available).")
+    except Exception as e:
+        result = (False, str(e))
+
+    assert_no_plaintext_keyring()
+    return result
+
+apply_keyring_preference()
 
 _DYNAMIC_PACING_DELAY = float(load_global_settings()["search_pacing_delay"])
 
@@ -1044,6 +1186,7 @@ def get_locked_keyring():
     Native backends (macOS Keychain, Windows Credential Manager) do not use this class
     and will not trigger this detection.
     """
+    assert_no_plaintext_keyring()
     try:
         import keyring
         try:
@@ -1076,6 +1219,7 @@ def is_keyring_locked():
 
 def unlock_keyring(password: str) -> bool:
     """Attempts to unlock all EncryptedKeyring backends with the given password."""
+    assert_no_plaintext_keyring()
     try:
         import keyring
         main_backend = keyring.get_keyring()
@@ -3073,18 +3217,6 @@ def perform_research(topic: str, specific_instructions: str = "") -> str:
             except Exception as e:
                 log_tool(f"[dim red]Config fetch error: {e}[/dim red]")
 
-        # 3. Fallback to old agent_config.json ONLY if API key is missing
-        config_path = "agent_config.json"
-        if not api_key and os.path.exists(config_path):
-            with open(config_path, "r") as f:
-                data = json.load(f)
-                api_key = data.get("api_key", api_key)
-                base_url = data.get("base_url", base_url)
-                model = data.get("model", model)
-                max_agents = int(data.get("max_agents", max_agents))
-                vision_enabled = data.get("vision_enabled", vision_enabled)
-                vision_model = data.get("vision_model", vision_model)
-                
         if not api_key:
             return "Error: API Key is missing. Please configure it in the IDE."
             

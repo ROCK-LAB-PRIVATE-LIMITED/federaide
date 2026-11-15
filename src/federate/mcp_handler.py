@@ -73,18 +73,11 @@ def _clear_mcp_keyring_chunks(keyring_mod, team_dir=None):
         pass
 
 def load_mcp_config_raw(team_dir=None) -> str:
-    mcp_config_path, _ = _get_mcp_paths(team_dir)
     count_key, prefix_key, legacy_key = _get_mcp_keyring_keys(team_dir)
 
     try:
         from toolbox import is_keyring_locked
         if is_keyring_locked():
-            if os.path.exists(mcp_config_path):
-                try:
-                    with open(mcp_config_path, "r", encoding="utf-8") as f:
-                        return f.read()
-                except Exception:
-                    pass
             return DEFAULT_MCP_CONFIG
     except Exception:
         pass
@@ -116,28 +109,15 @@ def load_mcp_config_raw(team_dir=None) -> str:
         except Exception:
             pass
 
-    # Migration from legacy plaintext file in team folder
-    if not raw_str and os.path.exists(mcp_config_path):
-        try:
-            with open(mcp_config_path, "r", encoding="utf-8") as f:
-                raw_str = f.read()
-            if raw_str and raw_str.strip():
-                save_mcp_config_raw(raw_str, team_dir=team_dir)
-        except Exception:
-            pass
-
     if not raw_str or not raw_str.strip():
         return DEFAULT_MCP_CONFIG
 
     return raw_str
 
 def save_mcp_config_raw(raw_json: str, team_dir=None) -> bool:
-    try:
-        from toolbox import is_keyring_locked
-        if is_keyring_locked():
-            raise RuntimeError("Keyring is locked. Please unlock keyring first.")
-    except Exception:
-        pass
+    from toolbox import is_keyring_locked
+    if is_keyring_locked():
+        raise RuntimeError("Keyring is locked. Please unlock keyring first.")
 
     import keyring
     _clear_mcp_keyring_chunks(keyring, team_dir=team_dir)

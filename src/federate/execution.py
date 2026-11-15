@@ -403,9 +403,11 @@ class VenvManagerModal(ModalScreen[str]):
         
         # 1. Auto-detect local workspace virtual environments (.venv or venv)
         try:
-            from toolbox import CURRENT_APP
-            if CURRENT_APP:
-                workspace_dir = str(CURRENT_APP.query_one("#dir_tree").path)
+            app_ref = getattr(self, "app", None)
+            if not app_ref and "toolbox" in sys.modules:
+                app_ref = sys.modules["toolbox"].CURRENT_APP
+            if app_ref:
+                workspace_dir = str(app_ref.query_one("#dir_tree").path)
                 for local_name in [".venv", "venv"]:
                     local_path = os.path.abspath(os.path.join(workspace_dir, local_name))
                     if os.path.isdir(local_path):
