@@ -940,6 +940,9 @@ def _patched_chat_openai_init(self, *args, **kwargs):
         
         kwargs["api_key"] = "CHATGPT_OAUTH_ACTIVE"
         kwargs["base_url"] = CHATGPT_CODEX_BASE_URL
+        kwargs.setdefault("use_responses_api", False)
+    elif base_url and "api.openai.com" not in base_url.lower():
+        kwargs.setdefault("use_responses_api", False)
             
     _orig_init(self, *args, **kwargs)
 
