@@ -708,7 +708,7 @@ def _translate_chat_completions_to_responses(request: httpx.Request) -> httpx.Re
                         "name": func.get("name", "tool"),
                         "description": func.get("description", ""),
                         "parameters": func.get("parameters", {}),
-                        "strict": None
+                        "strict": False
                     })
                 responses_body["tools"] = safe_tools
             
@@ -732,14 +732,43 @@ def _translate_responses_to_chat_completions(response: httpx.Response, is_stream
     tool_calls = {}
     translated_sse = ""
     tool_call_indices = {}
+    item_id_to_call_id = {}
+    output_index_to_call_id = {}
     next_tool_idx = 0
-    
+
     base_chunk = {
         "id": f"chatcmpl-{int(time.time())}",
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": "gpt-5.6-luna",
     }
+
+    def _register_tool_call(item: dict, out_idx: Any = None) -> tuple[str, int, bool]:
+        nonlocal next_tool_idx
+        item_id = item.get("id")
+        call_id = item.get("call_id") or item_id or f"call_{item.get('name')}_{next_tool_idx}"
+        is_new = call_id not in tool_call_indices
+        if is_new:
+            tool_call_indices[call_id] = next_tool_idx
+            next_tool_idx += 1
+            tool_calls[call_id] = {"name": item.get("name"), "arguments": ""}
+        if item_id:
+            item_id_to_call_id[item_id] = call_id
+        if out_idx is not None:
+            output_index_to_call_id[out_idx] = call_id
+        return call_id, tool_call_indices[call_id], is_new
+
+    def _resolve_call_id(chunk: dict) -> Optional[str]:
+        cid = chunk.get("call_id")
+        if cid and cid in tool_call_indices:
+            return cid
+        item_id = chunk.get("item_id")
+        if item_id and item_id in item_id_to_call_id:
+            return item_id_to_call_id[item_id]
+        out_idx = chunk.get("output_index")
+        if out_idx is not None and out_idx in output_index_to_call_id:
+            return output_index_to_call_id[out_idx]
+        return cid or item_id
 
     # 1. Parse the forced SSE stream from the provider
     if "data: " in content_str:
@@ -749,50 +778,85 @@ def _translate_responses_to_chat_completions(response: httpx.Response, is_stream
                 try:
                     chunk = json.loads(line[6:])
                     c_type = chunk.get("type")
-                    delta_payload = None
-                    
+                    out_chunks = []
+
                     if c_type == "response.output_text.delta":
                         delta = chunk.get("delta", "")
                         text_out += delta
-                        delta_payload = {"content": delta}
-                        
+                        out_chunks.append({"content": delta})
+
                     elif c_type == "response.output_item.added":
                         item = chunk.get("item", {})
                         if item.get("type") == "function_call":
-                            call_id = item.get("call_id") or item.get("id") or f"call_{item.get('name')}"
-                            if call_id not in tool_call_indices:
-                                tool_call_indices[call_id] = next_tool_idx
-                                next_tool_idx += 1
-                                tool_calls[call_id] = {"name": item.get("name"), "arguments": ""}
-                            
-                            idx = tool_call_indices[call_id]
-                            delta_payload = {
+                            call_id, idx, _ = _register_tool_call(item, chunk.get("output_index"))
+                            init_args = item.get("arguments") or ""
+                            if init_args and not tool_calls[call_id]["arguments"]:
+                                tool_calls[call_id]["arguments"] = init_args
+                            out_chunks.append({
                                 "tool_calls": [{
                                     "index": idx,
                                     "id": call_id,
                                     "type": "function",
-                                    "function": {"name": item.get("name")}
+                                    "function": {"name": item.get("name"), "arguments": init_args}
                                 }]
-                            }
-                            
+                            })
+
                     elif c_type == "response.function_call_arguments.delta":
-                        call_id = chunk.get("call_id") or chunk.get("item_id")
+                        call_id = _resolve_call_id(chunk)
                         delta = chunk.get("delta", "")
                         if call_id in tool_calls:
                             tool_calls[call_id]["arguments"] += delta
-                            
-                        idx = tool_call_indices.get(call_id, 0)
-                        delta_payload = {
-                            "tool_calls": [{
-                                "index": idx,
-                                "function": {"arguments": delta}
-                            }]
-                        }
-                        
-                    if delta_payload and is_stream:
-                        out_chunk = dict(base_chunk)
-                        out_chunk["choices"] = [{"index": 0, "delta": delta_payload, "finish_reason": None}]
-                        translated_sse += f"data: {json.dumps(out_chunk)}\n\n"
+                        if call_id in tool_call_indices:
+                            idx = tool_call_indices[call_id]
+                            out_chunks.append({
+                                "tool_calls": [{
+                                    "index": idx,
+                                    "function": {"arguments": delta}
+                                }]
+                            })
+
+                    elif c_type == "response.function_call_arguments.done":
+                        call_id = _resolve_call_id(chunk)
+                        full_args = chunk.get("arguments", "")
+                        if call_id in tool_calls and full_args and not tool_calls[call_id]["arguments"]:
+                            tool_calls[call_id]["arguments"] = full_args
+                            idx = tool_call_indices[call_id]
+                            out_chunks.append({
+                                "tool_calls": [{
+                                    "index": idx,
+                                    "function": {"arguments": full_args}
+                                }]
+                            })
+
+                    elif c_type == "response.output_item.done":
+                        item = chunk.get("item", {})
+                        if item.get("type") == "function_call":
+                            call_id, idx, is_new = _register_tool_call(item, chunk.get("output_index"))
+                            full_args = item.get("arguments") or ""
+                            if is_new:
+                                tool_calls[call_id]["arguments"] = full_args
+                                out_chunks.append({
+                                    "tool_calls": [{
+                                        "index": idx,
+                                        "id": call_id,
+                                        "type": "function",
+                                        "function": {"name": item.get("name"), "arguments": full_args}
+                                    }]
+                                })
+                            elif full_args and not tool_calls[call_id]["arguments"]:
+                                tool_calls[call_id]["arguments"] = full_args
+                                out_chunks.append({
+                                    "tool_calls": [{
+                                        "index": idx,
+                                        "function": {"arguments": full_args}
+                                    }]
+                                })
+
+                    if out_chunks and is_stream:
+                        for delta_payload in out_chunks:
+                            out_chunk = dict(base_chunk)
+                            out_chunk["choices"] = [{"index": 0, "delta": delta_payload, "finish_reason": None}]
+                            translated_sse += f"data: {json.dumps(out_chunk)}\n\n"
                 except Exception:
                     pass
     else:
@@ -805,7 +869,7 @@ def _translate_responses_to_chat_completions(response: httpx.Response, is_stream
                         if c.get("type") == "output_text":
                             text_out += c.get("text", "")
                 elif item.get("type") == "function_call":
-                    t_id = item.get("id") or f"call_{item.get('name')}"
+                    t_id = item.get("call_id") or item.get("id") or f"call_{item.get('name')}"
                     tool_calls[t_id] = {
                         "name": item.get("name"),
                         "arguments": item.get("arguments", "{}")
@@ -840,7 +904,7 @@ def _translate_responses_to_chat_completions(response: httpx.Response, is_stream
                 "type": "function",
                 "function": {
                     "name": t.get("name", "unknown"),
-                    "arguments": t.get("arguments", "{}")
+                    "arguments": t.get("arguments") or "{}"
                 }
             })
 

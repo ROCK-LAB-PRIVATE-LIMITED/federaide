@@ -124,7 +124,7 @@ def dispatch_coding_subagent(task_description: str) -> str:
         if not api_key:
             return "Error: API Key not configured for the active agent. Cannot launch subagent."
 
-        llm = ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, model_kwargs={"reasoning_effort": "high"})
+        llm = ChatOpenAI(model=model, temperature=0, api_key=api_key, base_url=base_url, reasoning_effort="high")
         
         # Inject the generic tools from toolbox.py
         sub_tools =[read_file, save_file, edit_file, list_files, run_terminal_command]

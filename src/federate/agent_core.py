@@ -129,7 +129,7 @@ def translate_backstory(new_config: AgentConfig) -> tuple[str, str]:
     else:
         try:
             effort = getattr(new_config, "reasoning_effort", "none")
-            extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+            extra_args = {"reasoning_effort": effort} if effort not in ("none", None, "") else {}
 
             llm = ChatOpenAI(
                 model=model,
@@ -300,7 +300,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
         return None
         
     effort = getattr(agent_config, "reasoning_effort", "none")
-    extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+    extra_args = {"reasoning_effort": effort} if effort not in ("none", None, "") else {}
     llm = ChatOpenAI(
         model=model, 
         temperature=getattr(agent_config, "temperature", 1.0),
@@ -1105,7 +1105,7 @@ def trigger_background_naming_core(agent_view, user_prompt: str, agent_response:
         
     try:
         effort = getattr(agent, "reasoning_effort", "none")
-        extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+        extra_args = {"reasoning_effort": effort} if effort not in ("none", None, "") else {}
         llm = ChatOpenAI(
             model=model,
             api_key=api_key,
@@ -1419,7 +1419,7 @@ CONVERSATION TO SUMMARIZE:
 
             if b_api_key:
                 b_effort = getattr(borrowed_agent, "reasoning_effort", "none")
-                b_extra = {"model_kwargs": {"reasoning_effort": b_effort}} if b_effort not in ("none", None, "") else {}
+                b_extra = {"reasoning_effort": b_effort} if b_effort not in ("none", None, "") else {}
                 b_llm = ChatOpenAI(model=b_model, api_key=b_api_key, base_url=b_base_url, temperature=0, timeout=120, **b_extra)
                 
                 comp_prompt = _build_comp_prompt(history_text, is_rolling=bool(existing_summary_text), existing_sum=existing_summary_text)
@@ -1451,7 +1451,7 @@ CONVERSATION TO SUMMARIZE:
             
         try:
             effort = getattr(agent, "reasoning_effort", "none")
-            extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+            extra_args = {"reasoning_effort": effort} if effort not in ("none", None, "") else {}
             llm = ChatOpenAI(model=model, api_key=api_key, base_url=base_url, temperature=0, timeout=120, **extra_args)
 
             token_char_num = float(getattr(agent, "token_equivalent_char_number", 3.9) or 3.9)
