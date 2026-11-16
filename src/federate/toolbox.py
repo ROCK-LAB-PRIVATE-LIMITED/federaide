@@ -367,6 +367,17 @@ from fake_useragent import UserAgent
 from ddgs import DDGS
 from PIL import Image
 
+import warnings
+try:
+    from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*allowed_objects.*",
+        category=LangChainPendingDeprecationWarning,
+    )
+except Exception:
+    pass
+
 from langchain_core.tools import tool, StructuredTool
 from pydantic import BaseModel, Field, create_model
 from typing import TypedDict, Annotated, Dict, List, Optional, Any
@@ -2798,7 +2809,7 @@ def _run_subagent_logic(search_prompt, task_name, output_dir=".", config=None, b
         api_key=config.get("api_key", ""),
         base_url=config.get("base_url", "https://openrouter.ai/api/v1"),
         temperature=0,
-        model_kwargs={"reasoning_effort": "high"}
+        reasoning_effort="high"
     )
 
     safe_print(f"Initializing {task_name}...")
@@ -3044,7 +3055,7 @@ class VisionImageAgent:
 
 class MasterOrchestrator:
     def __init__(self, api_key, base_url, model_name):
-        self.llm = ChatOpenAI(model=model_name, api_key=api_key, base_url=base_url, temperature=0, max_retries=5, timeout=120, model_kwargs={"reasoning_effort": "high"})
+        self.llm = ChatOpenAI(model=model_name, api_key=api_key, base_url=base_url, temperature=0, max_retries=5, timeout=120, reasoning_effort="high")
     
     def generate_project_name(self, query: str, clarifications: str):
         # Removed tool_choice
@@ -4507,7 +4518,7 @@ def apply_minicompress_if_needed(tool_name: str, tool_args: dict, result: Any, a
 
     try:
         effort = getattr(agent_config, "reasoning_effort", "none")
-        extra_args = {"model_kwargs": {"reasoning_effort": effort}} if effort not in ("none", None, "") else {}
+        extra_args = {"reasoning_effort": effort} if effort not in ("none", None, "") else {}
         llm = ChatOpenAI(
             model=model_name,
             api_key=api_key,
