@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "federaide"
-version = "2.1.17"
+version = "2.1.18"
 description = "A cross-platform terminal based p2p agent orchestration harness and universal automation system"
 readme = "README.md"
 license = {text = "GNU Affero General Public License v3"}
@@ -81,20 +81,10 @@ pdf = [
     "weasyprint",
     "pypdf"
 ]
-# Telegram bot integration
-telegram = []
-# Browser-based UI serving
-ide = [
-    "tree-sitter",
-    "tree-sitter-python",
-    "tree-sitter-c",
-    "tree-sitter-rust",
-    "tree-sitter-go",
-    "tree-sitter-cpp"
-]
+
 # All optional extras
 all = [
-    "federaide[audio,ide,vision,pdf]",
+    "federaide[audio,vision,pdf]",
 ]
 
 [project.scripts]
