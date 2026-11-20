@@ -431,16 +431,16 @@ class FindReplaceModal(ModalScreen[dict]):
     DEFAULT_CSS = """
     FindReplaceModal { align: center middle; background: $background 60%; }
     #fr_dialog { 
-        width: 100; /* Increased width */
+        width: 100;
         height: auto; 
         border: thick $primary; 
         background: $surface; 
         padding: 0 1; 
     }
-    .fr_row { height: 3; align: left middle; margin: 0; }
-    .fr_label { width: 10; content-align: left middle; }
+    .fr_row { height: auto; align: left top; margin-top: 1; }
+    .fr_label { width: 10; margin-top: 1; }
     .fr_options { height: 3; margin-left: 10; }
-    Input { width: 1fr; border: round $accent; }
+    TextArea { width: 1fr; height: 4; border: round $accent; }
     Checkbox { border: none; background: transparent; }
     .fr_buttons { 
         margin: 1 0; 
@@ -450,7 +450,6 @@ class FindReplaceModal(ModalScreen[dict]):
     }
     Button { 
         margin-left: 1; 
-        /* Removed min-width to prevent cutoff */
     }
     """
 
@@ -459,13 +458,12 @@ class FindReplaceModal(ModalScreen[dict]):
             yield Label(" FIND & REPLACE", classes="pane_title")
             with Horizontal(classes="fr_row"):
                 yield Label("Find:", classes="fr_label")
-                yield Input(placeholder="Search term...", id="find_input")
+                yield TextArea(id="find_input", show_line_numbers=False, tab_behavior="focus")
             with Horizontal(classes="fr_row"):
                 yield Label("Replace:", classes="fr_label")
-                yield Input(placeholder="Replace with...", id="replace_input")
+                yield TextArea(id="replace_input", show_line_numbers=False, tab_behavior="focus")
             
             with Horizontal(classes="fr_options"):
-                # Default to False (unchecked) as requested
                 yield Checkbox("Match Case", value=False, id="case_cb")
 
             with Horizontal(classes="fr_buttons"):
@@ -481,30 +479,65 @@ class FindReplaceModal(ModalScreen[dict]):
     @on(Button.Pressed)
     def handle_buttons(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
-            self.app.pop_screen() # Reliability fix for closing
+            self.app.pop_screen()
         else:
             self.post_message(FindReplaceRequest(
                 action=event.button.id,
-                find=self.query_one("#find_input", Input).value,
-                replace=self.query_one("#replace_input", Input).value,
+                find=self.query_one("#find_input", TextArea).text.replace("\r\n", "\n"),
+                replace=self.query_one("#replace_input", TextArea).text.replace("\r\n", "\n"),
                 case_sensitive=self.query_one("#case_cb", Checkbox).value
             ))
 
 class ExplorerTree(DirectoryTree):
     BINDINGS =[
         Binding("backspace", "go_up", "Dir Up", show=False),
-        Binding("ctrl+b", "enter_dir", "Enter Dir", show=False)
+        Binding("ctrl+b", "enter_dir", "Enter Dir", show=False),
+        Binding("m,M", "toggle_mark", "Mark", show=True),
+        Binding("escape", "clear_marks", "Clear Marks", show=False),
     ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.marked_paths = set()
+
+    def render_label(self, node, base_style, style):
+        label = super().render_label(node, base_style, style)
+        if node.data and node.data.path.absolute() in self.marked_paths:
+            from rich.text import Text
+            return Text("✓ ", style="bold green") + label
+        return label
+
+    def action_toggle_mark(self):
+        if self.cursor_node and self.cursor_node.data:
+            path = self.cursor_node.data.path.absolute()
+            if path in self.marked_paths:
+                self.marked_paths.remove(path)
+            else:
+                self.marked_paths.add(path)
+            self.cursor_node.set_label(self.cursor_node.label)
+            self.refresh()
+
+    def action_clear_marks(self):
+        if self.marked_paths:
+            cleared = set(self.marked_paths)
+            self.marked_paths.clear()
+            def _refresh_marked(node):
+                if node.data and node.data.path.absolute() in cleared:
+                    node.set_label(node.label)
+                for child in node.children:
+                    _refresh_marked(child)
+            _refresh_marked(self.root)
+            self.refresh()
     
     def action_go_up(self):
-        self.path = str(Path(self.path).parent)
+        self.path = str(Path(self.path).parent.absolute())
         
     def action_enter_dir(self):
         # Set the selected directory as the new active root
         if self.cursor_node and self.cursor_node.data:
             path = self.cursor_node.data.path
             if path.is_dir():
-                self.path = str(path)
+                self.path = str(path.absolute())
 
 class FilenameModal(ModalScreen[str]):
     """A minimal modal to ask for a file name or path."""
@@ -540,6 +573,294 @@ class FilenameModal(ModalScreen[str]):
     @on(Button.Pressed, "#cancel_btn")
     def cancel(self):
         self.dismiss(None)
+
+from rich.segment import Segment
+from rich.style import Style
+from textual.strip import Strip
+
+class CodeEditor(TextArea):
+    """TextArea subclass with visible code hierarchy indent guide lines and indent/dedent actions."""
+
+    BINDINGS = [
+        Binding("ctrl+tab", "indent_lines", "Indent", show=False, priority=True),
+        Binding("shift+tab", "dedent_lines", "Dedent", show=False, priority=True),
+        Binding("back_tab", "dedent_lines", "Dedent", show=False, priority=True),
+    ]
+
+    def on_key(self, event: events.Key) -> None:
+        key = event.key
+        is_ctrl = getattr(event, "ctrl", False)
+        is_shift = getattr(event, "shift", False)
+
+        # Handle Ctrl+Tab (and Tab when multiple lines are selected)
+        if key == "ctrl+tab" or (key in ("tab", "ctrl+i") and is_ctrl) or (key == "tab" and not is_shift and self.selection.start[0] != self.selection.end[0]):
+            event.prevent_default()
+            event.stop()
+            self.action_indent_lines()
+            return
+        # Handle Shift+Tab (dedent)
+        elif key in ("shift+tab", "back_tab") or (key in ("tab", "ctrl+i") and is_shift):
+            event.prevent_default()
+            event.stop()
+            self.action_dedent_lines()
+            return
+
+    def action_indent_lines(self) -> None:
+        lines = getattr(self.document, "lines", None)
+        if lines is None:
+            lines = self.text.splitlines()
+        if not lines:
+            return
+
+        sel = self.selection
+        r1, c1 = sel.start
+        r2, c2 = sel.end
+        is_reversed = (r1, c1) > (r2, c2)
+        if is_reversed:
+            (r1, c1), (r2, c2) = (r2, c2), (r1, c1)
+
+        r1 = max(0, min(r1, len(lines) - 1))
+        r2 = max(0, min(r2, len(lines) - 1))
+        line_end = r2 - 1 if (r2 > r1 and c2 == 0) else r2
+
+        old_block_lines = lines[r1 : line_end + 1]
+        new_block_lines = []
+        for line in old_block_lines:
+            if line or r1 == line_end:
+                new_block_lines.append("    " + line)
+            else:
+                new_block_lines.append(line)
+
+        start_loc = (r1, 0)
+        end_loc = (line_end, len(lines[line_end]))
+        edit_text = "\n".join(new_block_lines)
+
+        try:
+            self.replace(edit_text, start_loc, end_loc)
+        except Exception:
+            try:
+                self.replace_range(start_loc, end_loc, edit_text)
+            except Exception:
+                self.selection = Selection(start_loc, end_loc)
+                self.replace(edit_text)
+
+        first_indented = bool(old_block_lines[0] or r1 == line_end)
+        last_indented = bool(old_block_lines[-1] or r1 == line_end)
+
+        if r1 == r2 and c1 == c2:
+            new_c = c1 + 4 if first_indented else c1
+            self.selection = Selection((r1, new_c), (r1, new_c))
+        else:
+            new_c1 = c1 + 4 if (c1 > 0 and first_indented) else c1
+            new_c2 = c2 + 4 if (c2 > 0 and line_end == r2 and last_indented) else c2
+            if is_reversed:
+                self.selection = Selection((r2, new_c2), (r1, new_c1))
+            else:
+                self.selection = Selection((r1, new_c1), (r2, new_c2))
+
+    def action_dedent_lines(self) -> None:
+        lines = getattr(self.document, "lines", None)
+        if lines is None:
+            lines = self.text.splitlines()
+        if not lines:
+            return
+
+        sel = self.selection
+        r1, c1 = sel.start
+        r2, c2 = sel.end
+        is_reversed = (r1, c1) > (r2, c2)
+        if is_reversed:
+            (r1, c1), (r2, c2) = (r2, c2), (r1, c1)
+
+        r1 = max(0, min(r1, len(lines) - 1))
+        r2 = max(0, min(r2, len(lines) - 1))
+        line_end = r2 - 1 if (r2 > r1 and c2 == 0) else r2
+
+        old_block_lines = lines[r1 : line_end + 1]
+        new_block_lines = []
+        shifts = []
+
+        for line in old_block_lines:
+            if line.startswith("\t"):
+                new_block_lines.append(line[1:])
+                shifts.append(1)
+            elif line.startswith(" "):
+                leading = len(line) - len(line.lstrip(" "))
+                to_remove = min(4, leading)
+                new_block_lines.append(line[to_remove:])
+                shifts.append(to_remove)
+            else:
+                # Line is at zero indentation: keep as is!
+                new_block_lines.append(line)
+                shifts.append(0)
+
+        if not any(shifts):
+            return
+
+        start_loc = (r1, 0)
+        end_loc = (line_end, len(lines[line_end]))
+        edit_text = "\n".join(new_block_lines)
+
+        try:
+            self.replace(edit_text, start_loc, end_loc)
+        except Exception:
+            try:
+                self.replace_range(start_loc, end_loc, edit_text)
+            except Exception:
+                self.selection = Selection(start_loc, end_loc)
+                self.replace(edit_text)
+
+        shift_first = shifts[0]
+        shift_last = shifts[-1]
+
+        if r1 == r2 and c1 == c2:
+            new_c = max(0, c1 - shift_first)
+            self.selection = Selection((r1, new_c), (r1, new_c))
+        else:
+            new_c1 = max(0, c1 - shift_first) if c1 > 0 else 0
+            new_c2 = max(0, c2 - shift_last) if (c2 > 0 and line_end == r2) else c2
+            if is_reversed:
+                self.selection = Selection((r2, new_c2), (r1, new_c1))
+            else:
+                self.selection = Selection((r1, new_c1), (r2, new_c2))
+
+    def _get_line_indent(self, lines: list, idx: int, indent_w: int = 4) -> int:
+        if idx < 0 or idx >= len(lines):
+            return 0
+        line = lines[idx]
+        if line.strip():
+            expanded = line.expandtabs(indent_w)
+            return len(expanded) - len(expanded.lstrip(" "))
+        prev_indent = 0
+        for i in range(idx - 1, -1, -1):
+            if lines[i].strip():
+                exp = lines[i].expandtabs(indent_w)
+                prev_indent = len(exp) - len(exp.lstrip(" "))
+                break
+        next_indent = 0
+        for i in range(idx + 1, len(lines)):
+            if lines[i].strip():
+                exp = lines[i].expandtabs(indent_w)
+                next_indent = len(exp) - len(exp.lstrip(" "))
+                break
+        return min(prev_indent, next_indent)
+
+    def _is_bracket_closure(self, line: str) -> bool:
+        s = line.strip()
+        return bool(s) and s.startswith(("}", ")", "]", ">", "</", "/>"))
+
+    def _get_next_line_indent(self, lines: list, idx: int, indent_w: int = 4) -> tuple[int, bool]:
+        for i in range(idx + 1, len(lines)):
+            line = lines[i]
+            if line.strip():
+                exp = line.expandtabs(indent_w)
+                indent = len(exp) - len(exp.lstrip(" "))
+                return indent, self._is_bracket_closure(line)
+        return 0, False
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        doc_line_idx = self.scroll_offset.y + y
+        lines = getattr(self.document, "lines", None)
+        if lines is None:
+            lines = self.text.splitlines()
+        if doc_line_idx >= len(lines):
+            return strip
+
+        indent_w = getattr(self, "indent_width", 4) or 4
+        max_indent = self._get_line_indent(lines, doc_line_idx, indent_w)
+        if max_indent <= 0:
+            return strip
+
+        is_non_blank = bool(lines[doc_line_idx].strip())
+        next_indent, is_next_bracket = self._get_next_line_indent(lines, doc_line_idx, indent_w)
+
+        gutter_w = getattr(self, "gutter_width", 0) if getattr(self, "show_line_numbers", False) else 0
+        scroll_x = self.scroll_offset.x
+        indent_end_screen_x = gutter_w + max_indent - scroll_x
+        guide_style = Style(color="bright_black")
+
+        new_segments = []
+        curr_x = 0
+
+        for seg in strip:
+            seg_text = seg.text
+            seg_style = seg.style or Style()
+            seg_len = len(seg_text)
+
+            if curr_x + seg_len <= gutter_w or curr_x >= indent_end_screen_x:
+                new_segments.append(seg)
+                curr_x += seg_len
+                continue
+
+            chars = []
+            char_styles = []
+            for i, ch in enumerate(seg_text):
+                sx = curr_x + i
+                if sx < gutter_w:
+                    chars.append(ch)
+                    char_styles.append(seg_style)
+                else:
+                    doc_col = (sx - gutter_w) + scroll_x
+                    if ch == " " and doc_col < max_indent:
+                        base_col = (doc_col // indent_w) * indent_w
+                        is_term = is_non_blank and (next_indent <= base_col)
+                        # Keep vertical line if it connects straight into a closing bracket/delimiter
+                        if is_term and is_next_bracket and (next_indent == base_col):
+                            is_term = False
+
+                        if is_term and doc_col == base_col:
+                            chars.append("╰")
+                            char_styles.append(seg_style + guide_style)
+                        elif is_term and doc_col == base_col + 1:
+                            chars.append("─")
+                            char_styles.append(seg_style + guide_style)
+                        elif not is_term and doc_col == base_col:
+                            chars.append("│")
+                            char_styles.append(seg_style + guide_style)
+                        else:
+                            chars.append(ch)
+                            char_styles.append(seg_style)
+                    else:
+                        chars.append(ch)
+                        char_styles.append(seg_style)
+
+            if not chars:
+                new_segments.append(seg)
+                curr_x += seg_len
+                continue
+
+            sub_start = 0
+            for j in range(1, len(chars)):
+                if char_styles[j] != char_styles[sub_start]:
+                    new_segments.append(Segment("".join(chars[sub_start:j]), char_styles[sub_start]))
+                    sub_start = j
+            new_segments.append(Segment("".join(chars[sub_start:]), char_styles[sub_start]))
+            curr_x += seg_len
+
+        if curr_x < indent_end_screen_x:
+            base_style = getattr(self, "rich_style", None) or Style()
+            while curr_x < indent_end_screen_x:
+                if curr_x < gutter_w:
+                    new_segments.append(Segment(" ", base_style))
+                else:
+                    doc_col = (curr_x - gutter_w) + scroll_x
+                    base_col = (doc_col // indent_w) * indent_w
+                    is_term = is_non_blank and (next_indent <= base_col)
+                    if is_term and is_next_bracket and (next_indent == base_col):
+                        is_term = False
+
+                    if is_term and doc_col == base_col:
+                        new_segments.append(Segment("╰", base_style + guide_style))
+                    elif is_term and doc_col == base_col + 1:
+                        new_segments.append(Segment("─", base_style + guide_style))
+                    elif not is_term and doc_col == base_col:
+                        new_segments.append(Segment("│", base_style + guide_style))
+                    else:
+                        new_segments.append(Segment(" ", base_style))
+                curr_x += 1
+
+        return Strip(new_segments).simplify()
 
 class FEDERaiDE(App):
     CSS = """
@@ -865,12 +1186,84 @@ class FEDERaiDE(App):
     def action_copy_selected(self):
         if self.query_one("#main_switcher").current == "code_view":
             try:
-                editor = self.focused
-                if isinstance(editor, TextArea) and editor.selected_text:
+                focused = self.focused
+                if isinstance(focused, TextArea) and focused.selected_text:
                     if HAS_PYPERCLIP:
-                        pyperclip.copy(editor.selected_text)
+                        pyperclip.copy(focused.selected_text)
                         self.notify("Copied to clipboard!")
                     else: self.notify("Install 'pyperclip' for copy support.", severity="error")
+                    return
+                if isinstance(focused, ExplorerTree):
+                    targets = (
+                        sorted(p.absolute() for p in focused.marked_paths)
+                        if focused.marked_paths
+                        else (
+                            [focused.cursor_node.data.path.absolute()]
+                            if focused.cursor_node and focused.cursor_node.data
+                            else []
+                        )
+                    )
+                    if not targets:
+                        self.notify("No files or folders selected.", severity="warning")
+                        return
+
+                    # Find common base path (topmost ancestor) among all targets' effective anchor directories
+                    def _get_anchor(p: Path) -> Path:
+                        return p.parent if p.is_file() else p
+
+                    anchors = [_get_anchor(t) for t in targets]
+                    common_base = anchors[0]
+                    for a in anchors[1:]:
+                        try:
+                            common_base = Path(os.path.commonpath([str(common_base), str(a)]))
+                        except ValueError:
+                            common_base = Path(focused.path) if hasattr(focused, "path") else Path.cwd()
+                    
+                    # If common_base ends up being a file, step up to its parent
+                    if common_base.is_file():
+                        common_base = common_base.parent
+
+                    chunks, seen = [], set()
+                    for target in targets:
+                        target = target.absolute()
+                        files = []
+                        if target.is_file():
+                            try:
+                                rel = target.relative_to(common_base).as_posix()
+                            except ValueError:
+                                rel = target.name
+                            files.append((target, rel))
+                        elif target.is_dir():
+                            for root, dirs, fnames in os.walk(target):
+                                dirs.sort()
+                                for fname in sorted(fnames):
+                                    p = Path(root).absolute() / fname
+                                    try:
+                                        rel = p.relative_to(common_base).as_posix()
+                                    except ValueError:
+                                        rel = p.name
+                                    files.append((p, rel))
+                        for fpath, rel_header in files:
+                            resolved = fpath.resolve()
+                            if resolved in seen:
+                                continue
+                            seen.add(resolved)
+                            try:
+                                raw = fpath.read_bytes()
+                                if b"\x00" in raw:
+                                    continue
+                                text = raw.decode("utf-8")
+                            except (UnicodeDecodeError, OSError):
+                                continue
+                            chunks.append(f"--- {rel_header} ---\n{text}")
+                    if not chunks:
+                        self.notify("No decodable text files found.", severity="warning")
+                        return
+                    if HAS_PYPERCLIP:
+                        pyperclip.copy("\n\n".join(chunks))
+                        self.notify(f"Copied {len(chunks)} file(s) to clipboard!")
+                    else:
+                        self.notify("Install 'pyperclip' for copy support.", severity="error")
                     return
             except Exception: pass
         self.notify("No text selected to copy.", severity="warning")
@@ -1027,7 +1420,7 @@ class FEDERaiDE(App):
                 return
 
         pane_id = f"tab_{hash(str_path)}"
-        text_area = TextArea(content, id=f"editor_{pane_id}", show_line_numbers=True, soft_wrap=False)
+        text_area = CodeEditor(content, id=f"editor_{pane_id}", show_line_numbers=True, soft_wrap=False)
         mapped_lang = EXT_MAP.get(path.suffix.lower())
         
         if mapped_lang:
