@@ -256,7 +256,92 @@ class SecretsModal(ModalScreen[None]):
                 return
             self.notify(f"Failed to save secrets: {e}", severity="error")
 
-class ToolConfirmationModal(ModalScreen[str]):
+def format_preview_renderable(preview: Any):
+    if isinstance(preview, dict) and preview.get("type") == "new_file":
+        from rich.syntax import Syntax
+        from rich.style import Style
+        from rich.text import Span
+        filepath = str(toolbox.mask_secrets(preview.get("path", "")))
+        code = str(toolbox.mask_secrets(preview.get("content", "")))
+        try:
+            lexer = Syntax.guess_lexer(filepath, code=code)
+        except Exception:
+            lexer = "text"
+
+        is_dark = True
+        try:
+            if toolbox.CURRENT_APP:
+                t_name = getattr(toolbox.CURRENT_APP, "theme", "")
+                t_obj = getattr(toolbox.CURRENT_APP, "available_themes", {}).get(t_name)
+                if t_obj is not None:
+                    is_dark = getattr(t_obj, "dark", True)
+        except Exception:
+            pass
+
+        syntax = Syntax(code, lexer, theme="monokai" if is_dark else "friendly")
+        highlighted = syntax.highlight(code)
+        highlighted.style = Style.null()
+        highlighted.spans = [
+            Span(
+                s.start,
+                s.end,
+                Style(
+                    color=s.style.color,
+                    bold=s.style.bold,
+                    dim=s.style.dim,
+                    italic=s.style.italic,
+                    underline=s.style.underline,
+                    strike=s.style.strike,
+                ) if isinstance(s.style, Style) and s.style.bgcolor is not None else s.style
+            )
+            for s in highlighted.spans
+        ]
+
+        lines = highlighted.split("\n")
+        if len(lines) > 1 and not lines[-1].plain:
+            lines.pop()
+        num_w = len(str(len(lines)))
+        out = Text(f"New File: {filepath}\n", style="bold green")
+        for idx, line_text in enumerate(lines, 1):
+            out.append(f"{str(idx).rjust(num_w)} │ ", style="dim")
+            out.append_text(line_text)
+            if idx < len(lines):
+                out.append("\n")
+        return out
+
+    diff_str = preview.get("content", "") if isinstance(preview, dict) else str(preview)
+    return format_diff_text(str(toolbox.mask_secrets(diff_str)))
+
+def format_diff_text(diff: str) -> Text:
+    from toolbox import load_global_settings
+    from rich.style import Style
+    cfg = load_global_settings()
+    add_color = cfg.get("diff_addition_color", "green") or "green"
+    del_color = cfg.get("diff_deletion_color", "red") or "red"
+    try: Style.parse(add_color)
+    except Exception: add_color = "green"
+    try: Style.parse(del_color)
+    except Exception: del_color = "red"
+
+    diff_text = Text()
+    lines = diff.splitlines()
+    for i, line in enumerate(lines):
+        suffix = "\n" if i < len(lines) - 1 else ""
+        if line.startswith("+++"):
+            diff_text.append(line + suffix, style=f"bold {add_color}")
+        elif line.startswith("---"):
+            diff_text.append(line + suffix, style=f"bold {del_color}")
+        elif line.startswith("+"):
+            diff_text.append(line + suffix, style=f"bold {add_color}")
+        elif line.startswith("-"):
+            diff_text.append(line + suffix, style=f"bold {del_color}")
+        elif line.startswith("@@"):
+            diff_text.append(line + suffix, style="bold cyan")
+        else:
+            diff_text.append(line + suffix)
+    return diff_text
+
+class ToolConfirmationModal(ModalScreen[Any]):
     DEFAULT_CSS = """
     ToolConfirmationModal { 
         align: center middle; 
@@ -286,10 +371,16 @@ class ToolConfirmationModal(ModalScreen[str]):
     #args_scroll { 
         margin: 1 0; 
         height: auto; 
-        max-height: 20; 
+        max-height: 15; 
         border: round $accent; 
         background: $boost; 
         padding: 1 2; 
+    }
+    #reject_comment {
+        height: 4;
+        border: round $accent;
+        background: $boost;
+        margin-top: 0;
     }
     .buttons { 
         height: auto; 
@@ -300,55 +391,36 @@ class ToolConfirmationModal(ModalScreen[str]):
         margin-left: 1; 
     }
     """
-    def __init__(self, tool_name: str, arguments: dict, agent_name: str = "Agent", diff: Optional[str] = None):
+    def __init__(self, tool_name: str, arguments: dict, agent_name: str = "Agent", diff: Optional[Any] = None):
         super().__init__()
         self.tool_name = tool_name
         self.arguments = toolbox.mask_secrets(arguments)
         self.agent_name = agent_name
-        self.diff = toolbox.mask_secrets(diff) if diff else None
+        self.diff = diff
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm_dialog"):
             yield Label(f"Tool Authorization: {self.tool_name} ({self.agent_name})", classes="modal_header_bar")
-            if self.diff:
+            if isinstance(self.diff, dict) and self.diff.get("type") == "new_file":
+                safe_fp = str(toolbox.mask_secrets(self.diff.get("path", "")))
+                yield Label(f"Review proposed new file ({safe_fp}):", classes="modal_subtitle", markup=False)
+            elif self.diff:
                 yield Label("Review proposed file modifications (diff):", classes="modal_subtitle")
             else:
                 yield Label("Verify the requested arguments before executing:", classes="modal_subtitle")
             
             with VerticalScroll(id="args_scroll"):
                 if self.diff:
-                    # Dynamically load user-configured diff colors with safety fallback
-                    from toolbox import load_global_settings
-                    from rich.style import Style
-                    cfg = load_global_settings()
-                    add_color = cfg.get("diff_addition_color", "green") or "green"
-                    del_color = cfg.get("diff_deletion_color", "red") or "red"
-                    try: Style.parse(add_color)
-                    except Exception: add_color = "green"
-                    try: Style.parse(del_color)
-                    except Exception: del_color = "red"
-
-                    diff_text = Text()
-                    for line in self.diff.splitlines():
-                        if line.startswith("+++"):
-                            diff_text.append(line + "\n", style=f"bold {add_color}")
-                        elif line.startswith("---"):
-                            diff_text.append(line + "\n", style=f"bold {del_color}")
-                        elif line.startswith("+"):
-                            diff_text.append(line + "\n", style=f"bold {add_color}")
-                        elif line.startswith("-"):
-                            diff_text.append(line + "\n", style=f"bold {del_color}")
-                        elif line.startswith("@@"):
-                            diff_text.append(line + "\n", style="bold cyan")
-                        else:
-                            diff_text.append(line + "\n")
-                    yield Static(diff_text, markup=False)
+                    yield Static(format_preview_renderable(self.diff), markup=False)
                 else:
                     try:
                         formatted_args = json.dumps(self.arguments, indent=4)
                     except Exception:
                         formatted_args = str(self.arguments)
                     yield Static(formatted_args, markup=False)
+
+            yield Label("Rejection comment:", classes="modal_subtitle")
+            yield TextArea(id="reject_comment", show_line_numbers=False, tab_behavior="focus")
                 
             with Horizontal(classes="buttons"):
                 yield Button("Approve (Execute)", id="approve", variant="success")
@@ -358,17 +430,24 @@ class ToolConfirmationModal(ModalScreen[str]):
     def on_mount(self):
         self.query_one("#approve").focus()
 
+    @on(TextArea.Changed, "#reject_comment")
+    def on_comment_changed(self, event: TextArea.Changed):
+        self.query_one("#approve", Button).disabled = bool(
+            self.query_one("#reject_comment", TextArea).text.strip()
+        )
+
     @on(Button.Pressed, "#approve")
     def on_approve(self):
-        self.dismiss("approve")
+        self.dismiss(("approve", ""))
 
     @on(Button.Pressed, "#reject")
     def on_reject(self):
-        self.dismiss("reject")
+        comment = self.query_one("#reject_comment", TextArea).text.strip()
+        self.dismiss(("reject", comment))
 
     @on(Button.Pressed, "#stop")
     def on_stop(self):
-        self.dismiss("stop")
+        self.dismiss(("stop", ""))
         
 class ClarificationModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -3054,11 +3133,12 @@ class MCPConfigModal(ModalScreen[bool]):
     """
 
     def compose(self) -> ComposeResult:
+        from ide_config import PygmentsTextArea
         team_name = os.path.basename(toolbox.get_team_dir()).lstrip(".")
         with Vertical(id="mcp_dialog"):
             yield Label(f" MCP Servers Configuration — {team_name} (JSON)", classes="pane_title")
             yield Label("Define your Model Context Protocol servers below:", classes="field_label")
-            yield TextArea(id="mcp_json_edit")
+            yield PygmentsTextArea(id="mcp_json_edit", hl_path="mcp_servers.json")
             yield RichLog(id="mcp_log", markup=True, auto_scroll=True)
             with Horizontal(classes="buttons"):
                 yield Button("Query / Refresh Tools", id="mcp_query_btn", variant="primary")
@@ -3072,11 +3152,6 @@ class MCPConfigModal(ModalScreen[bool]):
             ta.text = mcp_handler.load_mcp_config_raw()
         except Exception:
             ta.text = "{}"
-            
-        try:
-            ta.language = "json"
-        except Exception:
-            ta.language = None
 
     def _save_json(self) -> bool:
         content = self.query_one("#mcp_json_edit", TextArea).text
@@ -3869,6 +3944,7 @@ class AIAgentView(Vertical):
         Binding("ctrl+t", "cycle_arm_mode", "Cycle Mode", priority=True),
         Binding("ctrl+g", "cycle_agents", "Cycle Agents", priority=True),
         Binding("ctrl+a", "abort", "Abort", priority=True),
+        Binding("ctrl+u", "toggle_autoscroll", "Auto-Scroll", priority=True),
         Binding("f3", "open_global_settings", "Settings", priority=True),
         Binding("f1", "open_teams", "Manage Teams", priority=True),
     ]
@@ -4007,6 +4083,7 @@ class AIAgentView(Vertical):
         toolbox.CURRENT_AGENT_VIEW = self
         toolbox.CURRENT_LOG_CB = self.log_to_ui
         self.current_tokens = 0
+        self.auto_scroll = True
         
         self.agent_manager = AgentManager()
         self.session_manager = SessionManager()
@@ -4187,8 +4264,9 @@ class AIAgentView(Vertical):
                     return None
                 safe_path, display_path = get_safe_path(fp)
 
+                file_exists = os.path.exists(safe_path)
                 orig_content = ""
-                if os.path.exists(safe_path):
+                if file_exists:
                     with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
                         orig_content = f.read()
 
@@ -4226,34 +4304,37 @@ class AIAgentView(Vertical):
                 elif new_content_arg is not None:
                     new_content = str(new_content_arg)
 
-                if new_content is not None and new_content != orig_content:
-                    # Guarantee every line has a trailing newline to prevent difflib from smashing lines together
-                    orig_lines = [l + "\n" for l in orig_content.splitlines()]
-                    new_lines = [l + "\n" for l in new_content.splitlines()]
-                    from_label = f"a/{display_path}" if os.path.exists(safe_path) else "/dev/null"
-                    diff_lines = list(difflib.unified_diff(
-                        orig_lines,
-                        new_lines,
-                        fromfile=from_label,
-                        tofile=f"b/{display_path}",
-                        n=3
-                    ))
-                    if diff_lines:
-                        return "".join(diff_lines)
+                if new_content is not None:
+                    if not file_exists:
+                        return {"type": "new_file", "path": display_path, "content": new_content}
+                    if new_content != orig_content:
+                        # Guarantee every line has a trailing newline to prevent difflib from smashing lines together
+                        orig_lines = [l + "\n" for l in orig_content.splitlines()]
+                        new_lines = [l + "\n" for l in new_content.splitlines()]
+                        diff_lines = list(difflib.unified_diff(
+                            orig_lines,
+                            new_lines,
+                            fromfile=f"a/{display_path}",
+                            tofile=f"b/{display_path}",
+                            n=3
+                        ))
+                        if diff_lines:
+                            return {"type": "diff", "path": display_path, "content": "".join(diff_lines)}
             except Exception:
                 pass
         return None
 
-    def confirm_tool_execution(self, tool_name: str, arguments: dict, agent_name: str = "Agent") -> bool:
+    def confirm_tool_execution(self, tool_name: str, arguments: dict, agent_name: str = "Agent") -> tuple[bool, str]:
         result_event = threading.Event()
-        final_result = [False]
+        final_result = [(False, "")]
 
         def handle_result(res: Any):
-            if res == "stop":
+            action, comment = res if isinstance(res, tuple) else (res, "")
+            if action == "stop":
                 self.action_abort()
-                final_result[0] = False
+                final_result[0] = (False, "")
             else:
-                final_result[0] = (res == "approve")
+                final_result[0] = (action == "approve", comment)
             result_event.set()
 
         diff_text = self._compute_diff(tool_name, arguments)
@@ -4266,7 +4347,7 @@ class AIAgentView(Vertical):
         
         while not result_event.is_set():
             if toolbox.ABORT_EVENT.is_set():
-                return False
+                return (False, "")
             result_event.wait(0.1) 
             
         return final_result[0]
@@ -4864,18 +4945,52 @@ class AIAgentView(Vertical):
                 classes="message_block"
             )
             chat_body.mount(box)
-            self.app.call_after_refresh(lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False))
-            self.query_one("#ai_chat_scroll").scroll_end(animate=False)
+            self.scroll_chat_to_bottom()
             self.update_status_bar()
         except Exception:
             pass
 
-    def render_tool_result_box(self, owner_name, color, summary):
+    def store_ui_tool_diff(self, agent_name: str, tool_name: str, tool_args: dict, diff: str):
+        if not hasattr(self, "_ui_tool_diffs"):
+            self._ui_tool_diffs = []
+            self._ui_tool_diffs_lock = threading.Lock()
+        with self._ui_tool_diffs_lock:
+            self._ui_tool_diffs.append((agent_name, tool_name, dict(tool_args), diff))
+
+    def pop_ui_tool_diff(self, agent_name: str, tool_name: str, tool_args: Optional[dict] = None) -> Optional[str]:
+        if not hasattr(self, "_ui_tool_diffs"):
+            return None
+        with self._ui_tool_diffs_lock:
+            if tool_args is not None:
+                for i, (a_name, t_name, t_args, diff) in enumerate(self._ui_tool_diffs):
+                    if a_name == agent_name and t_name == tool_name and t_args == tool_args:
+                        self._ui_tool_diffs.pop(i)
+                        return diff
+            for i, (a_name, t_name, t_args, diff) in enumerate(self._ui_tool_diffs):
+                if a_name == agent_name and t_name == tool_name:
+                    self._ui_tool_diffs.pop(i)
+                    return diff
+        return None
+
+    def clear_ui_tool_diffs(self, agent_name: str):
+        if not hasattr(self, "_ui_tool_diffs"):
+            return
+        with self._ui_tool_diffs_lock:
+            self._ui_tool_diffs = [x for x in self._ui_tool_diffs if x[0] != agent_name]
+
+    def render_tool_result_box(self, owner_name, color, summary, diff: Optional[Any] = None):
         try:
-            summary = toolbox.mask_secrets(summary)
-            header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
-            body_text = Text(str(summary))
-            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
+            if diff:
+                from rich.console import Group
+                body_renderable = format_preview_renderable(diff)
+                if isinstance(body_renderable, Text):
+                    renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + body_renderable
+                else:
+                    renderable = Group(Text(f"Tool Result ({owner_name}):", style="bold"), body_renderable)
+            else:
+                summary = toolbox.mask_secrets(summary)
+                renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + Text(str(summary))
+            box_widget = Static(renderable, classes="tool_result_box", markup=False)
             box_widget.styles.border = ("round", color)
             self._write_log(box_widget)
         except Exception:
@@ -4910,10 +5025,40 @@ class AIAgentView(Vertical):
         except Exception:
             pass
 
+    def scroll_chat_to_bottom(self, force: bool = False):
+        if not force and not getattr(self, "auto_scroll", True):
+            return
+        def _do_scroll():
+            if not force and not getattr(self, "auto_scroll", True):
+                return
+            try:
+                self.query_one("#ai_chat_scroll").scroll_end(animate=False)
+            except Exception:
+                pass
+        try:
+            self.app.call_after_refresh(_do_scroll)
+        except Exception:
+            pass
+
+    def action_toggle_autoscroll(self):
+        try:
+            switcher = self.app.query_one("#main_switcher")
+            if switcher.current != "ai_chat_view":
+                return
+        except Exception:
+            pass
+        self.auto_scroll = not getattr(self, "auto_scroll", True)
+        if self.auto_scroll:
+            self.scroll_chat_to_bottom(force=True)
+            self.notify("Auto-scroll ON (sticking to bottom)", timeout=2.0)
+        else:
+            self.notify("Free scroll ON (auto-scroll paused)", timeout=2.0)
+
     def update_ai_message(self, display_text):
         try:
             if hasattr(self, "current_ai_widget") and self.current_ai_widget:
                 self.current_ai_widget.update(Markdown(toolbox.mask_secrets(display_text)))
+                self.scroll_chat_to_bottom()
         except Exception:
             pass
 
@@ -4965,8 +5110,7 @@ class AIAgentView(Vertical):
             else:
                 widget = msg
             chat_body.mount(widget)
-            self.app.call_after_refresh(lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False))
-            self.query_one("#ai_chat_scroll").scroll_end(animate=False)
+            self.scroll_chat_to_bottom()
             self.update_status_bar()
         except Exception: pass
 
@@ -5024,8 +5168,6 @@ class AIAgentView(Vertical):
                 base_dir = str(app.query_one("#dir_tree").path) if app else os.getcwd()
             except Exception:
                 base_dir = os.getcwd()
-            nomem_badge = " [bold yellow][NO MEMORY][/bold yellow]" if hasattr(self, "session_manager") and self.session_manager.is_no_memory() else ""
-            
             icons = []
             if getattr(self, "tts_enabled", False):
                 icons.append("🔈")
@@ -5039,7 +5181,7 @@ class AIAgentView(Vertical):
             audio_icons_str = f"\n {''.join(icons)}" if icons else ""
 
             self.query_one("#ai_cwd_label", Label).update(Text(base_dir))
-            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}{nomem_badge}{audio_icons_str}")
+            self.query_one("#ai_config_label", Label).update(f"[F3] {mode_str}{audio_icons_str}")
             self.query_one("#ai_token_label", Label).update(agent_info)
         except Exception: pass
         self.update_prompt_label()
@@ -5953,9 +6095,7 @@ class AIAgentView(Vertical):
                     )
                     left_pane.mount(row)
 
-                self.app.call_after_refresh(
-                    lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False)
-                )
+                self.scroll_chat_to_bottom()
             except Exception as e:
                 self.log_to_ui(f"[bold red]UI Error:[/bold red] {e}")
 
@@ -5976,9 +6116,7 @@ class AIAgentView(Vertical):
                     if percent >= 100:
                         spin.update("") 
 
-                self.app.call_after_refresh(
-                    lambda: self.query_one("#ai_chat_scroll").scroll_end(animate=False)
-                )
+                self.scroll_chat_to_bottom()
             except Exception: pass
 
         self.app.call_from_thread(_update)

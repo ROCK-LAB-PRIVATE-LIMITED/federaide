@@ -3615,8 +3615,12 @@ def prepare_active_skill(tool_name: str, source_paths: List[str], entry_point: s
                 "pre_install_commands": pre_install_commands,
                 "arg_order": arg_order
             }
-            if not CURRENT_AGENT_VIEW.confirm_tool_execution("prepare_active_skill", kwargs, agent_name=agent_name):
-                return "Error: Tool execution of 'prepare_active_skill' was rejected by the user."
+            confirmed, reject_comment = CURRENT_AGENT_VIEW.confirm_tool_execution("prepare_active_skill", kwargs, agent_name=agent_name)
+            if not confirmed:
+                msg = "Error: Tool execution of 'prepare_active_skill' was rejected by the user."
+                if reject_comment:
+                    msg += f" User comment: {reject_comment}"
+                return msg
 
     safe_agent_name = agent_name.replace(" ", "_")
     staging_dir = get_storage_path("agents", "skills", safe_agent_name, "staged_tools", tool_name)
@@ -3810,8 +3814,12 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
                 "usage_guide": usage_guide,
                 "arg_order": arg_order
             }
-            if not CURRENT_AGENT_VIEW.confirm_tool_execution("finalize_active_skill", kwargs, agent_name=agent_name):
-                return "Error: Tool execution of 'finalize_active_skill' was rejected by the user."
+            confirmed, reject_comment = CURRENT_AGENT_VIEW.confirm_tool_execution("finalize_active_skill", kwargs, agent_name=agent_name)
+            if not confirmed:
+                msg = "Error: Tool execution of 'finalize_active_skill' was rejected by the user."
+                if reject_comment:
+                    msg += f" User comment: {reject_comment}"
+                return msg
 
     safe_agent_name = agent_name.replace(" ", "_")
     base_skills = get_storage_path("agents", "skills", safe_agent_name)
@@ -3938,8 +3946,12 @@ def fix_active_skill(tool_name: str, action: str, documentation: str = None, too
                 "start_line": start_line,
                 "end_line": end_line
             }
-            if not CURRENT_AGENT_VIEW.confirm_tool_execution("fix_active_skill", kwargs, agent_name=agent_name):
-                return "Error: Tool execution of 'fix_active_skill' was rejected by the user."
+            confirmed, reject_comment = CURRENT_AGENT_VIEW.confirm_tool_execution("fix_active_skill", kwargs, agent_name=agent_name)
+            if not confirmed:
+                msg = "Error: Tool execution of 'fix_active_skill' was rejected by the user."
+                if reject_comment:
+                    msg += f" User comment: {reject_comment}"
+                return msg
 
     safe_agent_name = agent_name.replace(" ", "_")
     active_dir = get_storage_path("agents", "skills", safe_agent_name, "active_tools", tool_name)
@@ -4161,8 +4173,12 @@ def manage_active_skill(action: str, tool_name: str, new_name: str = None, confi
                 "tool_name": tool_name,
                 "new_name": new_name
             }
-            if not CURRENT_AGENT_VIEW.confirm_tool_execution("manage_active_skill", kwargs, agent_name=agent_name):
-                return "Error: Tool execution of 'manage_active_skill' was rejected by the user."
+            confirmed, reject_comment = CURRENT_AGENT_VIEW.confirm_tool_execution("manage_active_skill", kwargs, agent_name=agent_name)
+            if not confirmed:
+                msg = "Error: Tool execution of 'manage_active_skill' was rejected by the user."
+                if reject_comment:
+                    msg += f" User comment: {reject_comment}"
+                return msg
 
     safe_agent_name = agent_name.replace(" ", "_")
     active_dir = get_storage_path("agents", "skills", safe_agent_name, "active_tools", tool_name)

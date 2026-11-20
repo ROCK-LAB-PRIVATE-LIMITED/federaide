@@ -59,8 +59,6 @@ if sys.stdout.isatty() and "-record" not in sys.argv and not _is_ide_launch:
     _spinner_thread = threading.Thread(target=_run_loading_spinner, daemon=True)
     _spinner_thread.start()
 
-import inspect
-import importlib
 from pathlib import Path
 from textual.screen import ModalScreen
 from textual import on, work
@@ -102,7 +100,7 @@ Widget._on_mouse_scroll_up = _patched_mouse_scroll_up
 # -----------------------------------------------
 
 from execution import ExecutionManager, SettingsModal, DEFAULT_RUN_CONFIGS
-from ide_config import get_team_dir as _lite_get_team_dir, load_team_settings as _lite_load_team_settings
+from ide_config import PygmentsTextArea, get_team_dir as _lite_get_team_dir, load_team_settings as _lite_load_team_settings
 
 toolbox = None
 AIAgentView = None
@@ -127,161 +125,7 @@ try:
 except ImportError:
     HAS_PYPERCLIP = False
 
-import ctypes
-import importlib
 
-try:
-    from tree_sitter import Language, Parser
-    HAS_TREESITTER = True
-except ImportError:
-    HAS_TREESITTER = False
-
-TS_LANG_CACHE = {}
-HIGHLIGHTS_CACHE = {}
-
-def get_ts_language(lang_name: str):
-    if not HAS_TREESITTER or not lang_name: return None
-    if lang_name in TS_LANG_CACHE: return TS_LANG_CACHE[lang_name] # Return cached
-    
-    # 1. Try tree-sitter-languages (covers most common languages out of the box)
-    try:
-        from tree_sitter_languages import get_language
-        lang = get_language(lang_name)
-        if lang:
-            TS_LANG_CACHE[lang_name] = lang
-            return lang
-    except (ImportError, Exception):
-        pass
-
-    # 2. Try importing the individual Python-native package (e.g. tree-sitter-python)
-    try:
-        mod = importlib.import_module(f"tree_sitter_{lang_name}")
-        if hasattr(mod, "language"):
-            raw_lang = mod.language()
-        elif hasattr(mod, "LANGUAGE"):
-            raw_lang = mod.LANGUAGE()
-        else:
-            raw_lang = None
-            
-        if raw_lang:
-            # If raw_lang is already a Language object (modern tree-sitter >= 0.21.0),
-            # return it directly. Do not wrap it to prevent a TypeError.
-            if isinstance(raw_lang, Language):
-                lang = raw_lang
-            else:
-                try:
-                    lang = Language(raw_lang)
-                except (TypeError, Exception):
-                    try:
-                        lang = Language(raw_lang, lang_name)
-                    except Exception:
-                        lang = None
-        else:
-            lang = None
-            
-        if lang:
-            TS_LANG_CACHE[lang_name] = lang
-            return lang
-    except (ImportError, Exception): 
-        pass
-
-    # 3. Try loading from Termux/system-specific compiled packages as a final fallback
-    dirs = [
-        "/data/data/com.termux/files/usr/lib",
-        "/data/data/com.termux/files/usr/lib/tree_sitter",
-        "/usr/lib",
-        "/usr/lib/tree_sitter",
-        "/usr/local/lib",
-        "/usr/local/lib/tree_sitter"
-    ]
-    names = [
-        f"{lang_name}.so",
-        f"libtree-sitter-{lang_name}.so",
-        f"libtree_sitter_{lang_name}.so"
-    ]
-    for d in dirs:
-        for name in names:
-            p = os.path.join(d, name)
-            if os.path.exists(p):
-                try:
-                    lib = ctypes.CDLL(p)
-                    symbol_name = f"tree_sitter_{lang_name}"
-                    if hasattr(lib, symbol_name):
-                        symbol = getattr(lib, symbol_name)
-                        symbol.restype = ctypes.c_void_p
-                        lang = Language(symbol())
-                        TS_LANG_CACHE[lang_name] = lang
-                        return lang
-                except Exception:
-                    pass
-
-        return None
-
-def get_highlights(lang_name: str) -> str:
-    if lang_name in HIGHLIGHTS_CACHE: return HIGHLIGHTS_CACHE[lang_name] # Return cached
-    
-    # 1. Try individual package resources (e.g. tree_sitter_python)
-    try:
-        import importlib.resources as pkg_resources
-        mod_name = f"tree_sitter_{lang_name}"
-        res = None
-        # Try to read the highlights.scm file using modern or legacy methods
-        if hasattr(pkg_resources, "files"):
-            try:
-                res = (pkg_resources.files(mod_name) / "queries" / "highlights.scm").read_text()
-            except (FileNotFoundError, Exception):
-                pass
-        if res is None:
-            try:
-                res = pkg_resources.read_text(f"{mod_name}.queries", "highlights.scm")
-            except (ModuleNotFoundError, Exception):
-                pass
-        
-        if res is not None:
-            if lang_name == "cpp": res = get_highlights("c") + "\n" + res
-            HIGHLIGHTS_CACHE[lang_name] = res
-            return res
-    except Exception:
-        pass
-
-    # 2. Try tree-sitter-languages packaged queries
-    try:
-        import tree_sitter_languages
-        ts_languages_dir = os.path.dirname(tree_sitter_languages.__file__)
-        possible_query_paths = [
-            os.path.join(ts_languages_dir, "languages", "queries", f"{lang_name}.scm"),
-            os.path.join(ts_languages_dir, "languages", "queries", lang_name, "highlights.scm"),
-            os.path.join(ts_languages_dir, "repos", lang_name, "queries", "highlights.scm"),
-            os.path.join(ts_languages_dir, "repos", f"tree-sitter-{lang_name}", "queries", "highlights.scm")
-        ]
-        for qp in possible_query_paths:
-            if os.path.exists(qp):
-                res = Path(qp).read_text(encoding="utf-8")
-                if lang_name == "cpp": res = get_highlights("c") + "\n" + res
-                HIGHLIGHTS_CACHE[lang_name] = res
-                return res
-    except Exception:
-        pass
-
-    # 3. Try system-specific paths (e.g., Termux) as a final query fallback
-    system_query_paths = [
-        f"/data/data/com.termux/files/usr/share/tree-sitter/queries/{lang_name}/highlights.scm",
-        f"/data/data/com.termux/files/usr/share/tree-sitter/queries/tree-sitter-{lang_name}/highlights.scm",
-        f"/usr/share/tree-sitter/queries/{lang_name}/highlights.scm",
-        f"/usr/share/tree-sitter/queries/tree-sitter-{lang_name}/highlights.scm"
-    ]
-    for p in system_query_paths:
-        if os.path.exists(p):
-            try:
-                res = Path(p).read_text(encoding="utf-8")
-                if lang_name == "cpp": res = get_highlights("c") + "\n" + res
-                HIGHLIGHTS_CACHE[lang_name] = res
-                return res
-            except Exception:
-                pass
-    
-    HIGHLIGHTS_CACHE[lang_name] = ""
-    return ""
 
 EXT_MAP = {
     ".py": "python", ".go": "go", ".c": "c", ".h": "c", 
@@ -578,8 +422,8 @@ from rich.segment import Segment
 from rich.style import Style
 from textual.strip import Strip
 
-class CodeEditor(TextArea):
-    """TextArea subclass with visible code hierarchy indent guide lines and indent/dedent actions."""
+class CodeEditor(PygmentsTextArea):
+    """PygmentsTextArea subclass with visible code hierarchy indent guide lines and indent/dedent actions."""
 
     BINDINGS = [
         Binding("ctrl+tab", "indent_lines", "Indent", show=False, priority=True),
@@ -938,7 +782,6 @@ class FEDERaiDE(App):
         self.current_view_index = 0
         self.open_files = {} 
         self._outline_timer = None
-        self.native_highlights = {"css", "json", "markdown", "sql", "yaml"}
         
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
         self.exec_count = 0
@@ -1420,22 +1263,8 @@ class FEDERaiDE(App):
                 return
 
         pane_id = f"tab_{hash(str_path)}"
-        text_area = CodeEditor(content, id=f"editor_{pane_id}", show_line_numbers=True, soft_wrap=False)
+        text_area = CodeEditor(content, id=f"editor_{pane_id}", show_line_numbers=True, soft_wrap=False, hl_path=str(path))
         mapped_lang = EXT_MAP.get(path.suffix.lower())
-        
-        if mapped_lang:
-            if mapped_lang not in self.native_highlights:
-                ts_lang = get_ts_language(mapped_lang)
-                if ts_lang:
-                    query = get_highlights(mapped_lang)
-                    if query:
-                        try:
-                            sig = inspect.signature(text_area.register_language)
-                            if len(sig.parameters) == 2: text_area.register_language(ts_lang, query)
-                            else: text_area.register_language(mapped_lang, ts_lang, query)
-                        except Exception: pass 
-            try: text_area.language = mapped_lang
-            except Exception: text_area.language = None
 
         pane = TabPane(path.name, text_area, id=pane_id)
         self.open_files[str_path] = {"pane_id": pane_id, "path": path, "text_area": text_area, "language": mapped_lang}

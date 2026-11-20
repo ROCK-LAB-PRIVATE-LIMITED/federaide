@@ -508,9 +508,12 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                             except Exception as pre_err:
                                 return f"Error pre-validating edit: {pre_err}"
 
-                        confirmed = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
+                        confirmed, reject_comment = agent_view.confirm_tool_execution(t_obj.name, kwargs, agent_name=agent_name)
                         if not confirmed:
-                            return f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
+                            msg = f"Error: Tool execution of '{t_obj.name}' was rejected by the user."
+                            if reject_comment:
+                                msg += f" User comment: {reject_comment}"
+                            return msg
 
                     call_kwargs = dict(kwargs)
                     func_to_call = t_obj.func if hasattr(t_obj, "func") and callable(t_obj.func) else t_obj
@@ -523,7 +526,10 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                         except Exception:
                             pass
 
+                    ui_diff = agent_view._compute_diff(t_obj.name, kwargs)
                     raw_res = func_to_call(*args, **call_kwargs)
+                    if ui_diff and not str(raw_res).startswith(("Error", "Invalid action", "Pip install failed")):
+                        agent_view.store_ui_tool_diff(agent_name, t_obj.name, kwargs, ui_diff)
 
                     if t_obj.name in MEMORY_TOOL_NAMES:
                         return raw_res
@@ -877,7 +883,6 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                     
                                 display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
                                 agent_view.app.call_from_thread(agent_view.update_ai_message, display_text)
-                                agent_view.app.call_after_refresh(lambda: agent_view.query_one("#ai_chat_scroll").scroll_end(animate=False))
 
                         elif event_type == "updates":
                             consecutive_fail_count = 0
@@ -943,6 +948,9 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                                 img_name = os.path.basename(img_match.group(1).strip())
                                                 agent_view.log_to_ui(f"[#808080]Harness: Intercepted companion image `{img_name}` and queued for visual analysis.[/]")
                                         
+                                        tc_args = next((tc.get("args") for tc in reversed(tool_calls) if tool_call_id and tc.get("id") == tool_call_id), None)
+                                        ui_diff = agent_view.pop_ui_tool_diff(agent.name, tool_name, tc_args)
+
                                         if tool_name in ["search_web", "SearchWeb"]:
                                             summary = "[Search results successfully parsed and delivered to active agent context]"
                                         else:
@@ -952,7 +960,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                             summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
                                             summary = (summary_clean + '...') if len(summary_clean) > 400 else summary_clean
                                         
-                                        agent_view.app.call_from_thread(agent_view.render_tool_result_box, agent.name, agent.color, summary)
+                                        agent_view.app.call_from_thread(agent_view.render_tool_result_box, agent.name, agent.color, summary, ui_diff)
                     
                     if not full_ai_response.strip():
                         consecutive_fail_count += 1
@@ -1076,6 +1084,8 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
             agent_view.log_to_ui(f"[bold red]Execution Error ({agent.name}):[/bold red] {e}")
     finally:
+        if hasattr(agent_view, "clear_ui_tool_diffs"):
+            agent_view.clear_ui_tool_diffs(agent.name)
         # Only discard running agent state if this was the current active batch
         is_current_task = (batch_id == 0 or batch_id == getattr(agent_view, "current_batch_id", 0))
         if is_current_task:
