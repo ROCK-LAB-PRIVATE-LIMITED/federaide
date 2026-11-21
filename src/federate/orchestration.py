@@ -75,7 +75,7 @@ OPERATIONAL RULES:
 9. Use tools. If a tool output is insufficient, DO NOT call the same tool with the same arguments immediately. Try another tool or argument.
 10. SEARCH AND RESEARCH: Whenever you get stuck, use search_web and fetch_url to get up to date information. Do not use perform_research tool unless the user explicitly asks for research or deep research.
 11. Once you have the info, synthesize it.  Web searches must be followed up by one or more fetch_url tool calls to be effective. If the results are judged to be irrelevant, search again with a different query likely to return more relevant results. Do not keep searching if you have enough info.
-12. FILE EDITING: Before editing a file, ALWAYS use read_file tool to get the correct line numbers. Does not matter if you have read the file before, ALWAYS use the read_file prior to editing, to ensure the line number data is up to date. After using the edit file tool, check the response to see the concerned section of the edited file, including your edit. Ensure the edit was placed as you intended. Check to see if the edit is syntactically correct. If you notice any issues, immediately use the edit tool again to fix it. Continue this loop until the edit you intended (and ONLY the edit you intended) has been correctly placed.
+
 
 **Only use the get_user_clarification tool if:**
 - A wrong decision would cause significant re-work

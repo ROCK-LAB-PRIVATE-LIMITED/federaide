@@ -599,27 +599,52 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
     return executor
 
 
-def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0):
+def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0, pre_reserved: bool = False):
     if not is_core_unlocked():
+        if pre_reserved:
+            with agent_view.turn_lock:
+                agent_view._running_agents.discard(agent.name)
         if hasattr(agent_view, "log_to_ui"):
             agent_view.log_to_ui("[bold red]Security Violation: Federaide Core is locked. Master password authentication required.[/bold red]")
         return
 
     toolbox.register_thread()
-    if agent.name in agent_view._running_agents:
+    with agent_view.turn_lock:
+        aborted_ids = getattr(agent_view.session_manager, "aborted_batch_ids", set())
+        is_stale_entry = (batch_id != 0 and (batch_id != getattr(agent_view, "current_batch_id", 0) or batch_id in aborted_ids))
+        if is_stale_entry or toolbox.ABORT_EVENT.is_set():
+            if pre_reserved and batch_id == getattr(agent_view, "current_batch_id", 0):
+                agent_view._running_agents.discard(agent.name)
+            toolbox.unregister_thread()
+            return
+        if not pre_reserved:
+            if agent.name in agent_view._running_agents:
+                already_running = True
+            else:
+                already_running = False
+                agent_view._running_agents.add(agent.name)
+        else:
+            already_running = False
+            agent_view._running_agents.add(agent.name)
+
+    if already_running:
         agent_view.log_to_ui(f"[dim yellow]Agent {agent.name} is already working on a task.[/dim yellow]")
         toolbox.unregister_thread()
         return
 
-    if not agent_view.ensure_chatgpt_auth_for_agent(agent):
-        agent_view.log_to_ui(f"[bold red]ChatGPT OAuth authentication required for {agent.name}. Task cancelled.[/bold red]")
-        toolbox.unregister_thread()
-        return
-
-    agent_view._running_agents.add(agent.name)
+    agent_view._concise_turn_active = True
     toolbox.thread_context.agent_name = agent.name    
     toolbox.thread_context.batch_id = batch_id
+    spinner_started = False
+    delegated_to_recovery = False
+    new_par_candidates = []
+    new_seq_candidates = []
+    pause_for_askuser = False
     try:
+        if not agent_view.ensure_chatgpt_auth_for_agent(agent):
+            agent_view.log_to_ui(f"[bold red]ChatGPT OAuth authentication required for {agent.name}. Task cancelled.[/bold red]")
+            return
+
         try:
             translate_team_backstories_core(agent_view, agent, list(agent_view.agent_manager.agents.values()))
         except Exception:
@@ -643,6 +668,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
             return
         
         agent_view.app.call_from_thread(agent_view._toggle_spinner, True, agent.name, agent.color)
+        spinner_started = True
         agent_view.app.call_from_thread(agent_view.update_tokens)
         if getattr(agent_view, "tts_enabled", False):
             agent_view.tts_manager.start_stream(voice=agent.tts_voice, agent_name=agent.name)
@@ -882,7 +908,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                     has_mounted_ai_box = True
                                     
                                 display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
-                                agent_view.app.call_from_thread(agent_view.update_ai_message, display_text)
+                                agent_view.app.call_from_thread(agent_view.update_ai_message, display_text, agent.name)
 
                         elif event_type == "updates":
                             consecutive_fail_count = 0
@@ -989,6 +1015,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
             if full_ai_response.strip() or tool_outputs or tool_calls:
                 ai_response = full_ai_response.strip()
+                agent_view.app.call_from_thread(agent_view.mark_agent_concise_done, agent.name)
                 agent_view.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls)
                 agent_view.app.call_from_thread(agent_view.update_tokens)
                 
@@ -999,35 +1026,19 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                 
                 new_seq_mentions = agent_view.agent_manager.get_mentions(ai_response)
                 new_par_mentions = agent_view.agent_manager.get_parallel_mentions(ai_response)
-                
+
                 for m_name in new_par_mentions:
                     m_agent = agent_view.agent_manager.get_agent(m_name)
-                    if m_agent and m_agent.name != agent.name:
-                        agent_view.log_to_ui(f"[bold cyan]>> Parallel hand-off to {m_agent.name}...[/bold cyan]")
-                        agent_view.session_manager.join_conversation(agent.name, m_agent, list(agent_view.agent_manager.agents.values()))
-                        agent_view.app.call_from_thread(agent_view.run_agent_task, m_agent, prompt, None, batch_id)
+                    if m_agent and m_agent.name != agent.name and m_agent not in new_par_candidates:
+                        new_par_candidates.append(m_agent)
 
-                with agent_view.turn_lock:
-                    for m_name in new_seq_mentions:
-                        m_agent = agent_view.agent_manager.get_agent(m_name)
-                        if m_agent and m_agent not in agent_view.turn_queue:
-                            if m_agent.name != agent.name or len(new_par_mentions) > 0:
-                                agent_view.turn_queue.append(m_agent)
+                for m_name in new_seq_mentions:
+                    m_agent = agent_view.agent_manager.get_agent(m_name)
+                    if m_agent and m_agent not in new_seq_candidates:
+                        if m_agent.name != agent.name or len(new_par_mentions) > 0:
+                            new_seq_candidates.append(m_agent)
 
-            next_agent = None
-            with agent_view.turn_lock:
-                if "@askuser" in full_ai_response.lower() and agent_view.turn_queue:
-                    agent_view.paused_queue = list(agent_view.turn_queue)
-                    agent_view.turn_queue = []
-                    agent_view.log_to_ui("[bold yellow]Queue paused by agent. Waiting for user input. Type @resume to continue.[/bold yellow]")
-
-                if agent_view.turn_queue and len(agent_view._running_agents) <= 1 and len(new_par_mentions) == 0:
-                    next_agent = agent_view.turn_queue.pop(0)
-
-            if next_agent:
-                agent_view.log_to_ui(f"[bold cyan]>> Sequential hand-off to {next_agent.name}...[/bold cyan]")
-                agent_view.session_manager.join_conversation(agent.name, next_agent, list(agent_view.agent_manager.agents.values()))
-                agent_view.app.call_from_thread(agent_view.run_agent_task, next_agent, prompt, None, batch_id)
+                pause_for_askuser = ("@askuser" in full_ai_response.lower())
 
         except (Exception, SystemExit) as e:
             error_str = str(e) if str(e) else "Operation forcefully aborted by user."
@@ -1079,18 +1090,99 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
             if is_schema_or_api_error and "_rst_" not in thread_id:
                 agent_view.log_to_ui("[bold yellow] State Corruption or API Error Detected. Performing Automated Recovery...[/bold yellow]")
                 new_thread_id = f"{thread_id}_rst_{int(time.time())}"
-                agent_view._running_agents.discard(agent.name)
-                return run_agent_task_core(agent_view, agent, prompt, override_thread_id=new_thread_id, batch_id=batch_id)
+                delegated_to_recovery = True
+                return run_agent_task_core(agent_view, agent, prompt, override_thread_id=new_thread_id, batch_id=batch_id, pre_reserved=True)
 
             agent_view.log_to_ui(f"[bold red]Execution Error ({agent.name}):[/bold red] {e}")
     finally:
         if hasattr(agent_view, "clear_ui_tool_diffs"):
             agent_view.clear_ui_tool_diffs(agent.name)
-        # Only discard running agent state if this was the current active batch
-        is_current_task = (batch_id == 0 or batch_id == getattr(agent_view, "current_batch_id", 0))
+
+        if delegated_to_recovery:
+            if spinner_started:
+                try:
+                    agent_view.app.call_from_thread(agent_view._toggle_spinner, False, agent.name, agent.color)
+                except Exception:
+                    pass
+            toolbox.unregister_thread()
+            return
+
+        par_to_dispatch = []
+        skipped_par = []
+        seq_to_dispatch = None
+        did_pause_askuser = False
+        is_current_task = False
+
+        with agent_view.turn_lock:
+            aborted_ids = getattr(agent_view.session_manager, "aborted_batch_ids", set())
+            is_aborted = toolbox.ABORT_EVENT.is_set() or (batch_id != 0 and batch_id in aborted_ids)
+            is_current_task = (batch_id == 0 or batch_id == getattr(agent_view, "current_batch_id", 0))
+
+            if is_current_task:
+                agent_view._running_agents.discard(agent.name)
+
+                if is_aborted:
+                    agent_view.turn_queue.clear()
+                else:
+                    for m_agent in new_seq_candidates:
+                        if m_agent not in agent_view.turn_queue:
+                            agent_view.turn_queue.append(m_agent)
+
+                    if pause_for_askuser and agent_view.turn_queue:
+                        agent_view.paused_queue = list(agent_view.turn_queue)
+                        agent_view.turn_queue = []
+                        did_pause_askuser = True
+
+                    for m_agent in new_par_candidates:
+                        if m_agent.name in agent_view._running_agents:
+                            skipped_par.append(m_agent.name)
+                        else:
+                            agent_view._running_agents.add(m_agent.name)
+                            par_to_dispatch.append(m_agent)
+
+                    if not agent_view._running_agents and agent_view.turn_queue:
+                        candidate = agent_view.turn_queue.pop(0)
+                        agent_view._running_agents.add(candidate.name)
+                        seq_to_dispatch = candidate
+
+                if not agent_view._running_agents and not agent_view.turn_queue:
+                    agent_view._concise_turn_active = False
+
         if is_current_task:
-            agent_view._running_agents.discard(agent.name)
-            agent_view.app.call_from_thread(agent_view._toggle_spinner, False, agent.name, agent.color) 
+            if spinner_started:
+                try:
+                    agent_view.app.call_from_thread(agent_view._toggle_spinner, False, agent.name, agent.color)
+                except Exception:
+                    pass
+
+            if did_pause_askuser:
+                agent_view.log_to_ui("[bold yellow]Queue paused by agent. Waiting for user input. Type @resume to continue.[/bold yellow]")
+
+            for s_name in skipped_par:
+                agent_view.log_to_ui(f"[dim yellow]Agent {s_name} is already working on a task.[/dim yellow]")
+
+            all_agents_list = list(agent_view.agent_manager.agents.values())
+
+            for m_agent in par_to_dispatch:
+                agent_view.log_to_ui(f"[bold cyan]>> Parallel hand-off to {m_agent.name}...[/bold cyan]", agent_name=m_agent.name)
+                agent_view.session_manager.join_conversation(agent.name, m_agent, all_agents_list)
+
+            for m_agent in par_to_dispatch:
+                try:
+                    agent_view.app.call_from_thread(agent_view.run_agent_task, m_agent, prompt, None, batch_id, True)
+                except Exception:
+                    with agent_view.turn_lock:
+                        agent_view._running_agents.discard(m_agent.name)
+
+            if seq_to_dispatch:
+                agent_view.log_to_ui(f"[bold cyan]>> Sequential hand-off to {seq_to_dispatch.name}...[/bold cyan]", agent_name=seq_to_dispatch.name)
+                agent_view.session_manager.join_conversation(agent.name, seq_to_dispatch, all_agents_list)
+                try:
+                    agent_view.app.call_from_thread(agent_view.run_agent_task, seq_to_dispatch, prompt, None, batch_id, True)
+                except Exception:
+                    with agent_view.turn_lock:
+                        agent_view._running_agents.discard(seq_to_dispatch.name)
+
         toolbox.unregister_thread()
 
 
