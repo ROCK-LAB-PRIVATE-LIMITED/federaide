@@ -176,24 +176,6 @@ def _cleanup_legacy_fedserve():
 
 _cleanup_legacy_fedserve()
 
-class ExplorerTree(DirectoryTree):
-    """A directory tree with bindings for modal navigation."""
-    BINDINGS =[
-        Binding("backspace", "go_up", "Dir Up", show=True),
-        Binding("ctrl+b", "enter_dir", "Enter Dir", show=True)
-    ]
-    
-    def action_go_up(self):
-        """Navigate up one level."""
-        self.path = str(Path(self.path).parent.absolute())
-        
-    def action_enter_dir(self):
-        """Set the highlighted directory as the new visual root."""
-        if self.cursor_node and self.cursor_node.data:
-            path = self.cursor_node.data.path
-            if path.is_dir():
-                self.path = str(path.absolute())
-
 
 class DirectoryModal(ModalScreen[str]):
     """Modal allowing the user to browse and select a workspace directory."""
@@ -568,23 +550,25 @@ class CodeEditor(PygmentsTextArea):
             else:
                 self.selection = Selection((r1, new_c1), (r2, new_c2))
 
-    def _get_line_indent(self, lines: list, idx: int, indent_w: int = 4) -> int:
-        if idx < 0 or idx >= len(lines):
+    def _get_line_indent(self, doc, idx: int, line_count: int, indent_w: int = 4) -> int:
+        if idx < 0 or idx >= line_count:
             return 0
-        line = lines[idx]
+        line = doc.get_line(idx)
         if line.strip():
             expanded = line.expandtabs(indent_w)
             return len(expanded) - len(expanded.lstrip(" "))
         prev_indent = 0
-        for i in range(idx - 1, -1, -1):
-            if lines[i].strip():
-                exp = lines[i].expandtabs(indent_w)
+        for i in range(idx - 1, max(-1, idx - 200), -1):
+            s = doc.get_line(i)
+            if s.strip():
+                exp = s.expandtabs(indent_w)
                 prev_indent = len(exp) - len(exp.lstrip(" "))
                 break
         next_indent = 0
-        for i in range(idx + 1, len(lines)):
-            if lines[i].strip():
-                exp = lines[i].expandtabs(indent_w)
+        for i in range(idx + 1, min(line_count, idx + 200)):
+            s = doc.get_line(i)
+            if s.strip():
+                exp = s.expandtabs(indent_w)
                 next_indent = len(exp) - len(exp.lstrip(" "))
                 break
         return min(prev_indent, next_indent)
@@ -593,9 +577,9 @@ class CodeEditor(PygmentsTextArea):
         s = line.strip()
         return bool(s) and s.startswith(("}", ")", "]", ">", "</", "/>"))
 
-    def _get_next_line_indent(self, lines: list, idx: int, indent_w: int = 4) -> tuple[int, bool]:
-        for i in range(idx + 1, len(lines)):
-            line = lines[i]
+    def _get_next_line_indent(self, doc, idx: int, line_count: int, indent_w: int = 4) -> tuple[int, bool]:
+        for i in range(idx + 1, min(line_count, idx + 200)):
+            line = doc.get_line(i)
             if line.strip():
                 exp = line.expandtabs(indent_w)
                 indent = len(exp) - len(exp.lstrip(" "))
@@ -605,19 +589,18 @@ class CodeEditor(PygmentsTextArea):
     def render_line(self, y: int) -> Strip:
         strip = super().render_line(y)
         doc_line_idx = self.scroll_offset.y + y
-        lines = getattr(self.document, "lines", None)
-        if lines is None:
-            lines = self.text.splitlines()
-        if doc_line_idx >= len(lines):
+        doc = self.document
+        line_count = doc.line_count
+        if doc_line_idx >= line_count:
             return strip
 
         indent_w = getattr(self, "indent_width", 4) or 4
-        max_indent = self._get_line_indent(lines, doc_line_idx, indent_w)
+        max_indent = self._get_line_indent(doc, doc_line_idx, line_count, indent_w)
         if max_indent <= 0:
             return strip
 
-        is_non_blank = bool(lines[doc_line_idx].strip())
-        next_indent, is_next_bracket = self._get_next_line_indent(lines, doc_line_idx, indent_w)
+        is_non_blank = bool(doc.get_line(doc_line_idx).strip())
+        next_indent, is_next_bracket = self._get_next_line_indent(doc, doc_line_idx, line_count, indent_w)
 
         gutter_w = getattr(self, "gutter_width", 0) if getattr(self, "show_line_numbers", False) else 0
         scroll_x = self.scroll_offset.x
@@ -780,8 +763,7 @@ class FEDERaiDE(App):
         self.with_agent = with_agent
         self.views = ["ai_chat_view", "code_view", "exec_manager_view"] if with_agent else ["code_view", "exec_manager_view"]
         self.current_view_index = 0
-        self.open_files = {} 
-        self._outline_timer = None
+        self.open_files = {}
         
         self.run_configs = {k: v.copy() for k, v in DEFAULT_RUN_CONFIGS.items()}
         self.exec_count = 0
@@ -1267,28 +1249,24 @@ class FEDERaiDE(App):
         mapped_lang = EXT_MAP.get(path.suffix.lower())
 
         pane = TabPane(path.name, text_area, id=pane_id)
-        self.open_files[str_path] = {"pane_id": pane_id, "path": path, "text_area": text_area, "language": mapped_lang}
+        self.open_files[str_path] = {"pane_id": pane_id, "path": path, "text_area": text_area, "language": mapped_lang, "outline": None}
         
         tabs.add_pane(pane)
         tabs.active = pane_id
         text_area.focus()
-        self.update_outline(content, mapped_lang)
+        self.update_outline(content, mapped_lang, file_key=str_path)
 
-    @on(TabbedContent.TabActivated)
+    @on(TabbedContent.TabActivated, "#editor_tabs")
     def on_tab_activated(self, event: TabbedContent.TabActivated):
-        self.update_outline_for_active_tab()
-
-    @on(TextArea.Changed)
-    def on_text_changed(self, event: TextArea.Changed):
-        if self._outline_timer is not None: self._outline_timer.stop()
-        self._outline_timer = self.set_timer(0.5, self.update_outline_for_active_tab)
-
-    def update_outline_for_active_tab(self):
         tabs = self.query_one("#editor_tabs", TabbedContent)
         if not tabs.active: return
         file_data = next((v for v in self.open_files.values() if v["pane_id"] == tabs.active), None)
-        if file_data: self.update_outline(file_data["text_area"].text, file_data["language"])
-    
+        if file_data and file_data.get("outline") is not None:
+            root_label, virtual_nodes = file_data["outline"]
+            self._render_outline(root_label, virtual_nodes)
+        else:
+            self._render_outline("Outline", [])
+
     def action_save_file(self):
         tabs = self.query_one("#editor_tabs", TabbedContent)
         if not tabs.active:
@@ -1298,8 +1276,10 @@ class FEDERaiDE(App):
         file_data = next((v for v in self.open_files.values() if v["pane_id"] == tabs.active), None)
         if file_data:
             try:
-                file_data["path"].write_text(file_data["text_area"].text, encoding="utf-8")
+                content = file_data["text_area"].text
+                file_data["path"].write_text(content, encoding="utf-8")
                 self.notify(f"Saved {file_data['path'].name}")
+                self.update_outline(content, file_data["language"], file_key=str(file_data["path"].absolute()))
             except Exception as e:
                 self.notify(f"Save failed: {e}", severity="error")
 
@@ -1370,11 +1350,11 @@ class FEDERaiDE(App):
         self.push_screen(FilenameModal("Enter new file name:"), handle_filename)
     
     @work(thread=True, exclusive=True)
-    def update_outline(self, code: str, lang_name: str):
+    def update_outline(self, code: str, lang_name: str, file_key: str = None):
         display_name = (lang_name.title() if lang_name else "Plain Text")
         try:
             if not lang_name:
-                self.app.call_from_thread(self._render_outline, f"{display_name} Outline", [])
+                self.app.call_from_thread(self._render_outline, f"{display_name} Outline", [], file_key)
                 return
 
             import tempfile, subprocess, json, os
@@ -1384,12 +1364,18 @@ class FEDERaiDE(App):
             raw_nodes = json.loads(subprocess.check_output([bin_path, "parse", f.name], stderr=subprocess.DEVNULL).decode('utf-8'))
             os.remove(f.name)
             format_nodes = lambda ns: [{"label": f"{'Cl' if n['type'] in ('class','struct','interface','module','namespace','type') else 'ƒ'} {n['name']}", "line": n.get("start_line", 1), "children": format_nodes(n.get('children',[]))} for n in ns]
-            self.app.call_from_thread(self._render_outline, f"{display_name} Outline", format_nodes(raw_nodes))
+            self.app.call_from_thread(self._render_outline, f"{display_name} Outline", format_nodes(raw_nodes), file_key)
         except Exception:
-            self.app.call_from_thread(self._render_outline, f"{display_name} Outline", [])
+            self.app.call_from_thread(self._render_outline, f"{display_name} Outline", [], file_key)
 
-    def _render_outline(self, root_label: str, virtual_nodes: list):
+    def _render_outline(self, root_label: str, virtual_nodes: list, file_key: str = None):
         """Runs on the main thread to instantly update the UI without calculations."""
+        if file_key and file_key in self.open_files:
+            self.open_files[file_key]["outline"] = (root_label, virtual_nodes)
+            tabs = self.query_one("#editor_tabs", TabbedContent)
+            if tabs.active != self.open_files[file_key]["pane_id"]:
+                return
+
         has_nodes = bool(virtual_nodes) and bool(self.open_files)
         self.query_one("#outline_pane").styles.display = "block" if has_nodes else "none"
         self.query_one("#editor_pane").styles.display = "block" if self.open_files else "none"
@@ -1444,20 +1430,6 @@ class FEDERaiDE(App):
                         pass
                     
         self.push_screen(DirectoryModal(current_path), handle_dir_selection)
-    
-    def _update_tree_ui(self, root_label: str, virtual_tree: list):
-        """This runs on the main thread and applies the virtual tree to the actual widget"""
-        tree = self.query_one("#outline_tree", Tree)
-        tree.clear()
-        tree.root.set_label(root_label)
-        
-        def populate(ui_node, v_nodes):
-            for v_node in v_nodes:
-                branch = ui_node.add(f"{v_node['icon']} {v_node['name']}")
-                populate(branch, v_node['children'])
-                
-        populate(tree.root, virtual_tree)
-        tree.root.expand_all()
 
     def get_venv_root(self) -> str:
         path = toolbox.get_team_dir() if (self.with_agent and toolbox is not None) else _lite_get_team_dir()

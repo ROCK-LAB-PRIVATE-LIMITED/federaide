@@ -341,6 +341,57 @@ def format_diff_text(diff: str) -> Text:
             diff_text.append(line + suffix)
     return diff_text
 
+def format_condensed_diff_renderable(diff: Any) -> Text:
+    from toolbox import load_global_settings
+    from rich.style import Style
+    cfg = load_global_settings()
+    add_color = cfg.get("diff_addition_color", "green") or "green"
+    del_color = cfg.get("diff_deletion_color", "red") or "red"
+    try: Style.parse(add_color)
+    except Exception: add_color = "green"
+    try: Style.parse(del_color)
+    except Exception: del_color = "red"
+
+    out = Text()
+    if isinstance(diff, dict) and diff.get("type") == "new_file":
+        filepath = str(toolbox.mask_secrets(diff.get("path", "")))
+        content = str(toolbox.mask_secrets(diff.get("content", "")))
+        added = len(content.splitlines())
+        bar_len = min(20, max(1, added))
+        out.append(f"+ {filepath} ", style=f"bold {add_color}")
+        out.append(f"(+{added} lines) ", style="dim")
+        out.append("+" * bar_len, style=f"bold {add_color}")
+        return out
+
+    filepath = str(toolbox.mask_secrets(diff.get("path", "") if isinstance(diff, dict) else ""))
+    diff_str = str(toolbox.mask_secrets(diff.get("content", "") if isinstance(diff, dict) else str(diff)))
+    added = 0
+    removed = 0
+    for line in diff_str.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+
+    total = added + removed
+    if total > 0:
+        bar_len = min(20, total)
+        plus_len = max(1, round((added / total) * bar_len)) if added else 0
+        minus_len = max(1, bar_len - plus_len) if removed else 0
+        if plus_len + minus_len > bar_len and bar_len >= 2:
+            plus_len = bar_len - minus_len
+    else:
+        plus_len = minus_len = 0
+
+    label = f"~ {filepath} " if filepath else "~ Edit "
+    out.append(label, style="bold cyan")
+    out.append(f"(+{added} -{removed}) ", style="dim")
+    if plus_len:
+        out.append("+" * plus_len, style=f"bold {add_color}")
+    if minus_len:
+        out.append("-" * minus_len, style=f"bold {del_color}")
+    return out
+
 class ToolConfirmationModal(ModalScreen[Any]):
     DEFAULT_CSS = """
     ToolConfirmationModal { 
@@ -3945,6 +3996,7 @@ class AIAgentView(Vertical):
         Binding("ctrl+g", "cycle_agents", "Cycle Agents", priority=True),
         Binding("ctrl+a", "abort", "Abort", priority=True),
         Binding("ctrl+u", "toggle_autoscroll", "Auto-Scroll", priority=True),
+        Binding("ctrl+b", "toggle_verbose_mode", "Brief/Verbose", priority=True),
         Binding("f3", "open_global_settings", "Settings", priority=True),
         Binding("f1", "open_teams", "Manage Teams", priority=True),
     ]
@@ -4050,6 +4102,14 @@ class AIAgentView(Vertical):
         margin: 1 0;
         color: #808080;
     }
+    .concise_tool_box {
+        border: round $accent;
+        background: $boost;
+        padding: 0 1;
+        margin: 0;
+        color: #808080;
+        height: auto;
+    }
     .welcome_banner_box {
         border: round #f2a813;
         background: $boost;
@@ -4084,6 +4144,16 @@ class AIAgentView(Vertical):
         toolbox.CURRENT_LOG_CB = self.log_to_ui
         self.current_tokens = 0
         self.auto_scroll = True
+        self.verbose_mode = False
+        self._concise_status_widgets = {}
+        self._last_concise_targets = {}
+        self._pending_concise_widgets = {}
+        self._concise_turn_active = False
+        self._chat_events = []
+        self._current_ai_event = None
+        self._ai_widgets = {}
+        self._ai_events = {}
+        self._is_rerendering = False
         
         self.agent_manager = AgentManager()
         self.session_manager = SessionManager()
@@ -4422,6 +4492,10 @@ class AIAgentView(Vertical):
             self.session_manager.abort_batch(self.current_batch_id)
 
         self.is_compressing = False
+        self._concise_turn_active = False
+        self._concise_status_widgets = {}
+        self._last_concise_targets = {}
+        self._pending_concise_widgets = {}
         self.pending_compress_prompts.clear()
         self._f12_active = False
         if hasattr(self, "_f12_timer") and self._f12_timer:
@@ -4429,7 +4503,9 @@ class AIAgentView(Vertical):
 
         toolbox.nuke_all_threads()
 
-        self._running_agents.clear()
+        with self.turn_lock:
+            self.turn_queue.clear()
+            self._running_agents.clear()
         if self.workers:
             self.workers.cancel_all()
             self._toggle_spinner(False)
@@ -4597,11 +4673,30 @@ class AIAgentView(Vertical):
             self.log_to_ui(f"[bold red]Load Error:[/bold red] {e}")
 
     def replay_chat(self, history: List[HistoryMessage], owner_name: str):
+        self._chat_events = []
+        self._concise_status_widgets = {}
+        self._last_concise_targets = {}
+        self._pending_concise_widgets = {}
+        self.current_ai_widget = None
+        self._current_ai_event = None
+        self._ai_widgets = {}
+        self._ai_events = {}
         self.query_one("#chat_messages").query("*").remove()
         self._write_log(Rule(title=f"[bold #f2a813]SESSION RESTORED: {owner_name.upper()}", style="dim"))
 
-        for hm in history:
-            if hm.role == "system": continue
+        def _scrub_tool_summary(t_name: str, t_content: str) -> str:
+            if t_name in ["search_web", "SearchWeb"] and "[Tool Output Hidden]" not in t_content:
+                return "[Search results successfully parsed and delivered to active agent context]"
+            summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', t_content)
+            summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
+            return (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
+
+        idx = 0
+        while idx < len(history):
+            hm = history[idx]
+            if hm.role == "system":
+                idx += 1
+                continue
 
             content = hm.content
             label = "User"
@@ -4631,38 +4726,18 @@ class AIAgentView(Vertical):
                         if matched_out:
                             t_name = matched_out.get("name", "tool")
                             t_content = str(matched_out.get("content", ""))
-                            if t_name in ["search_web", "SearchWeb"]:
-                                summary = "[Search results successfully parsed and delivered to active agent context]"
-                            else:
-                                summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', t_content)
-                                summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
-                                summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
-
-                            header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
-                            body_text = Text(summary)
-                            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
-                            box_widget.styles.border = ("round", color)
-                            self._write_log(box_widget)
+                            self.render_tool_result_box(owner_name, color, _scrub_tool_summary(t_name, t_content))
 
                     # Render any orphaned outputs (just in case they didn't match a call)
                     for out in pending_outputs:
                         t_name = out.get("name", "tool")
                         t_content = str(out.get("content", ""))
-                        if t_name in ["search_web", "SearchWeb"]:
-                            summary = "[Search results successfully parsed and delivered to active agent context]"
-                        else:
-                            summary_clean = re.sub(r'\[ImageBase64:\s*[^\]]+\]', '[ImageBase64: <data_transmitted>]', t_content)
-                            summary_clean = re.sub(r'data:image/[a-zA-Z]+;base64,[A-Za-z0-9+/=\s]{20,}', '<base64_data_omitted>', summary_clean)
-                            summary = (summary_clean + '...') if len(summary_clean) > 200 else summary_clean
-
-                        header_text = Text(f"Tool Result ({owner_name}):\n", style="bold")
-                        body_text = Text(summary)
-                        box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
-                        box_widget.styles.border = ("round", color)
-                        self._write_log(box_widget)
+                        self.render_tool_result_box(owner_name, color, _scrub_tool_summary(t_name, t_content))
 
                 if content and content.strip():
                     self._write_message_block(f"[bold {color}]{owner_name}:[/bold {color}]", content, color, is_markdown=True)
+                    if hm.tool_calls or hm.tool_outputs:
+                        self.mark_agent_concise_done(owner_name)
             else: 
                 intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
                 tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
@@ -4672,11 +4747,38 @@ class AIAgentView(Vertical):
                     synced_agent = self.agent_manager.get_agent(label)
                     color = synced_agent.color if synced_agent else "cyan"
                     content = intercom_match.group(2).strip()
+                    content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
+
+                    attached_tools = []
+                    look_idx = idx + 1
+                    while look_idx < len(history):
+                        nxt = history[look_idx]
+                        if nxt.role != "human":
+                            break
+                        nxt_tool = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', nxt.content or "")
+                        if nxt_tool and nxt_tool.group(1) == label:
+                            attached_tools.append((nxt_tool.group(2), nxt_tool.group(3).strip()))
+                            look_idx += 1
+                        else:
+                            break
+
+                    for t_name, t_body in attached_tools:
+                        self.render_tool_result_box(label, color, _scrub_tool_summary(t_name, t_body))
+
+                    self._write_message_block(f"[bold {color}]{label}:[/bold {color}]", content, color, is_markdown=True)
+                    if attached_tools:
+                        self.mark_agent_concise_done(label)
+                    idx = look_idx
+                    continue
                 elif tool_match:
-                    label = f"{tool_match.group(1)} (Tool: {tool_match.group(2)})"
-                    synced_agent = self.agent_manager.get_agent(tool_match.group(1))
+                    t_agent = tool_match.group(1)
+                    t_name = tool_match.group(2)
+                    t_body = tool_match.group(3).strip()
+                    synced_agent = self.agent_manager.get_agent(t_agent)
                     color = synced_agent.color if synced_agent else "bright_black"
-                    content = tool_match.group(3).strip()
+                    self.render_tool_result_box(t_agent, color, _scrub_tool_summary(t_name, t_body))
+                    idx += 1
+                    continue
                 else:
                     user_cfg = toolbox.load_global_settings()
                     label = user_cfg.get("user_name", "User")
@@ -4684,6 +4786,7 @@ class AIAgentView(Vertical):
                 
                 content = re.sub(r'^\s*(?:\[(?:Time|Today\'s date)[^\]]*\]\s*)+', '', content, flags=re.IGNORECASE).strip()
                 self._write_message_block(f"[bold {color}]{label}:[/bold {color}]", content, color, is_markdown=True)
+            idx += 1
     
     def action_open_active_config(self, config_override: AgentConfig = None, old_name_override: str = None):
         agent_to_edit = config_override or self.active_agent
@@ -4864,10 +4967,11 @@ class AIAgentView(Vertical):
         self.current_batch_id += 1
         processed_prompt = f"[Memory Consolidation Task]\n{prompt}"
 
+        self._concise_turn_active = True
         self.log_to_ui(f"[bold cyan]Starting memory consolidation for {agent.name}...[/bold cyan]")
         self.session_manager.init_agent_session(agent, all_agents_list)
         self.session_manager.broadcast_message(agent.name, processed_prompt, is_ai=False)
-        self.run_agent_task(agent, processed_prompt, batch_id=self.current_batch_id)
+        self.dispatch_agents([agent], processed_prompt, batch_id=self.current_batch_id)
 
     def action_open_global_settings(self):
         def handle_global_config(result):
@@ -4920,35 +5024,81 @@ class AIAgentView(Vertical):
         except RuntimeError:
             self._write_message_block(header_markup, content, color, is_markdown)
 
+    def _mount_chat_widget(self, widget):
+        chat_body = self.query_one("#chat_messages")
+        chat_body.mount(widget)
+        if not getattr(self, "_is_rerendering", False):
+            self.scroll_chat_to_bottom()
+            self.update_status_bar()
+
     def _write_message_block(self, header_markup: str, content: str, color: str, is_markdown: bool = True):
         try:
             header_markup = toolbox.mask_secrets(header_markup)
             content = toolbox.mask_secrets(content)
-            chat_body = self.query_one("#chat_messages")
-            top_rule = Static(Rule(style=color))
-            header_widget = Static(Text.from_markup(header_markup), classes="chat_msg", markup=False)
-            
-            if is_markdown:
-                msg_to_render = render_latex_to_unicode(content)
-                content_widget = Static(Markdown(msg_to_render), classes="chat_msg")
-            else:
-                # Apply style directly to a pure Text object to prevent arbitrary brackets in code from being parsed as markup
-                content_widget = Static(Text(str(content), style=color), classes="chat_msg", markup=False)
-                
-            bottom_rule = Static(Rule(style=color))
-            
-            box = Vertical(
-                top_rule,
-                header_widget,
-                content_widget,
-                bottom_rule,
-                classes="message_block"
-            )
-            chat_body.mount(box)
-            self.scroll_chat_to_bottom()
-            self.update_status_bar()
+            ev = {
+                "type": "message_block",
+                "header_markup": header_markup,
+                "content": content,
+                "color": color,
+                "is_markdown": is_markdown,
+                "is_tool_call": (not is_markdown and "(Tool Call):" in str(header_markup)),
+            }
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            self._chat_events.append(ev)
+            self._render_message_block_event(ev)
         except Exception:
             pass
+
+    def _resolve_agent_color(self, agent_name: Optional[str], fallback: str = "#808080") -> str:
+        if agent_name and hasattr(self, "agent_manager"):
+            agent = self.agent_manager.get_agent(agent_name)
+            if agent and agent.color:
+                return agent.color
+        return fallback
+
+    def _render_message_block_event(self, ev: dict):
+        header_markup = ev["header_markup"]
+        content = ev["content"]
+        color = ev["color"]
+        is_markdown = ev["is_markdown"]
+        if not getattr(self, "verbose_mode", False) and ev.get("is_tool_call"):
+            m = re.search(r'\[bold ([^\]]+)\]([^\(]+)\(Tool Call\):', str(header_markup))
+            agent_color = m.group(1) if m else color
+            agent_name = m.group(2).strip() if m else None
+            agent_color = self._resolve_agent_color(agent_name, agent_color)
+            self._update_concise_status(
+                f"[dim]{escape(str(content))}[/dim]",
+                agent_key=agent_name,
+                border_color=agent_color,
+                ev=ev,
+            )
+            return
+        adopted = []
+        if is_markdown:
+            m_hdr = re.match(r'^\[bold [^\]]+\]([^:\(]+):\[/bold', str(header_markup))
+            if m_hdr:
+                target_agent = m_hdr.group(1).strip()
+                if target_agent in getattr(self, "_pending_concise_widgets", {}):
+                    adopted = self._adopt_concise_widgets(target_agent)
+            self._concise_status_widgets = {}
+        top_rule = Static(Rule(style=color))
+        header_widget = Static(Text.from_markup(header_markup), classes="chat_msg", markup=False)
+        if is_markdown:
+            msg_to_render = render_latex_to_unicode(content)
+            content_widget = Static(Markdown(msg_to_render), classes="chat_msg")
+        else:
+            content_widget = Static(Text(str(content), style=color), classes="chat_msg", markup=False)
+        bottom_rule = Static(Rule(style=color))
+        box = Vertical(
+            top_rule,
+            header_widget,
+            *adopted,
+            content_widget,
+            bottom_rule,
+            classes="message_block"
+        )
+        self._mount_chat_widget(box)
 
     def store_ui_tool_diff(self, agent_name: str, tool_name: str, tool_args: dict, diff: str):
         if not hasattr(self, "_ui_tool_diffs"):
@@ -4980,50 +5130,184 @@ class AIAgentView(Vertical):
 
     def render_tool_result_box(self, owner_name, color, summary, diff: Optional[Any] = None):
         try:
-            if diff:
-                from rich.console import Group
-                body_renderable = format_preview_renderable(diff)
-                if isinstance(body_renderable, Text):
-                    renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + body_renderable
-                else:
-                    renderable = Group(Text(f"Tool Result ({owner_name}):", style="bold"), body_renderable)
-            else:
-                summary = toolbox.mask_secrets(summary)
-                renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + Text(str(summary))
-            box_widget = Static(renderable, classes="tool_result_box", markup=False)
-            box_widget.styles.border = ("round", color)
-            self._write_log(box_widget)
-        except Exception:
-            pass
-            
-    def render_tool_error_box(self, owner_name, color, summary):
-        try:
-            summary = toolbox.mask_secrets(summary)
-            header_text = Text(f"Tool Error ({owner_name}):\n", style="bold red")
-            body_text = Text(str(summary), style="red")
-            box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
-            box_widget.styles.border = ("round", color)
-            self._write_log(box_widget)
+            ev = {
+                "type": "tool_result",
+                "owner_name": owner_name,
+                "color": color,
+                "summary": summary if diff else toolbox.mask_secrets(summary),
+                "diff": diff,
+            }
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            self._chat_events.append(ev)
+            self._render_tool_result_event(ev)
         except Exception:
             pass
 
-    def mount_ai_message_box(self, agent_name, agent_color):
+    def _render_tool_result_event(self, ev: dict):
+        owner_name = ev["owner_name"]
+        color = ev["color"]
+        summary = ev["summary"]
+        diff = ev.get("diff")
+        if not getattr(self, "verbose_mode", False):
+            agent_key = owner_name or "__default__"
+            if diff:
+                old_widget = getattr(self, "_concise_status_widgets", {}).pop(agent_key, None)
+                if old_widget is not None:
+                    pending_list = getattr(self, "_pending_concise_widgets", {}).get(agent_key)
+                    if pending_list and old_widget in pending_list:
+                        pending_list.remove(old_widget)
+                    try:
+                        old_widget.remove()
+                    except Exception:
+                        pass
+                base_diff = format_condensed_diff_renderable(diff)
+                renderable = base_diff.copy()
+                if ev.get("done"):
+                    renderable.append("\nDone ✓", style="bold green")
+                box_widget = Static(renderable, classes="concise_tool_box", markup=False)
+                box_widget.styles.border = ("round", color)
+                box_widget._concise_renderable = renderable
+                box_widget._concise_border = color
+                self._mount_chat_widget(box_widget)
+                if not hasattr(self, "_pending_concise_widgets"):
+                    self._pending_concise_widgets = {}
+                self._pending_concise_widgets.setdefault(agent_key, []).append(box_widget)
+                if not hasattr(self, "_last_concise_targets"):
+                    self._last_concise_targets = {}
+                self._last_concise_targets[agent_key] = (ev, box_widget, base_diff, True)
+            else:
+                lines = [l.strip() for l in str(summary).splitlines() if l.strip()]
+                while lines and lines[-1] in ("STDERR:", "STDOUT:", "..."):
+                    lines.pop()
+                last_line = lines[-1] if lines else "Tool completed."
+                self._update_concise_status(
+                    escape(last_line),
+                    agent_key=agent_key,
+                    border_color=color,
+                    ev=ev,
+                )
+            return
+        if diff:
+            from rich.console import Group
+            body_renderable = format_preview_renderable(diff)
+            if isinstance(body_renderable, Text):
+                renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + body_renderable
+            else:
+                renderable = Group(Text(f"Tool Result ({owner_name}):", style="bold"), body_renderable)
+        else:
+            renderable = Text(f"Tool Result ({owner_name}):\n", style="bold") + Text(str(summary))
+        box_widget = Static(renderable, classes="tool_result_box", markup=False)
+        box_widget.styles.border = ("round", color)
+        self._mount_chat_widget(box_widget)
+
+    def render_tool_error_box(self, owner_name, color, summary):
         try:
-            top_rule = Static(Rule(style=agent_color))
-            header_widget = Static(Text.from_markup(f"[bold {agent_color}]{agent_name}:[/bold {agent_color}]"), classes="chat_msg", markup=False)
-            self.current_ai_widget = Static(Markdown(""), classes="chat_msg")
-            bottom_rule = Static(Rule(style=agent_color))
-            
-            ai_box = Vertical(
-                top_rule,
-                header_widget,
-                self.current_ai_widget,
-                bottom_rule,
-                classes="message_block"
-            )
-            self.query_one("#chat_messages").mount(ai_box)
+            ev = {
+                "type": "tool_error",
+                "owner_name": owner_name,
+                "color": color,
+                "summary": toolbox.mask_secrets(summary),
+            }
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            self._chat_events.append(ev)
+            self._render_tool_error_event(ev)
         except Exception:
             pass
+
+    def _render_tool_error_event(self, ev: dict):
+        owner_name = ev["owner_name"]
+        color = ev["color"]
+        summary = ev["summary"]
+        if not getattr(self, "verbose_mode", False):
+            lines = [l.strip() for l in str(summary).splitlines() if l.strip()]
+            last_line = lines[-1] if lines else "Tool error."
+            self._update_concise_status(
+                f"[bold red]Error:[/bold red] {escape(last_line)}",
+                agent_key=owner_name,
+                border_color=color,
+                ev=ev,
+            )
+            return
+        header_text = Text(f"Tool Error ({owner_name}):\n", style="bold red")
+        body_text = Text(str(summary), style="red")
+        box_widget = Static(header_text + body_text, classes="tool_result_box", markup=False)
+        box_widget.styles.border = ("round", color)
+        self._mount_chat_widget(box_widget)
+
+    def mount_ai_message_box(self, agent_name, agent_color):
+        try:
+            ev = {
+                "type": "ai_message",
+                "agent_name": agent_name,
+                "agent_color": agent_color,
+                "text": "",
+            }
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            self._chat_events.append(ev)
+            self._current_ai_event = ev
+            if not hasattr(self, "_ai_events"):
+                self._ai_events = {}
+            self._ai_events[agent_name] = ev
+            self._render_ai_message_event(ev)
+        except Exception:
+            pass
+
+    def _adopt_concise_widgets(self, agent_name: str) -> list:
+        if getattr(self, "verbose_mode", False) or not agent_name:
+            return []
+        if hasattr(self, "_concise_status_widgets"):
+            self._concise_status_widgets.pop(agent_name, None)
+        pending = getattr(self, "_pending_concise_widgets", {}).pop(agent_name, [])
+        if not pending:
+            return []
+        adopted = []
+        last_target = getattr(self, "_last_concise_targets", {}).get(agent_name)
+        for old_w in pending:
+            renderable = getattr(old_w, "_concise_renderable", None)
+            border_color = getattr(old_w, "_concise_border", "#808080")
+            try:
+                if old_w.is_mounted:
+                    old_w.remove()
+            except Exception:
+                pass
+            if renderable is None:
+                continue
+            new_w = Static(renderable, classes="concise_tool_box", markup=False)
+            new_w.styles.border = ("round", border_color)
+            new_w._concise_renderable = renderable
+            new_w._concise_border = border_color
+            if last_target and last_target[1] is old_w:
+                self._last_concise_targets[agent_name] = (last_target[0], new_w, last_target[2], last_target[3])
+                last_target = self._last_concise_targets[agent_name]
+            adopted.append(new_w)
+        return adopted
+
+    def _render_ai_message_event(self, ev: dict):
+        agent_name = ev["agent_name"]
+        agent_color = ev["agent_color"]
+        adopted = self._adopt_concise_widgets(agent_name)
+        top_rule = Static(Rule(style=agent_color))
+        header_widget = Static(Text.from_markup(f"[bold {agent_color}]{agent_name}:[/bold {agent_color}]"), classes="chat_msg", markup=False)
+        ai_widget = Static(Markdown(toolbox.mask_secrets(ev.get("text", ""))), classes="chat_msg")
+        if not hasattr(self, "_ai_widgets"):
+            self._ai_widgets = {}
+        if ev is getattr(self, "_ai_events", {}).get(agent_name):
+            self._ai_widgets[agent_name] = ai_widget
+        if ev is getattr(self, "_current_ai_event", None):
+            self.current_ai_widget = ai_widget
+        bottom_rule = Static(Rule(style=agent_color))
+        ai_box = Vertical(
+            top_rule,
+            header_widget,
+            *adopted,
+            ai_widget,
+            bottom_rule,
+            classes="message_block"
+        )
+        self.query_one("#chat_messages").mount(ai_box)
 
     def scroll_chat_to_bottom(self, force: bool = False):
         if not force and not getattr(self, "auto_scroll", True):
@@ -5054,10 +5338,185 @@ class AIAgentView(Vertical):
         else:
             self.notify("Free scroll ON (auto-scroll paused)", timeout=2.0)
 
-    def update_ai_message(self, display_text):
+    def action_toggle_verbose_mode(self):
         try:
-            if hasattr(self, "current_ai_widget") and self.current_ai_widget:
-                self.current_ai_widget.update(Markdown(toolbox.mask_secrets(display_text)))
+            switcher = self.app.query_one("#main_switcher")
+            if switcher.current != "ai_chat_view":
+                return
+        except Exception:
+            pass
+        self.verbose_mode = not getattr(self, "verbose_mode", False)
+        self._rerender_chat()
+        if self.verbose_mode:
+            self.notify("Verbose mode ON", timeout=2.0)
+        else:
+            self.notify("Concise mode ON (press Ctrl+B for verbose)", timeout=2.0)
+
+    def _rerender_chat(self):
+        try:
+            self._is_rerendering = True
+            self._concise_status_widgets = {}
+            self._last_concise_targets = {}
+            self._pending_concise_widgets = {}
+            self._ai_widgets = {}
+            self._last_system_status_widget = None
+            chat_body = self.query_one("#chat_messages")
+            chat_body.query("*").remove()
+            for ev in list(getattr(self, "_chat_events", [])):
+                etype = ev.get("type")
+                if etype == "banner":
+                    spec = getattr(getattr(self, "active_agent", None), "name", None)
+                    chat_body.mount(get_welcome_banner(self, specific_agent=spec))
+                elif etype == "log":
+                    self._render_log_event(ev)
+                elif etype == "system_status":
+                    self._render_system_status_event(ev)
+                elif etype == "message_block":
+                    self._render_message_block_event(ev)
+                elif etype == "tool_result":
+                    self._render_tool_result_event(ev)
+                elif etype == "tool_error":
+                    self._render_tool_error_event(ev)
+                elif etype == "ai_message":
+                    self._render_ai_message_event(ev)
+        except Exception:
+            pass
+        finally:
+            self._is_rerendering = False
+            self.scroll_chat_to_bottom()
+            self.update_status_bar()
+
+    def _parse_markup_safe(self, msg: Any) -> Text:
+        if isinstance(msg, Text):
+            return msg
+        try:
+            parsed = Text.from_markup(str(msg))
+            if not hasattr(self, "_dummy_console"):
+                from rich.console import Console
+                self._dummy_console = Console()
+            for span in parsed.spans:
+                if isinstance(span.style, str):
+                    self._dummy_console.get_style(span.style)
+            return parsed
+        except Exception:
+            return Text(str(msg))
+
+    def _write_system_status(self, msg: str, status_key: str):
+        try:
+            msg = toolbox.mask_secrets(msg)
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            last_ev = self._chat_events[-1] if self._chat_events else None
+            last_widget = getattr(self, "_last_system_status_widget", None)
+            if (
+                last_ev is not None
+                and last_ev.get("type") == "system_status"
+                and last_ev.get("status_key") == status_key
+                and last_widget is not None
+                and last_widget.is_mounted
+            ):
+                last_ev["msg"] = msg
+                last_widget.update(self._parse_markup_safe(msg))
+                self.scroll_chat_to_bottom()
+                return
+            ev = {"type": "system_status", "msg": msg, "status_key": status_key}
+            self._chat_events.append(ev)
+            self._render_system_status_event(ev)
+        except Exception:
+            pass
+
+    def _render_system_status_event(self, ev: dict):
+        widget = Static(self._parse_markup_safe(ev["msg"]), classes="chat_msg", markup=False)
+        self._last_system_status_widget = widget
+        self._mount_chat_widget(widget)
+
+    def _update_concise_status(self, msg: Any, agent_key: Optional[str] = None, border_color: Optional[str] = None, ev: Optional[dict] = None):
+        try:
+            parsed = self._parse_markup_safe(toolbox.mask_secrets(msg))
+
+            lines = parsed.split("\n")
+            last_line = None
+            for line in reversed(lines):
+                if line.plain.strip():
+                    last_line = line
+                    break
+            if last_line is None:
+                return
+            if "\r" in last_line.plain:
+                cr_parts = [p for p in last_line.split("\r") if p.plain.strip()]
+                if cr_parts:
+                    last_line = cr_parts[-1]
+
+            last_line.no_wrap = True
+            last_line.overflow = "ellipsis"
+
+            key = agent_key or "__default__"
+            color = border_color or self._resolve_agent_color(agent_key, "#808080")
+            if not hasattr(self, "_concise_status_widgets"):
+                self._concise_status_widgets = {}
+            if not hasattr(self, "_last_concise_targets"):
+                self._last_concise_targets = {}
+
+            renderable = Text("Done ✓", style="bold green") if (ev and ev.get("done")) else last_line.copy()
+
+            chat_body = self.query_one("#chat_messages")
+            widget = self._concise_status_widgets.get(key)
+            if widget is None or not widget.is_mounted:
+                widget = Static(renderable, classes="concise_tool_box", markup=False)
+                widget.styles.border = ("round", color)
+                widget._concise_renderable = renderable
+                widget._concise_border = color
+                self._concise_status_widgets[key] = widget
+                if not hasattr(self, "_pending_concise_widgets"):
+                    self._pending_concise_widgets = {}
+                self._pending_concise_widgets.setdefault(key, []).append(widget)
+                chat_body.mount(widget)
+            else:
+                widget.styles.border = ("round", color)
+                widget._concise_renderable = renderable
+                widget._concise_border = color
+                widget.update(renderable)
+
+            if ev is not None:
+                self._last_concise_targets[key] = (ev, widget, last_line, False)
+
+            if not getattr(self, "_is_rerendering", False):
+                self.scroll_chat_to_bottom()
+        except Exception:
+            pass
+
+    def update_ai_message(self, display_text, agent_name: Optional[str] = None):
+        try:
+            ev = getattr(self, "_ai_events", {}).get(agent_name) if agent_name else None
+            if ev is None:
+                ev = getattr(self, "_current_ai_event", None)
+            if ev is not None:
+                ev["text"] = display_text
+
+            widget = getattr(self, "_ai_widgets", {}).get(agent_name) if agent_name else None
+            if widget is None:
+                widget = getattr(self, "current_ai_widget", None)
+            if widget is not None:
+                widget.update(Markdown(toolbox.mask_secrets(display_text)))
+                self.scroll_chat_to_bottom()
+        except Exception:
+            pass
+
+    def mark_agent_concise_done(self, agent_name: str):
+        try:
+            target = getattr(self, "_last_concise_targets", {}).get(agent_name)
+            if not target:
+                return
+            ev, widget, base_renderable, is_diff = target
+            ev["done"] = True
+            if not getattr(self, "verbose_mode", False) and widget is not None and widget.is_mounted:
+                if is_diff:
+                    done_text = base_renderable.copy()
+                    done_text.append("\nDone ✓", style="bold green")
+                else:
+                    done_text = Text("Done ✓", style="bold green")
+                widget._concise_renderable = done_text
+                widget.update(done_text)
                 self.scroll_chat_to_bottom()
         except Exception:
             pass
@@ -5065,54 +5524,82 @@ class AIAgentView(Vertical):
     def render_latex_to_unicode_ext(self, text):
         return render_latex_to_unicode(text)
 
-    def log_to_ui(self, msg: Any, is_markdown: bool = False):
+    def log_to_ui(self, msg: Any, is_markdown: bool = False, agent_name: Optional[str] = None):
+        if agent_name is None:
+            agent_name = getattr(toolbox.thread_context, "agent_name", None)
         try:
-            self.app.call_from_thread(self._write_log, msg, is_markdown)
+            self.app.call_from_thread(self._write_log, msg, is_markdown, agent_name)
         except RuntimeError:
-            self._write_log(msg, is_markdown)
+            self._write_log(msg, is_markdown, agent_name)
     
-    def _write_log(self, msg: Any, is_markdown: bool = False):
+    def _write_log(self, msg: Any, is_markdown: bool = False, agent_name: Optional[str] = None):
         try:
             msg = toolbox.mask_secrets(msg)
-            chat_body = self.query_one("#chat_messages")
-            
-            if isinstance(msg, str) and not is_markdown:
-                match = re.search(r'\[bold ([^\]]+)\]([^:]+):\[/bold(?:\s+[^\]]+)?\]', msg)
-                if match:
-                    label_text = match.group(2).strip()
-                    agent = self.agent_manager.get_agent(label_text)
-                    if agent:
-                        old_color = match.group(1)
-                        msg = msg.replace(f"[bold {old_color}]", f"[bold {agent.color}]")
-                        msg = msg.replace(f"[/bold {old_color}]", f"[/bold {agent.color}]")
-
-            if isinstance(msg, str):
-                if is_markdown:
-                    msg_to_render = render_latex_to_unicode(msg)
-                    widget = Static(Markdown(msg_to_render), classes="chat_msg")
-                else:
-                    try:
-                        parsed_text = Text.from_markup(msg)
-                        
-                        if not hasattr(self, "_dummy_console"):
-                            from rich.console import Console
-                            self._dummy_console = Console()
-                            
-                        for span in parsed_text.spans:
-                            if isinstance(span.style, str):
-                                self._dummy_console.get_style(span.style)
-                                
-                        widget = Static(parsed_text, classes="chat_msg", markup=False)
-                    except Exception:
-                        widget = Static(Text(msg), classes="chat_msg", markup=False)
-            elif isinstance(msg, (Rule, Text, Markdown)):
-                widget = Static(msg, classes="chat_msg", markup=False)
-            else:
-                widget = msg
-            chat_body.mount(widget)
-            self.scroll_chat_to_bottom()
-            self.update_status_bar()
+            if not hasattr(self, "_chat_events"):
+                self._chat_events = []
+            if hasattr(msg, "classes") and "welcome_banner_box" in getattr(msg, "classes", set()):
+                self._chat_events.append({"type": "banner"})
+                self._mount_chat_widget(msg)
+                return
+            is_turn = (
+                isinstance(msg, str)
+                and not is_markdown
+                and (
+                    getattr(self, "_concise_turn_active", False)
+                    or bool(getattr(self, "_running_agents", None))
+                    or getattr(self, "is_compressing", False)
+                )
+            )
+            ev = {
+                "type": "log",
+                "msg": msg,
+                "is_markdown": is_markdown,
+                "is_turn": is_turn,
+                "agent_name": agent_name,
+            }
+            self._chat_events.append(ev)
+            self._render_log_event(ev)
         except Exception: pass
+
+    def _render_log_event(self, ev: dict):
+        msg = ev["msg"]
+        is_markdown = ev["is_markdown"]
+        if not getattr(self, "verbose_mode", False) and ev.get("is_turn") and isinstance(msg, str) and not is_markdown:
+            a_name = ev.get("agent_name")
+            self._update_concise_status(msg, agent_key=a_name, border_color=self._resolve_agent_color(a_name), ev=ev)
+            return
+
+        if isinstance(msg, str) and not is_markdown:
+            match = re.search(r'\[bold ([^\]]+)\]([^:]+):\[/bold(?:\s+[^\]]+)?\]', msg)
+            if match:
+                label_text = match.group(2).strip()
+                agent = self.agent_manager.get_agent(label_text)
+                if agent:
+                    old_color = match.group(1)
+                    msg = msg.replace(f"[bold {old_color}]", f"[bold {agent.color}]")
+                    msg = msg.replace(f"[/bold {old_color}]", f"[/bold {agent.color}]")
+
+        if isinstance(msg, str):
+            if is_markdown:
+                msg_to_render = render_latex_to_unicode(msg)
+                widget = Static(Markdown(msg_to_render), classes="chat_msg")
+            else:
+                try:
+                    parsed_text = Text.from_markup(msg)
+                    if not hasattr(self, "_dummy_console"):
+                        from rich.console import Console
+                        self._dummy_console = Console()
+                    for span in parsed_text.spans:
+                        if isinstance(span.style, str):
+                            self._dummy_console.get_style(span.style)
+                    widget = Static(parsed_text, classes="chat_msg", markup=False)
+                except Exception:
+                    widget = Static(Text(msg), classes="chat_msg", markup=False)
+        elif isinstance(msg, (Rule, Text, Markdown)):
+            widget = Static(msg, classes="chat_msg", markup=False)
+        else:
+            widget = msg
+        self._mount_chat_widget(widget)
 
     def update_status_bar(self):
         try:
@@ -5202,7 +5689,7 @@ class AIAgentView(Vertical):
         next_idx = (current_idx + 1) % len(ARM_MODES)
         self.agent_mode = ARM_MODES[next_idx]
         self.agent_executors = {}
-        self.log_to_ui(f"System operating mode cycled to: {self.agent_mode}")
+        self._write_system_status(f"System operating mode cycled to: {self.agent_mode}", "arm_mode")
         self.update_status_bar()
 
     def action_cycle_agents(self):
@@ -5219,7 +5706,7 @@ class AIAgentView(Vertical):
         next_name = names[next_idx]
         
         if self.select_agent(next_name):
-            self.log_to_ui(f"[bold green]Cycled active agent to: {next_name}[/bold green]")
+            self._write_system_status(f"[bold green]Cycled active agent to: {next_name}[/bold green]", "cycle_agent")
             new_renderable = get_welcome_banner(self, specific_agent=next_name, return_renderable=True)
             banners = self.query(".welcome_banner_box")
             if banners:
@@ -5289,6 +5776,15 @@ class AIAgentView(Vertical):
 
     def clear_chat_ui(self):
         try:
+            self._chat_events = []
+            self._current_ai_event = None
+            self.current_ai_widget = None
+            self._ai_widgets = {}
+            self._ai_events = {}
+            self._concise_status_widgets = {}
+            self._last_concise_targets = {}
+            self._pending_concise_widgets = {}
+            self._concise_turn_active = False
             self.query_one("#chat_messages").query("*").remove()
             self.query_one("#progress_left").query("*").remove()
             self.query_one("#progress_right", RichLog).clear()
@@ -5457,6 +5953,7 @@ class AIAgentView(Vertical):
             hdr = f"[bold {u_color}]{u_name}:[/bold {u_color}]"
 
         self._write_message_block(hdr, clean_prompt, u_color, is_markdown=True)
+        self._concise_turn_active = True
         
         # Transcribe any inline base64 audio tags
         if "[AudioBase64:" in clean_prompt:
@@ -5467,18 +5964,43 @@ class AIAgentView(Vertical):
             clean_prompt = re.sub(r'\[AudioBase64:\s*(data:audio/[a-zA-Z]+;base64,[^\]]+)\]', _replace_audio_b64, clean_prompt)
 
         time_stamp = f"[Time: {datetime.now().strftime('%H:%M')}]\n"
-        processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
+        prev_tc_agent = getattr(toolbox.thread_context, "agent_name", None)
+        if len(acting_agents) == 1:
+            toolbox.thread_context.agent_name = acting_agents[0].name
+        try:
+            processed_prompt = time_stamp + handle_ampersand_commands(clean_prompt, self)
+        finally:
+            toolbox.thread_context.agent_name = prev_tc_agent
         
         self.session_manager.broadcast_message(u_name, processed_prompt, is_ai=False)
         self.update_tokens()
         toolbox.ABORT_EVENT.clear()
         
-        for agent in acting_agents:
-            self.run_agent_task(agent, processed_prompt, batch_id=batch_id)
+        if not acting_agents:
+            self._concise_turn_active = False
+        else:
+            self.dispatch_agents(acting_agents, processed_prompt, batch_id=batch_id)
+
+    def dispatch_agents(self, agents: List[AgentConfig], prompt: str, batch_id: int = 0):
+        if not agents:
+            return
+        to_launch = []
+        skipped = []
+        with self.turn_lock:
+            for agent in agents:
+                if agent.name in self._running_agents:
+                    skipped.append(agent.name)
+                else:
+                    self._running_agents.add(agent.name)
+                    to_launch.append(agent)
+        for s_name in skipped:
+            self.log_to_ui(f"[dim yellow]Agent {s_name} is already working on a task.[/dim yellow]")
+        for agent in to_launch:
+            self.run_agent_task(agent, prompt, batch_id=batch_id, pre_reserved=True)
 
     @work(thread=True)
-    def run_agent_task(self, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0):
-        agent_core.run_agent_task_core(self, agent, prompt, override_thread_id, batch_id)
+    def run_agent_task(self, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0, pre_reserved: bool = False):
+        agent_core.run_agent_task_core(self, agent, prompt, override_thread_id, batch_id, pre_reserved=pre_reserved)
 
     def _toggle_spinner(self, show: bool, agent_name: str = "Agent", agent_color: str = "#00FFFF"):
         if show:
@@ -5526,8 +6048,9 @@ class AIAgentView(Vertical):
             
             if spinner_visible:
                 try:
-                    if self._running_agents:
+                    with self.turn_lock:
                         agents_list = sorted(list(self._running_agents))
+                    if agents_list:
                         if len(agents_list) == 1:
                             a_name = agents_list[0]
                             a_cfg = self.agent_manager.get_agent(a_name)
@@ -6021,8 +6544,8 @@ class AIAgentView(Vertical):
                 self.telegram_manager.start_chat_action(chat_id, "typing")
                 
                 toolbox.ABORT_EVENT.clear()
-                for agent in acting_agents:
-                    self.run_agent_task(agent, processed_prompt, batch_id=batch_id)
+                self._concise_turn_active = bool(acting_agents)
+                self.dispatch_agents(acting_agents, processed_prompt, batch_id=batch_id)
 
             except Exception as e:
                 self.log_to_ui(f"[bold red]Telegram Input Error:[/bold red] {e}")
