@@ -84,7 +84,7 @@ except Exception:
 
 import toolbox
 from orchestration import AgentConfig, HistoryMessage, normalize_msg_content
-from subagents import dispatch_coding_subagent
+from subagents import dispatch_coding_subagent, dispatch_subagent
 import hashlib
 import secrets
 
@@ -388,7 +388,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
         other_tool_names = [
             "list_files", "search_web", "perform_research", "manage_agenda",
             "read_file", "fetch_url", "save_file", "edit_file", 
-            "dispatch_coding_subagent", "run_terminal_command", "take_screenshot",        
+            "dispatch_subagent", "dispatch_coding_subagent", "run_terminal_command", "take_screenshot",        
             "click_at_current_location", "move_cursor_absolute", 
             "move_cursor_relative", "send_scroll", "inject_keyboard_input",
             "prepare_active_skill", "finalize_active_skill", "manage_active_skill", "fix_active_skill"
@@ -447,6 +447,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             "fetch_url": toolbox.fetch_url,
             "save_file": toolbox.save_file,
             "edit_file": toolbox.edit_file,
+            "dispatch_subagent": dispatch_subagent,
             "dispatch_coding_subagent": dispatch_coding_subagent,
             "run_terminal_command": toolbox.run_terminal_command,
             "take_screenshot": toolbox.take_screenshot,        

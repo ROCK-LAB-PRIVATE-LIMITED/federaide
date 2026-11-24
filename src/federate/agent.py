@@ -1644,7 +1644,7 @@ class ConfigModal(ModalScreen[str]):
         self.all_manageable_tools = [
             "list_files", "search_web", "perform_research", "render_pdf", "manage_agenda",
             "read_file", "fetch_url", "save_file", "edit_file", 
-            "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation", "send_file_to_telegram"
+            "dispatch_subagent", "dispatch_coding_subagent", "run_terminal_command", "visual_computer_operation", "send_file_to_telegram"
         ]
         
         try:
@@ -6674,7 +6674,7 @@ class AIAgentView(Vertical):
                     model=result["model"],
                     base_url=result["base_url"],
                     color="#00FFFF",
-                    enabled_tools=["read_file", "fetch_url", "save_file", "edit_file", "dispatch_coding_subagent", "run_terminal_command"],
+                    enabled_tools=["read_file", "fetch_url", "save_file", "edit_file", "dispatch_subagent", "dispatch_coding_subagent", "run_terminal_command"],
                     reasoning_effort="none",
                     temperature=1.0,
                     max_tokens=256000,
