@@ -1248,18 +1248,25 @@ def unlock_keyring(password: str) -> bool:
     except Exception:
         return False
 
+def _get_agent_view_ref():
+    if CURRENT_AGENT_VIEW is not None:
+        return CURRENT_AGENT_VIEW
+    if CURRENT_APP:
+        return CURRENT_APP.query_one("#ai_agent_view")
+    return None
+
 def check_persistent_abort():
     """Checks if the current batch ID has been permanently aborted."""
-    if CURRENT_APP:
-        try:
-            agent_view = CURRENT_APP.query_one("#ai_agent_view")
+    try:
+        agent_view = _get_agent_view_ref()
+        if agent_view:
             task_batch = getattr(thread_context, "batch_id", 0)
             if task_batch != 0 and hasattr(agent_view.session_manager, "aborted_batch_ids"):
                 if task_batch in agent_view.session_manager.aborted_batch_ids:
                     raise Exception("Task was permanently aborted by user.")
-        except Exception as e:
-            if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
-                raise e
+    except Exception as e:
+        if "aborted" in str(e).lower() or "interrupted" in str(e).lower():
+            raise e
 
 def check_abort():
     """Checks if the current task should stop immediately."""
@@ -1269,16 +1276,16 @@ def check_abort():
     check_persistent_abort()
     
     # Check if a new batch of tasks has started (Interrupt System)
-    if CURRENT_APP:
-        try:
-            agent_view = CURRENT_APP.query_one("#ai_agent_view")
+    try:
+        agent_view = _get_agent_view_ref()
+        if agent_view:
             current_batch = getattr(agent_view, "current_batch_id", 0)
             task_batch = getattr(thread_context, "batch_id", 0)
             if task_batch != 0 and task_batch != current_batch:
                 raise Exception("Task interrupted by a newer user request.")
-        except Exception as e:
-            if "interrupted" in str(e).lower() or "aborted" in str(e).lower():
-                raise e
+    except Exception as e:
+        if "interrupted" in str(e).lower() or "aborted" in str(e).lower():
+            raise e
 
 DB_PATH = os.path.join(get_team_dir(), ".federate_state.db")
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -1471,9 +1478,8 @@ def resilient_invoke(model, messages):
 def log_tool(msg: str):
     """Bridge for tools to log to the active UI instance."""
     try:
-        if CURRENT_APP:
-            # We use a generic approach to avoid circular imports
-            agent_view = CURRENT_APP.query_one("#ai_agent_view")
+        agent_view = _get_agent_view_ref()
+        if agent_view:
             agent_view.log_to_ui(msg)
     except:
         print(f"[Fallback]: {msg}")
@@ -2183,41 +2189,57 @@ def _perform_raw_search(query: str, max_results: int = 10) -> list:
 
     # Default DuckDuckGo via federate_search binary
     bin_path = get_storage_path(os.path.dirname(os.path.abspath(__file__)), "bin", "federate_search" + (".exe" if os.name == "nt" else ""))
-    proc = subprocess.Popen(
-        [bin_path, query, str(max_results)],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True
-    )
+    popen_kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
 
-    while proc.poll() is None:
-        if ABORT_EVENT.is_set():
-            try:
-                import os as os_lib
-                os_lib.killpg(os_lib.getpgid(proc.pid), 9)
-            except: pass
-            raise Exception("Search aborted by user.")
+    proc = subprocess.Popen([bin_path, query, str(max_results)], **popen_kwargs)
 
-        if CURRENT_APP:
-            try:
-                agent_view = CURRENT_APP.query_one("#ai_agent_view")
-                task_batch = getattr(thread_context, "batch_id", 0)
-                if task_batch != 0 and task_batch != getattr(agent_view, "current_batch_id", 0):
-                    try:
-                        import os as os_lib
-                        os_lib.killpg(os_lib.getpgid(proc.pid), 9)
-                    except: pass
-                    raise Exception("Search interrupted by new request.")
-            except: pass
+    def _kill_search_proc():
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                proc.kill()
+            else:
+                os.killpg(os.getpgid(proc.pid), 9)
+        except Exception:
+            pass
 
-        time.sleep(0.1)
+    deadline = time.monotonic() + 60.0
+    stdout, stderr = "", ""
+    while True:
+        try:
+            check_abort()
+        except Exception:
+            _kill_search_proc()
+            raise
 
-    stdout, stderr = proc.communicate()
+        if time.monotonic() > deadline:
+            _kill_search_proc()
+            raise RuntimeError("Search binary timed out after 60s.")
+
+        try:
+            # communicate() continuously drains stdout/stderr pipes, avoiding the 4KB Windows pipe deadlock
+            stdout, stderr = proc.communicate(timeout=0.1)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
     if proc.returncode != 0:
         raise RuntimeError(f"Search failed: {stderr}")
 
-    return [{"title": r["Title"], "href": r["Link"], "body": r["Snippet"]} for r in json.loads(stdout)]
+    parsed = json.loads(stdout) if stdout and stdout.strip() else []
+    if not parsed:
+        return []
+    return [{"title": r["Title"], "href": r["Link"], "body": r["Snippet"]} for r in parsed]
 
 @tool
 def search_web(query: str) -> str:
@@ -2228,7 +2250,8 @@ def search_web(query: str) -> str:
         sleep_time = _get_search_delay()
         if sleep_time > 0.0:
             log_tool(f" Throttling search to prevent abuse (sleeping {int(sleep_time)}s)...")
-            for _ in range(int(sleep_time * 10)):
+            wait_until = time.monotonic() + sleep_time
+            while time.monotonic() < wait_until:
                 check_abort()
                 time.sleep(0.1)
         log_tool(f"Searching for:[cyan] '{query}'[/cyan]...")
