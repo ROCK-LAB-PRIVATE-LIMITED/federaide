@@ -1011,3 +1011,7 @@ def _patched_chat_openai_init(self, *args, **kwargs):
     _orig_init(self, *args, **kwargs)
 
 langchain_openai.ChatOpenAI.__init__ = _patched_chat_openai_init
+try:
+    import gemini_transport  # noqa: F401
+except ImportError:
+    from . import gemini_transport  # noqa: F401

@@ -1637,7 +1637,8 @@ BASE_URL_PRESETS = [
     ("OpenRouter", "https://openrouter.ai/api/v1"),
     ("OpenAI", "https://api.openai.com/v1/"),
     ("Anthropic", "https://api.anthropic.com/v1/"),
-    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+    ("Google Gemini", "https://generativelanguage.googleapis.com/v1beta"),
+    ("Google Gemini (OpenAI Compat)", "https://generativelanguage.googleapis.com/v1beta/openai/"),
     ("ChatGPT Subscription (OAuth)", "https://chatgpt.com/backend-api/codex"),
     ("Custom", "custom")
 ]
@@ -1711,11 +1712,11 @@ class OnboardingModal(ModalScreen[dict]):
                     yield Input(placeholder="Enter your API Key...", id="onboard_api_key", password=True)
                     yield Button("Authenticate with OAuth", id="onboard_chatgpt_auth_btn", variant="primary")
                     yield Label("Base URL Preset:")
-                    yield Select(BASE_URL_PRESETS, value="https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url_preset", allow_blank=False)
+                    yield Select(BASE_URL_PRESETS, value="https://generativelanguage.googleapis.com/v1beta", id="onboard_base_url_preset", allow_blank=False)
                     yield Label("Model:")
                     yield Input("gemini-3.1-flash-lite", id="onboard_model")
                     yield Label("Base URL:")
-                    yield Input("https://generativelanguage.googleapis.com/v1beta/openai/", id="onboard_base_url")
+                    yield Input("https://generativelanguage.googleapis.com/v1beta", id="onboard_base_url")
                     yield Label("Agent Name:")
                     yield Input("Rita", id="onboard_name")
                     yield Label("Agent Backstory:")
