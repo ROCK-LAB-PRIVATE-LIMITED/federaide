@@ -52,9 +52,17 @@ class SemanticSearchEngine:
                     sentence_idx INTEGER,
                     text TEXT,
                     vector BLOB,
+                    affect_json TEXT,
+                    salience REAL DEFAULT 0.0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cursor.execute("PRAGMA table_info(embeddings)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if "affect_json" not in cols:
+                cursor.execute("ALTER TABLE embeddings ADD COLUMN affect_json TEXT")
+            if "salience" not in cols:
+                cursor.execute("ALTER TABLE embeddings ADD COLUMN salience REAL DEFAULT 0.0")
             # Index for fast filtering by agent
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_agent ON embeddings(agent_name)")
             conn.commit()
@@ -109,11 +117,14 @@ class SemanticSearchEngine:
                 log_cb(f"[red]Error calling embed binary: {e}[/red]")
             return []
 
-    def index_message(self, agent_name: str, session_id: str, message_idx: int, text: str, model_name: str = None, log_cb=None):
+    def index_message(self, agent_name: str, session_id: str, message_idx: int, text: str, model_name: str = None, log_cb=None, affect_snapshot: Optional[Dict[str, Any]] = None):
         """Embeds and stores a message in the database."""
         results = self.get_embeddings(text, model_name=model_name, log_cb=log_cb)
         if not results:
             return
+
+        affect_json = json.dumps(affect_snapshot) if affect_snapshot else None
+        salience = float(affect_snapshot.get("salience", 0.0)) if affect_snapshot else 0.0
 
         with self._lock:
             conn = sqlite3.connect(self.db_path)
@@ -121,9 +132,9 @@ class SemanticSearchEngine:
             for s_idx, res in enumerate(results):
                 vector_np = np.array(res["vector"], dtype=np.float64)
                 cursor.execute("""
-                    INSERT INTO embeddings (agent_name, session_id, message_idx, sentence_idx, text, vector)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (agent_name, session_id, message_idx, s_idx, res["text"], vector_np.tobytes()))
+                    INSERT INTO embeddings (agent_name, session_id, message_idx, sentence_idx, text, vector, affect_json, salience)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (agent_name, session_id, message_idx, s_idx, res["text"], vector_np.tobytes(), affect_json, salience))
             conn.commit()
             conn.close()
 
@@ -158,7 +169,7 @@ class SemanticSearchEngine:
                         continue
                     content = msg.get("content", "")
                     if content and content.strip():
-                        tasks.append((agent_name, session_id, idx, content.strip()))
+                        tasks.append((agent_name, session_id, idx, content.strip(), msg.get("affect_snapshot")))
             except Exception:
                 continue
                 
@@ -179,19 +190,19 @@ class SemanticSearchEngine:
 
         # 3. Re-index messages with live progress tracking
         indexed_count = 0
-        for i, (agent_name, session_id, idx, content) in enumerate(tasks, start=1):
+        for i, (agent_name, session_id, idx, content, affect_snap) in enumerate(tasks, start=1):
             pct = (i / total) * 100.0
             if progress_cb:
                 snippet = content[:45].replace("\n", " ") + ("..." if len(content) > 45 else "")
                 progress_cb(i, total, pct, f"{agent_name} ({session_id}) - \"{snippet}\"")
             
-            self.index_message(agent_name, session_id, idx, content, model_name=model_name, log_cb=log_cb)
+            self.index_message(agent_name, session_id, idx, content, model_name=model_name, log_cb=log_cb, affect_snapshot=affect_snap)
             indexed_count += 1
 
         return indexed_count
 
-    def search(self, agent_name: str, query: str, limit: int = 5, exclude_session_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Performs semantic search restricted to a specific agent, optionally excluding a session."""
+    def search(self, agent_name: str, query: str, limit: int = 5, exclude_session_id: Optional[str] = None, query_affect: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Performs semantic search restricted to a specific agent, optionally blending affective resonance."""
         query_embeddings = self.get_embeddings(query)
         if not query_embeddings:
             return []
@@ -204,15 +215,17 @@ class SemanticSearchEngine:
             cursor = conn.cursor()
             
             if exclude_session_id:
-                # Retrieve all vectors for this agent EXCEPT the excluded session
                 cursor.execute("""
-                    SELECT id, text, vector, session_id, message_idx 
+                    SELECT id, text, vector, session_id, message_idx, affect_json, salience 
                     FROM embeddings 
                     WHERE agent_name = ? AND session_id != ?
                 """, (agent_name, exclude_session_id))
             else:
-                # Retrieve all vectors for this agent
-                cursor.execute("SELECT id, text, vector, session_id, message_idx FROM embeddings WHERE agent_name = ?", (agent_name,))
+                cursor.execute("""
+                    SELECT id, text, vector, session_id, message_idx, affect_json, salience 
+                    FROM embeddings 
+                    WHERE agent_name = ?
+                """, (agent_name,))
                 
             rows = cursor.fetchall()
             conn.close()
@@ -220,21 +233,50 @@ class SemanticSearchEngine:
         if not rows:
             return []
 
-        # Calculate similarities using NumPy
-        # Note: For thousands of rows, this is still very fast on mobile
+        affect_mod = None
+        w_sem, w_aff, w_sal = 1.0, 0.0, 0.0
+        if query_affect is not None:
+            try:
+                import affect_engine
+                affect_mod = affect_engine
+                w_sem, w_aff, w_sal = affect_engine.get_episodic_blend_weights()
+            except Exception:
+                affect_mod = None
+
+        q_norm = np.linalg.norm(query_vec)
+        if q_norm == 0:
+            return []
+
         matches = []
-        for row_id, text, vec_blob, sess_id, msg_idx in rows:
+        for row_id, text, vec_blob, sess_id, msg_idx, affect_json, row_sal in rows:
             vec = np.frombuffer(vec_blob, dtype=np.float64)
             if vec.shape != query_vec.shape:
                 continue
-            # Cosine similarity: (A dot B) / (||A|| * ||B||)
-            # Since vectors from Cybertron are usually normalized, we could just do dot
-            # but let's be robust.
-            similarity = np.dot(query_vec, vec) / (np.linalg.norm(query_vec) * np.linalg.norm(vec))
+            v_norm = np.linalg.norm(vec)
+            if v_norm == 0:
+                continue
+            sem_sim = float(np.dot(query_vec, vec) / (q_norm * v_norm))
+            row_affect = None
+            if affect_json:
+                try:
+                    row_affect = json.loads(affect_json)
+                except Exception:
+                    row_affect = None
+            sal_val = float(row_sal or 0.0)
+
+            if affect_mod is not None and query_affect is not None and row_affect is not None:
+                aff_sim = affect_mod.compute_affect_similarity(query_affect, row_affect)
+                score = (w_sem * sem_sim) + (w_aff * aff_sim) + (w_sal * sal_val)
+            else:
+                score = sem_sim
+
             matches.append({
                 "id": row_id,
                 "text": text,
-                "score": float(similarity),
+                "score": float(score),
+                "semantic_score": sem_sim,
+                "salience": sal_val,
+                "affect_label": (row_affect or {}).get("label", "") if isinstance(row_affect, dict) else "",
                 "session_id": sess_id,
                 "message_idx": msg_idx
             })

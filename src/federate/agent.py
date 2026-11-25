@@ -124,7 +124,9 @@ SLASH_COMMAND_DESCS = {
     "/backstory": "Force update and translate all agent backstories",
     "/consolidate": "Consolidate, summarize, and prune core memorylets",
     "/schedule": "Open the automated daily task scheduler menu",
-    "/dpi": "Set the image DPI resolution for generated PDF documents"
+    "/dpi": "Set the image DPI resolution for generated PDF documents",
+    "/inner_life": "Inspect and tune agent 4-timescale emotions, drives, desires, and sentiments",
+    "/mood": "Open the agent Inner Life & Affect Inspector"
 }
 
 # --- MODAL SCREENS ---
@@ -869,7 +871,10 @@ class UpdateModal(ModalScreen[str]):
 class GlobalSettingsModal(ModalScreen[str]):
     DEFAULT_CSS = """
     GlobalSettingsModal { align: center middle; background: $background 60%; }
-    #global_config_dialog { width: 75; height: 90%; border: round $primary; background: $surface; padding: 0; }
+    #global_config_dialog { width: 84; height: 90%; border: round $primary; background: $surface; padding: 0; }
+    .affect_axis_title { color: $accent; text-style: bold; margin-top: 1; }
+    .affect_pair_row { layout: horizontal; height: auto; width: 100%; }
+    .affect_pair_col { width: 1fr; margin-right: 1; height: auto; }
     #global_scroll { padding: 1 2; }
     .section_label { background: $primary; color: $text; padding: 0 1; margin-top: 1; text-style: bold; width: 100%; }
     .field_container { margin-top: 1; height: auto; width: 100%; }
@@ -1083,7 +1088,104 @@ class GlobalSettingsModal(ModalScreen[str]):
                     yield Label("Keyring Storage Backend", classes="field_label")
                     yield Label("Use the native OS Keychain when available, or force the local EncryptedKeyring file fallback directly.", classes="field_help")
                     yield Select([("OS Keychain (if available)", "os"), ("Encrypted File Fallback (Direct)", "fallback")], value="os", id="use_os_keychain", allow_blank=False)
-                    
+
+                yield Label("4-Timescale Affect & Decay Settings", classes="section_label")
+                yield Label("Configure integrator limits, episodic blending, and per-axis decay half-lives (in seconds) & baselines.", classes="field_help")
+
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Max Acute Delta / Turn", classes="field_label")
+                        yield Input(id="aff_lim_max_acute", placeholder="0.35")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Max Drive Delta / Turn", classes="field_label")
+                        yield Input(id="aff_lim_max_drive", placeholder="0.25")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Max Active Desires", classes="field_label")
+                        yield Input(id="aff_lim_max_desires", placeholder="8")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Sentiments Prompt Limit", classes="field_label")
+                        yield Input(id="aff_lim_sent_limit", placeholder="8")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Salience Core Threshold", classes="field_label")
+                        yield Input(id="aff_lim_sal_thresh", placeholder="0.35")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Acute-to-Effective Weight", classes="field_label")
+                        yield Input(id="aff_lim_acute_w", placeholder="0.65")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Episodic Semantic Weight", classes="field_label")
+                        yield Input(id="aff_lim_ep_sem", placeholder="0.72")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Episodic Affect Weight", classes="field_label")
+                        yield Input(id="aff_lim_ep_aff", placeholder="0.18")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Episodic Salience Weight", classes="field_label")
+                        yield Input(id="aff_lim_ep_sal", placeholder="0.10")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("TTS Speed Max Offset", classes="field_label")
+                        yield Input(id="aff_lim_tts_off", placeholder="0.10")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Intercom Contagion Gain", classes="field_label")
+                        yield Input(id="aff_lim_contagion", placeholder="0.10")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Sentiment Bond Bias Cap", classes="field_label")
+                        yield Input(id="aff_lim_sent_bias", placeholder="0.25")
+                with Horizontal(classes="affect_pair_row"):
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Loneliness Sadness Pull / Hr", classes="field_label")
+                        yield Input(id="aff_lim_lonely_pull", placeholder="0.03")
+                    with Vertical(classes="affect_pair_col"):
+                        yield Label("Low-Purpose Sadness Pull / Hr", classes="field_label")
+                        yield Input(id="aff_lim_purp_pull", placeholder="0.025")
+
+                import copy, affect_engine
+                self._affect_schema_snapshot = copy.deepcopy(affect_engine.load_affect_schema(force_reload=True))
+                self._affect_axis_fields = []
+                for ax in self._affect_schema_snapshot.get("axes", []):
+                    aid = ax["id"]
+                    safe_aid = re.sub(r'[^a-zA-Z0-9_-]', '_', aid)
+                    lg = ax.get("layer_group", "affect")
+                    lbl = ax.get("label", aid)
+                    self._affect_axis_fields.append((ax, safe_aid))
+                    yield Label(f"{lbl} ({aid} — {lg}, range [{ax['min']}..{ax['max']}])", classes="affect_axis_title")
+                    if lg in ("affect", "relational"):
+                        with Horizontal(classes="affect_pair_row"):
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Baseline", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_baseline")
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Acute Half-Life (sec)", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_acute_hl")
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Mood Half-Life (sec)", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_mood_hl")
+                        with Horizontal(classes="affect_pair_row"):
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Mood Charge Gain", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_charge")
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Mood Bias Gain", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_bias")
+                    else:
+                        with Horizontal(classes="affect_pair_row"):
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Baseline", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_baseline")
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Decay Half-Life (sec)", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_drive_hl")
+                        with Horizontal(classes="affect_pair_row"):
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("Offline Drift / Hour", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_drift")
+                            with Vertical(classes="affect_pair_col"):
+                                yield Label("High Threshold", classes="field_label")
+                                yield Input(id=f"aff_ax_{safe_aid}_high_t")
+
             with Horizontal(id="global_actions"):
                 yield Button("Save Changes", id="save_global_btn", variant="success")
                 yield Button("Cancel", id="cancel_global_btn", variant="error")
@@ -1123,7 +1225,42 @@ class GlobalSettingsModal(ModalScreen[str]):
         self.query_one("#mesh_poll_interval", Input).value = str(config.get("mesh_poll_interval", 60.0))
         self.query_one("#mesh_dispatch_wait_seconds", Input).value = str(config.get("mesh_dispatch_wait_seconds", 300))
         self.query_one("#use_os_keychain", Select).value = "os" if config.get("use_os_keychain", True) else "fallback"
-        
+
+        schema = getattr(self, "_affect_schema_snapshot", None)
+        if schema is None:
+            import copy, affect_engine
+            schema = copy.deepcopy(affect_engine.load_affect_schema(force_reload=True))
+            self._affect_schema_snapshot = schema
+        limits = schema.get("limits", {})
+        ep = limits.get("episodic_blend", {})
+        self.query_one("#aff_lim_max_acute", Input).value = str(limits.get("max_acute_delta_per_turn", config.get("affect_max_acute_delta_per_turn", 0.35)))
+        self.query_one("#aff_lim_max_drive", Input).value = str(limits.get("max_drive_delta_per_turn", config.get("affect_max_drive_delta_per_turn", 0.25)))
+        self.query_one("#aff_lim_max_desires", Input).value = str(limits.get("max_active_desires", config.get("affect_max_active_desires", 8)))
+        self.query_one("#aff_lim_sent_limit", Input).value = str(limits.get("sentiment_prompt_limit", config.get("affect_sentiment_prompt_limit", 8)))
+        self.query_one("#aff_lim_sal_thresh", Input).value = str(limits.get("salience_core_threshold", config.get("affect_salience_core_threshold", 0.35)))
+        self.query_one("#aff_lim_acute_w", Input).value = str(limits.get("acute_effective_weight", config.get("affect_acute_effective_weight", 0.65)))
+        self.query_one("#aff_lim_ep_sem", Input).value = str(ep.get("semantic", config.get("affect_episodic_semantic_weight", 0.72)))
+        self.query_one("#aff_lim_ep_aff", Input).value = str(ep.get("affect", config.get("affect_episodic_affect_weight", 0.18)))
+        self.query_one("#aff_lim_ep_sal", Input).value = str(ep.get("salience", config.get("affect_episodic_salience_weight", 0.10)))
+        self.query_one("#aff_lim_tts_off", Input).value = str(limits.get("tts_speed_max_offset", config.get("affect_tts_speed_max_offset", 0.10)))
+        self.query_one("#aff_lim_contagion", Input).value = str(limits.get("intercom_contagion_gain", config.get("affect_intercom_contagion_gain", 0.10)))
+        self.query_one("#aff_lim_sent_bias", Input).value = str(limits.get("sentiment_bias_cap", config.get("affect_sentiment_bias_cap", 0.25)))
+        self.query_one("#aff_lim_lonely_pull", Input).value = str(limits.get("loneliness_sad_pull", config.get("affect_loneliness_sad_pull", 0.03)))
+        self.query_one("#aff_lim_purp_pull", Input).value = str(limits.get("low_purpose_sad_pull", config.get("affect_low_purpose_sad_pull", 0.025)))
+
+        for ax, safe_aid in getattr(self, "_affect_axis_fields", []):
+            lg = ax.get("layer_group", "affect")
+            self.query_one(f"#aff_ax_{safe_aid}_baseline", Input).value = str(ax.get("baseline", 0.0))
+            if lg in ("affect", "relational"):
+                self.query_one(f"#aff_ax_{safe_aid}_acute_hl", Input).value = str(ax.get("acute_half_life_sec", 900.0))
+                self.query_one(f"#aff_ax_{safe_aid}_mood_hl", Input).value = str(ax.get("mood_half_life_sec", 36000.0))
+                self.query_one(f"#aff_ax_{safe_aid}_charge", Input).value = str(ax.get("mood_charge_gain", 0.20))
+                self.query_one(f"#aff_ax_{safe_aid}_bias", Input).value = str(ax.get("mood_bias_gain", 0.25))
+            else:
+                self.query_one(f"#aff_ax_{safe_aid}_drive_hl", Input).value = str(ax.get("half_life_sec", 43200.0))
+                self.query_one(f"#aff_ax_{safe_aid}_drift", Input).value = str(ax.get("offline_drift_per_hour", 0.0))
+                self.query_one(f"#aff_ax_{safe_aid}_high_t", Input).value = str(ax.get("high_threshold", 0.65))
+
         self.query_one("#research_images_max", Input).value = str(config.get("research_images_max", 10))
         self.query_one("#research_image_retries", Input).value = str(config.get("research_image_retries", 1))
         with self.prevent(Checkbox.Changed):
@@ -1280,8 +1417,98 @@ class GlobalSettingsModal(ModalScreen[str]):
                 self.notify("Cannot use fallback directly: 'keyrings.alt' package is not installed.", severity="error")
                 return
 
+        def _pfloat(wid: str, default: float, lo: float = None, hi: float = None) -> float:
+            try:
+                v = float(self.query_one(wid, Input).value.strip())
+            except Exception:
+                v = float(default)
+            if lo is not None:
+                v = max(lo, v)
+            if hi is not None:
+                v = min(hi, v)
+            return v
+
+        def _pint(wid: str, default: int, lo: int = None, hi: int = None) -> int:
+            try:
+                v = int(float(self.query_one(wid, Input).value.strip()))
+            except Exception:
+                v = int(default)
+            if lo is not None:
+                v = max(lo, v)
+            if hi is not None:
+                v = min(hi, v)
+            return v
+
+        aff_max_acute = _pfloat("#aff_lim_max_acute", 0.35, 0.05, 1.0)
+        aff_max_drive = _pfloat("#aff_lim_max_drive", 0.25, 0.05, 1.0)
+        aff_max_desires = _pint("#aff_lim_max_desires", 8, 1, 50)
+        aff_sent_limit = _pint("#aff_lim_sent_limit", 8, 1, 50)
+        aff_sal_thresh = _pfloat("#aff_lim_sal_thresh", 0.35, 0.0, 1.0)
+        aff_acute_w = _pfloat("#aff_lim_acute_w", 0.65, 0.0, 1.5)
+        aff_ep_sem = _pfloat("#aff_lim_ep_sem", 0.72, 0.0, 1.0)
+        aff_ep_aff = _pfloat("#aff_lim_ep_aff", 0.18, 0.0, 1.0)
+        aff_ep_sal = _pfloat("#aff_lim_ep_sal", 0.10, 0.0, 1.0)
+        aff_tts_off = _pfloat("#aff_lim_tts_off", 0.10, 0.0, 0.30)
+        aff_contagion = _pfloat("#aff_lim_contagion", 0.10, 0.0, 1.0)
+        aff_sent_bias = _pfloat("#aff_lim_sent_bias", 0.25, 0.0, 0.8)
+        aff_lonely_pull = _pfloat("#aff_lim_lonely_pull", 0.03, 0.0, 0.5)
+        aff_purp_pull = _pfloat("#aff_lim_purp_pull", 0.025, 0.0, 0.5)
+
+        import affect_engine
+        schema = getattr(self, "_affect_schema_snapshot", None) or affect_engine.load_affect_schema(force_reload=True)
+        schema.setdefault("limits", {})
+        schema["limits"].update({
+            "max_acute_delta_per_turn": aff_max_acute,
+            "max_drive_delta_per_turn": aff_max_drive,
+            "max_active_desires": aff_max_desires,
+            "sentiment_prompt_limit": aff_sent_limit,
+            "salience_core_threshold": aff_sal_thresh,
+            "acute_effective_weight": aff_acute_w,
+            "episodic_blend": {
+                "semantic": aff_ep_sem,
+                "affect": aff_ep_aff,
+                "salience": aff_ep_sal
+            },
+            "tts_speed_max_offset": aff_tts_off,
+            "intercom_contagion_gain": aff_contagion,
+            "sentiment_bias_cap": aff_sent_bias,
+            "loneliness_sad_pull": aff_lonely_pull,
+            "low_purpose_sad_pull": aff_purp_pull
+        })
+
+        for ax, safe_aid in getattr(self, "_affect_axis_fields", []):
+            lg = ax.get("layer_group", "affect")
+            lo, hi = float(ax.get("min", 0.0)), float(ax.get("max", 1.0))
+            ax["baseline"] = _pfloat(f"#aff_ax_{safe_aid}_baseline", ax.get("baseline", 0.0), lo, hi)
+            if lg in ("affect", "relational"):
+                ax["acute_half_life_sec"] = _pfloat(f"#aff_ax_{safe_aid}_acute_hl", ax.get("acute_half_life_sec", 900.0), 1.0)
+                ax["mood_half_life_sec"] = _pfloat(f"#aff_ax_{safe_aid}_mood_hl", ax.get("mood_half_life_sec", 36000.0), 1.0)
+                ax["mood_charge_gain"] = _pfloat(f"#aff_ax_{safe_aid}_charge", ax.get("mood_charge_gain", 0.20), 0.0, 2.0)
+                ax["mood_bias_gain"] = _pfloat(f"#aff_ax_{safe_aid}_bias", ax.get("mood_bias_gain", 0.25), 0.0, 2.0)
+            else:
+                ax["half_life_sec"] = _pfloat(f"#aff_ax_{safe_aid}_drive_hl", ax.get("half_life_sec", 43200.0), 1.0)
+                ax["offline_drift_per_hour"] = _pfloat(f"#aff_ax_{safe_aid}_drift", ax.get("offline_drift_per_hour", 0.0), -1.0, 1.0)
+                ax["high_threshold"] = _pfloat(f"#aff_ax_{safe_aid}_high_t", ax.get("high_threshold", 0.65), lo, hi)
+
+        affect_engine.save_affect_schema(schema)
+        affect_engine.load_affect_schema(force_reload=True)
+
         config = toolbox.load_global_settings()
         config.update({
+            "affect_max_acute_delta_per_turn": aff_max_acute,
+            "affect_max_drive_delta_per_turn": aff_max_drive,
+            "affect_max_active_desires": aff_max_desires,
+            "affect_sentiment_prompt_limit": aff_sent_limit,
+            "affect_salience_core_threshold": aff_sal_thresh,
+            "affect_acute_effective_weight": aff_acute_w,
+            "affect_episodic_semantic_weight": aff_ep_sem,
+            "affect_episodic_affect_weight": aff_ep_aff,
+            "affect_episodic_salience_weight": aff_ep_sal,
+            "affect_tts_speed_max_offset": aff_tts_off,
+            "affect_intercom_contagion_gain": aff_contagion,
+            "affect_sentiment_bias_cap": aff_sent_bias,
+            "affect_loneliness_sad_pull": aff_lonely_pull,
+            "affect_low_purpose_sad_pull": aff_purp_pull,
             "direct_stt_send_on_release": direct_stt_send_on_release,
             "tool_result_visibility": tool_result_visibility,
             "precompress_mode": precompress_mode,
@@ -1672,8 +1899,21 @@ class ConfigModal(ModalScreen[str]):
             api_input.styles.display = "block"
             api_label.styles.display = "block"
 
+    def update_emotion_fields_visibility(self):
+        enabled = self.query_one("#ai_enable_emotions", Checkbox).value
+        for wid in ("#ai_emotional_expressiveness", "#ai_emotional_sensitivity", "#ai_mood_resilience"):
+            try:
+                self.query_one(wid).disabled = not enabled
+            except Exception:
+                pass
+
+    @on(Checkbox.Changed, "#ai_enable_emotions")
+    def on_enable_emotions_changed(self, event: Checkbox.Changed):
+        self.update_emotion_fields_visibility()
+
     def on_mount(self):
         self.update_auth_btn_visibility()
+        self.update_emotion_fields_visibility()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="config_dialog"):
@@ -1727,6 +1967,16 @@ class ConfigModal(ModalScreen[str]):
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
                         yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools)
+
+                    yield Label("Emotions & Inner Life", classes="section_label")
+                    with Horizontal(classes="config_row"):
+                        yield Checkbox("Enable Emotions / Inner Life", id="ai_enable_emotions", value=getattr(self.agent_config, "enable_emotions", True))
+                    yield Label("Emotional Expressiveness:")
+                    yield Select([("Subtle", "subtle"), ("Balanced", "balanced"), ("Expressive", "expressive")], value=getattr(self.agent_config, "emotional_expressiveness", "balanced") or "balanced", id="ai_emotional_expressiveness", allow_blank=False)
+                    yield Label("Emotional Sensitivity (e.g. 1.0):")
+                    yield Input(value=str(getattr(self.agent_config, "emotional_sensitivity", 1.0)), id="ai_emotional_sensitivity")
+                    yield Label("Mood Resilience (e.g. 1.0):")
+                    yield Input(value=str(getattr(self.agent_config, "mood_resilience", 1.0)), id="ai_mood_resilience")
 
                     yield Label("Agent Abilities", classes="section_label")
                     yield Button("Manage Agent Abilities...", id="ai_abilities_btn", variant="primary")
@@ -1826,6 +2076,20 @@ class ConfigModal(ModalScreen[str]):
         except ValueError:
             token_char_num = 3.9
 
+        try:
+            emo_sens = float(self.query_one("#ai_emotional_sensitivity", Input).value.strip())
+            if emo_sens <= 0:
+                emo_sens = 1.0
+        except ValueError:
+            emo_sens = 1.0
+
+        try:
+            mood_res = float(self.query_one("#ai_mood_resilience", Input).value.strip())
+            if mood_res <= 0:
+                mood_res = 1.0
+        except ValueError:
+            mood_res = 1.0
+
         preset_val = self.query_one("#ai_base_url_preset", Select).value
         api_key_val = self.query_one("#ai_api_key", Input).value.strip()
         if preset_val == "https://chatgpt.com/backend-api/codex" and not api_key_val:
@@ -1851,7 +2115,11 @@ class ConfigModal(ModalScreen[str]):
             "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "none",
             "temperature": temp,
             "max_tokens": max_tokens,
-            "token_equivalent_char_number": token_char_num
+            "token_equivalent_char_number": token_char_num,
+            "enable_emotions": self.query_one("#ai_enable_emotions", Checkbox).value,
+            "emotional_expressiveness": (self.query_one("#ai_emotional_expressiveness", Select).value if self.query_one("#ai_emotional_expressiveness", Select).value != Select.BLANK else None) or "balanced",
+            "emotional_sensitivity": emo_sens,
+            "mood_resilience": mood_res
         }
 
     def _apply_save(self, is_new: bool):
@@ -3985,6 +4253,247 @@ def render_latex_to_unicode(text: str) -> str:
     except ImportError:
         return text
 
+class InnerLifeModal(ModalScreen[None]):
+    DEFAULT_CSS = """
+    InnerLifeModal { align: center middle; background: $background 60%; }
+    #il_dialog { width: 96; height: 90%; border: thick $primary; background: $surface; padding: 1 2; }
+    #il_controls_row { layout: horizontal; height: auto; margin-top: 1; margin-bottom: 1; align: left middle; }
+    #il_agent_select { width: 1fr; margin-right: 1; }
+    #il_axis_select { width: 1fr; margin-right: 1; }
+    #il_entity_select { width: 1fr; }
+    #il_nudge_row { layout: horizontal; height: auto; margin-bottom: 1; align: left middle; }
+    #il_nudge_row Button { margin-right: 1; }
+    #il_scroll { height: 1fr; border: round $accent; background: $boost; padding: 1 2; }
+    #il_body { width: 100%; height: auto; }
+    #il_actions { layout: horizontal; height: auto; align: right middle; margin-top: 1; }
+    #il_actions Button { margin-left: 1; }
+    """
+
+    def __init__(self, agent_view):
+        super().__init__()
+        self.agent_view = agent_view
+
+    def _entity_options(self, agent_name: str, state: dict) -> list:
+        ents = ["User"]
+        for a in self.agent_view.agent_manager.agents.keys():
+            if a != agent_name and a not in ents:
+                ents.append(a)
+        for k in (state.get("relations") or {}).keys():
+            if k != agent_name and k not in ents:
+                ents.append(k)
+        return [(f"Target: {e}", e) for e in ents]
+
+    def compose(self) -> ComposeResult:
+        import affect_engine
+        agents = list(self.agent_view.agent_manager.agents.keys())
+        default_agent = self.agent_view.active_agent.name if getattr(self.agent_view, "active_agent", None) else (agents[0] if agents else "Rita")
+        schema = affect_engine.load_affect_schema()
+        axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in schema.get("axes", [])]
+        default_axis = axis_opts[0][1] if axis_opts else Select.BLANK
+        state = affect_engine.load_inner_state(default_agent)
+        ent_opts = self._entity_options(default_agent, state)
+
+        with Vertical(id="il_dialog"):
+            yield Label(" Inner Life & Affect Inspector (4 Timescales)", classes="pane_title")
+            with Horizontal(id="il_controls_row"):
+                yield Select([(a, a) for a in agents], value=default_agent, id="il_agent_select", allow_blank=False)
+                yield Select(axis_opts, value=default_axis, id="il_axis_select", allow_blank=False)
+                yield Select(ent_opts, value="User", id="il_entity_select", allow_blank=False)
+            with Horizontal(id="il_nudge_row"):
+                yield Button("Nudge -0.2", id="il_nudge_minus", variant="warning")
+                yield Button("Nudge +0.2", id="il_nudge_plus", variant="primary")
+                yield Button("Simulate +6h Offline", id="il_sim_6h", variant="default")
+            with VerticalScroll(id="il_scroll"):
+                yield Static("", id="il_body", markup=False)
+            with Horizontal(id="il_actions"):
+                yield Button("Reload Schema", id="il_reload_schema", variant="primary")
+                yield Button("Reset Transient", id="il_reset_btn", variant="warning")
+                yield Button("Close", id="il_close_btn", variant="error")
+
+    def on_mount(self):
+        self._sync_entity_select()
+        self.refresh_view()
+
+    def _current_agent_name(self) -> str:
+        val = self.query_one("#il_agent_select", Select).value
+        if val != Select.BLANK and val:
+            return str(val)
+        return self.agent_view.active_agent.name
+
+    def _sync_entity_select(self):
+        import affect_engine
+        a_name = self._current_agent_name()
+        is_nomem = self.agent_view.session_manager.is_no_memory()
+        sid = self.agent_view.session_manager.current_session_id if is_nomem else None
+        state = affect_engine.load_inner_state(a_name, is_nomem=is_nomem, session_id=sid)
+        schema = affect_engine.load_affect_schema()
+        axis_id = str(self.query_one("#il_axis_select", Select).value or "")
+        is_rel = any(ax.get("id") == axis_id and ax.get("layer_group") == "relational" for ax in schema.get("axes", []))
+        ent_sel = self.query_one("#il_entity_select", Select)
+        opts = self._entity_options(a_name, state)
+        cur_val = str(ent_sel.value) if ent_sel.value != Select.BLANK else "User"
+        valid_vals = {o[1] for o in opts}
+        with self.prevent(Select.Changed):
+            ent_sel.set_options(opts)
+            ent_sel.value = cur_val if cur_val in valid_vals else "User"
+        ent_sel.disabled = not is_rel
+
+    def _make_bar(self, val: float, lo: float, hi: float, width: int = 20) -> str:
+        ratio = max(0.0, min(1.0, (val - lo) / max(1e-6, (hi - lo))))
+        filled = int(round(ratio * width))
+        return "█" * filled + "░" * (width - filled)
+
+    def refresh_view(self):
+        import affect_engine
+        a_name = self._current_agent_name()
+        a_cfg = self.agent_view.agent_manager.get_agent(a_name)
+        is_nomem = self.agent_view.session_manager.is_no_memory()
+        sid = self.agent_view.session_manager.current_session_id if is_nomem else None
+        info = affect_engine.get_inspector_summary(a_name, a_cfg, is_nomem=is_nomem, session_id=sid)
+
+        out = Text()
+        if not info["enabled"]:
+            out.append(f"Agent: {a_name}  |  Status: DISABLED (Emotionless Mode)\n", style="bold red")
+            out.append("Enable 'Emotions / Inner Life' in Agent Config (F4) to activate all 4 timescales.\n", style="dim")
+            self.query_one("#il_body", Static).update(out)
+            return
+
+        state = info["state"]
+        schema = info["schema"]
+        eff_w = affect_engine.get_acute_effective_weight(schema)
+        axes = schema.get("axes", [])
+        lbl_w = max([len(str(ax.get("label", ax["id"]))) for ax in axes] + [14])
+        indent_pad = " " * (lbl_w + 3)
+
+        mode_tag = " [No-Memory Ephemeral]" if is_nomem else ""
+        out.append(f"Agent: {a_name}{mode_tag}  |  Mood: {info['mood_label']}  |  Salience: {info['salience']:.2f}\n", style="bold cyan")
+        out.append(f"Expressiveness: {info['expressiveness']}  |  Sensitivity: {info['sensitivity']:.2f}  |  Resilience: {info['resilience']:.2f}\n", style="dim")
+        if state.get("last_session_ending_context"):
+            out.append(f"Carryover Context: {state['last_session_ending_context']}\n", style="italic yellow")
+
+        out.append("\n[Layers 1 & 2] Acute Affect & Background Mood\n", style="bold green")
+        for ax in axes:
+            if ax.get("layer_group") != "affect":
+                continue
+            aid = ax["id"]
+            lbl = str(ax.get("label", aid))
+            lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+            m_val = float(state["mood"].get(aid, base))
+            a_val = float(state["acute"].get(aid, 0.0))
+            eff = max(lo, min(hi, m_val + eff_w * a_val))
+            bar = self._make_bar(eff, lo, hi)
+            desc = affect_engine._pick_anchor(eff, ax.get("anchors", []))
+            out.append(f"  {lbl:<{lbl_w}} [{bar}] eff={eff:+.2f} (mood={m_val:+.2f}, acute={a_val:+.2f})\n")
+            out.append(f"{indent_pad}{desc}\n", style="dim")
+
+        out.append("\n[Layer 3] Homeostatic Drives & Needs\n", style="bold yellow")
+        for ax in axes:
+            if ax.get("layer_group") != "drive":
+                continue
+            aid = ax["id"]
+            lbl = str(ax.get("label", aid))
+            lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+            d_val = float(state["drives"].get(aid, base))
+            bar = self._make_bar(d_val, lo, hi)
+            desc = affect_engine._pick_anchor(d_val, ax.get("anchors", []))
+            out.append(f"  {lbl:<{lbl_w}} [{bar}] {d_val:.2f}\n")
+            out.append(f"{indent_pad}{desc}\n", style="dim")
+
+        rel_axes = affect_engine._relational_axes(schema)
+        if rel_axes:
+            out.append("\n[Relational Affect] Per-Entity Gradients\n", style="bold cyan")
+            rels = state.get("relations", {}) or {}
+            rel_ents = list(rels.keys())
+            for a_col in self.agent_view.agent_manager.agents.keys():
+                if a_col != a_name and a_col not in rel_ents:
+                    rel_ents.append(a_col)
+            for ent in rel_ents:
+                rdata = rels.get(ent) or affect_engine._make_fresh_relation(schema)
+                out.append(f"  Toward {ent}:\n", style="bold")
+                for ax in rel_axes:
+                    aid = ax["id"]
+                    lbl = str(ax.get("label", aid))
+                    lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+                    m_val = float(rdata["mood"].get(aid, base))
+                    a_val = float(rdata["acute"].get(aid, 0.0))
+                    eff = max(lo, min(hi, m_val + eff_w * a_val))
+                    bar = self._make_bar(eff, lo, hi)
+                    desc = affect_engine._pick_anchor(eff, ax.get("anchors", []))
+                    out.append(f"    {lbl:<{lbl_w}} [{bar}] eff={eff:+.2f} (mood={m_val:+.2f}, acute={a_val:+.2f})\n")
+                    out.append(f"  {indent_pad}{desc}\n", style="dim")
+
+        desires = state.get("desires", [])
+        out.append("\n[Layer 3b] Crystallized Desires\n", style="bold magenta")
+        if desires:
+            for d in desires:
+                out.append(f"  - [{d.get('id')}] ({d.get('status', 'active')}, urgency={float(d.get('urgency', 0.5)):.2f}, drive={d.get('linked_drive', '')}): {d.get('content', '')}\n")
+        else:
+            out.append("  (No personal desires recorded yet.)\n", style="dim")
+
+        sentiments = info.get("sentiments", [])
+        out.append("\n[Layer 4] Enduring Sentiments, Likes, Dislikes & Bonds (SENTIMENTS.json)\n", style="bold blue")
+        if sentiments:
+            for s in sentiments:
+                out.append(
+                    f"  - [{s.get('id')}] ({s.get('category', 'like')} -> {s.get('target', '')} | "
+                    f"sal={float(s.get('salience', 0.0)):.2f}, str={float(s.get('strength', 0.0)):.2f}): {s.get('content', '')}\n"
+                )
+        else:
+            out.append("  (No enduring sentiments formed yet.)\n", style="dim")
+
+        self.query_one("#il_body", Static).update(out)
+
+    @on(Select.Changed, "#il_agent_select")
+    def on_agent_changed(self):
+        self._sync_entity_select()
+        self.refresh_view()
+
+    @on(Select.Changed, "#il_axis_select")
+    def on_axis_changed(self):
+        self._sync_entity_select()
+
+    @on(Button.Pressed)
+    def handle_buttons(self, event: Button.Pressed):
+        import affect_engine
+        bid = event.button.id
+        if bid == "il_close_btn":
+            self.agent_view.update_status_bar()
+            self.dismiss()
+            return
+
+        a_name = self._current_agent_name()
+        a_cfg = self.agent_view.agent_manager.get_agent(a_name)
+        is_nomem = self.agent_view.session_manager.is_no_memory()
+        sid = self.agent_view.session_manager.current_session_id if is_nomem else None
+
+        if bid == "il_reload_schema":
+            schema = affect_engine.load_affect_schema(force_reload=True)
+            axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in schema.get("axes", [])]
+            sel = self.query_one("#il_axis_select", Select)
+            with self.prevent(Select.Changed):
+                sel.set_options(axis_opts)
+                if axis_opts:
+                    sel.value = axis_opts[0][1]
+            self._sync_entity_select()
+            self.notify("Reloaded affect_schema.json!", severity="information")
+        elif bid == "il_reset_btn":
+            affect_engine.reset_transient_state(a_name, a_cfg, is_nomem=is_nomem, session_id=sid)
+            self.notify(f"Reset transient Layers 1-3 & relations for {a_name}.", severity="warning")
+        elif bid == "il_sim_6h":
+            affect_engine.simulate_time_passage(a_name, a_cfg, hours=6.0, is_nomem=is_nomem, session_id=sid)
+            self.notify(f"Simulated +6h offline evolution for {a_name}.", severity="information")
+        elif bid in ("il_nudge_minus", "il_nudge_plus"):
+            axis_val = self.query_one("#il_axis_select", Select).value
+            ent_val = self.query_one("#il_entity_select", Select).value
+            tgt_ent = str(ent_val) if (ent_val != Select.BLANK and ent_val) else "User"
+            if axis_val != Select.BLANK and axis_val:
+                delta = -0.2 if bid == "il_nudge_minus" else 0.2
+                affect_engine.apply_manual_axis_nudge(a_name, a_cfg, str(axis_val), delta, is_nomem=is_nomem, session_id=sid, target_entity=tgt_ent)
+
+        self.agent_view.update_status_bar()
+        self.refresh_view()
+
+
 class AIAgentView(Vertical):
     BINDINGS =[
         Binding("f2", "open_chat_manager", "Sessions", priority=True),
@@ -4419,7 +4928,18 @@ class AIAgentView(Vertical):
             if toolbox.ABORT_EVENT.is_set():
                 return (False, "")
             result_event.wait(0.1) 
-            
+
+        if final_result[0][0]:
+            try:
+                import affect_engine
+                a_cfg = self.agent_manager.get_agent(agent_name)
+                if a_cfg and getattr(a_cfg, "enable_emotions", True):
+                    is_nomem = self.session_manager.is_no_memory()
+                    sid = self.session_manager.current_session_id if is_nomem else None
+                    affect_engine.apply_telemetry_event(agent_name, a_cfg, "user_confirm_approved", is_nomem=is_nomem, session_id=sid, target_entity="User")
+            except Exception:
+                pass
+
         return final_result[0]
     
     def action_clear_all_contexts(self, no_memory: bool = False):
@@ -4739,7 +5259,7 @@ class AIAgentView(Vertical):
                     if hm.tool_calls or hm.tool_outputs:
                         self.mark_agent_concise_done(owner_name)
             else: 
-                intercom_match = re.search(r'<AGENT_INTERCOM sender="([^"]+)">([\s\S]*?)</AGENT_INTERCOM>', content)
+                intercom_match = re.search(r'<AGENT_INTERCOM\s+sender="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM>', content)
                 tool_match = re.search(r'<AGENT_INTERCOM_TOOL_RESPONSE agent="([^"]+)" tool="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM_TOOL_RESPONSE>', content)
 
                 if intercom_match:
@@ -4959,8 +5479,13 @@ class AIAgentView(Vertical):
             "6) In case of conflicting or contradictory memories, keep the later version (greater ID) and prune/delete the older version.\n"
             "STRICT CONSTRAINTS:\n"
             "- DO NOT mention or invoke other agents (no @mentions).\n"
-            "- DO NOT use edit_file or save_file on JSON files directly. Use update_core_memory ONLY.\n"
-            "- When finished, provide a concise summary of changes made."
+            + (
+                "- Also review your enduring sentiments (likes, dislikes, bonds, cherished moments) and active desires using `update_inner_life`: preserve high-salience cherished moments and genuine bonds while letting obsolete minor irritations heal or resolve.\n"
+                "- DO NOT use edit_file or save_file on JSON files directly. Use update_core_memory and update_inner_life ONLY.\n"
+                if getattr(agent, "enable_emotions", True) else
+                "- DO NOT use edit_file or save_file on JSON files directly. Use update_core_memory ONLY.\n"
+            )
+            + "- When finished, provide a concise summary of changes made."
         )
 
         toolbox.ABORT_EVENT.clear()
@@ -5641,9 +6166,20 @@ class AIAgentView(Vertical):
                         color = "#00FFFF"
 
                     model = (a_cfg.backup_model if (a_cfg.use_backup and a_cfg.backup_model) else a_cfg.model) or "unknown"
+                    mood_suffix = ""
+                    if getattr(a_cfg, "enable_emotions", True):
+                        try:
+                            import affect_engine
+                            is_nomem = self.session_manager.is_no_memory() if hasattr(self, "session_manager") else False
+                            sid = self.session_manager.current_session_id if (is_nomem and hasattr(self, "session_manager")) else None
+                            mlbl = affect_engine.get_mood_label(a_cfg.name, a_cfg, is_nomem=is_nomem, session_id=sid)
+                            if mlbl:
+                                mood_suffix = f" [dim italic]{escape(f'[{mlbl}]')}[/dim italic]"
+                        except Exception:
+                            mood_suffix = ""
                     agent_lines.append(
                         f"[bold {color}]{a_cfg.name}[/bold {color}] "
-                        f"[{color}]([/][{model_color}]{model}[/{model_color}][{color}])[/]"
+                        f"[{color}]([/][{model_color}]{model}[/{model_color}][{color}])[/]{mood_suffix}"
                     )
                 else:
                     agent_lines.append(f"[bold cyan]{a_name}[/bold cyan]")
@@ -5997,6 +6533,21 @@ class AIAgentView(Vertical):
             self.log_to_ui(f"[dim yellow]Agent {s_name} is already working on a task.[/dim yellow]")
         for agent in to_launch:
             self.run_agent_task(agent, prompt, batch_id=batch_id, pre_reserved=True)
+        try:
+            import affect_engine
+            is_nomem = self.session_manager.is_no_memory()
+            sid = self.session_manager.current_session_id if is_nomem else None
+            engaged = {a.name for a in agents}
+            with self.turn_lock:
+                engaged.update(a.name for a in getattr(self, "turn_queue", []))
+                engaged.update(self._running_agents)
+            for sess_agent_name in list(self.session_manager.active_sessions.keys()):
+                if sess_agent_name not in engaged:
+                    cfg = self.agent_manager.get_agent(sess_agent_name)
+                    if cfg and getattr(cfg, "enable_emotions", True):
+                        affect_engine.apply_telemetry_event(sess_agent_name, cfg, "sidelined_turn", is_nomem=is_nomem, session_id=sid)
+        except Exception:
+            pass
 
     @work(thread=True)
     def run_agent_task(self, agent: AgentConfig, prompt: str, override_thread_id: str = None, batch_id: int = 0, pre_reserved: bool = False):

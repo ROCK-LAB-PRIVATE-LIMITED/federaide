@@ -357,6 +357,52 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
                             {"type": "image_url", "image_url": {"url": url}}
                         ])
                         processed.append(companion)
+        if getattr(agent_config, "enable_emotions", True) and getattr(toolbox.thread_context, "inner_life_active", False):
+            try:
+                import affect_engine
+                cleaned_proc = []
+                for pm in processed:
+                    if isinstance(pm, (AIMessage, AIMessageChunk)) and isinstance(pm.content, str) and "<AFFECT_UPDATE" in pm.content.upper():
+                        pm_copy = pm.model_copy(update={"content": affect_engine.strip_affect_tags(pm.content)}) if hasattr(pm, "model_copy") else AIMessage(content=affect_engine.strip_affect_tags(pm.content), tool_calls=getattr(pm, "tool_calls", []), additional_kwargs=getattr(pm, "additional_kwargs", {}))
+                        cleaned_proc.append(pm_copy)
+                    else:
+                        cleaned_proc.append(pm)
+                processed = cleaned_proc
+
+                inner_block = affect_engine.build_turn_inner_state_block(
+                    agent_config,
+                    active_participants=getattr(toolbox.thread_context, "inner_life_participants", None),
+                    incoming_text=getattr(toolbox.thread_context, "inner_life_prompt", ""),
+                    is_nomem=getattr(toolbox.thread_context, "inner_life_is_nomem", False),
+                    session_id=getattr(toolbox.thread_context, "inner_life_session_id", None),
+                )
+                if inner_block:
+                    target_idx = None
+                    fallback_idx = None
+                    for idx_m in range(len(processed) - 1, -1, -1):
+                        if isinstance(processed[idx_m], HumanMessage):
+                            if fallback_idx is None:
+                                fallback_idx = idx_m
+                            c_val = processed[idx_m].content
+                            is_companion = False
+                            if isinstance(c_val, list) and c_val and isinstance(c_val[0], dict):
+                                t_txt = str(c_val[0].get("text", ""))
+                                if t_txt.startswith("[Attached Image:") or t_txt == "[Dynamic Visual Output]:":
+                                    is_companion = True
+                            if not is_companion:
+                                target_idx = idx_m
+                                break
+                    if target_idx is None:
+                        target_idx = fallback_idx
+                    if target_idx is not None:
+                        orig_hm = processed[target_idx]
+                        if isinstance(orig_hm.content, list):
+                            new_blocks = [{"type": "text", "text": inner_block}] + [dict(b) if isinstance(b, dict) else b for b in orig_hm.content]
+                            processed[target_idx] = HumanMessage(content=new_blocks)
+                        else:
+                            processed[target_idx] = HumanMessage(content=f"{inner_block}\n\n{orig_hm.content or ''}")
+            except Exception:
+                pass
         return processed
 
     orig_generate = llm._generate
@@ -372,7 +418,8 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
     llm._stream = patched_stream
     
     is_nomem = getattr(agent_view.session_manager, "is_no_memory", lambda: False)()
-    NOMEM_EXCLUDED_TOOLS = {"update_core_memory", "search_episodic_memory", "retrieve_episodic_memory", "mark_quagmire", "distill_journey"}
+    emotions_enabled = bool(getattr(agent_config, "enable_emotions", True))
+    NOMEM_EXCLUDED_TOOLS = {"update_core_memory", "update_inner_life", "search_episodic_memory", "retrieve_episodic_memory", "mark_quagmire", "distill_journey"}
 
     if agent_config.disable_all_tools:
         tools = [
@@ -381,6 +428,8 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory,
             toolbox.get_toolresult
         ]
+        if emotions_enabled and not is_nomem:
+            tools.append(toolbox.update_inner_life)
         if is_nomem:
             tools = [t for t in tools if getattr(t, "name", "") not in NOMEM_EXCLUDED_TOOLS]
         allowed_names = {getattr(t, "name", t) for t in tools}
@@ -436,6 +485,8 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             return False
 
         raw_tools = [toolbox.search_web, toolbox.perform_research, toolbox.render_pdf, toolbox.update_core_memory, toolbox.save_skill, toolbox.read_skill, toolbox.distill_journey, toolbox.delete_passive_skill, toolbox.list_skills, toolbox.mark_quagmire, toolbox.get_user_clarification, toolbox.search_episodic_memory, toolbox.retrieve_episodic_memory, toolbox.prepare_active_skill, toolbox.finalize_active_skill, toolbox.manage_active_skill, toolbox.fix_active_skill, toolbox.get_toolresult, toolbox.send_team_dispatch]
+        if emotions_enabled and not is_nomem:
+            raw_tools.append(toolbox.update_inner_life)
         if is_nomem:
             raw_tools = [t for t in raw_tools if getattr(t, "name", "") not in NOMEM_EXCLUDED_TOOLS]
         raw_tools.extend(toolbox.load_dynamic_tools(agent_config.name))
@@ -470,7 +521,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
             "update_core_memory", "save_skill", "read_skill", "list_skills",
             "distill_journey", "delete_passive_skill", "mark_quagmire",
             "get_user_clarification", "search_episodic_memory", "retrieve_episodic_memory",
-            "set_toolresult"
+            "set_toolresult", "update_inner_life"
         }
 
         def make_wrapped_tool(t_obj, requires_confirmation=False):
@@ -641,6 +692,30 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
     new_par_candidates = []
     new_seq_candidates = []
     pause_for_askuser = False
+    emotions_active = bool(getattr(agent, "enable_emotions", True))
+    is_nomem = agent_view.session_manager.is_no_memory()
+    nomem_sid = agent_view.session_manager.current_session_id if is_nomem else None
+    stream_filter = None
+    turn_affect_updates = []
+    if emotions_active:
+        try:
+            import affect_engine
+            if not (override_thread_id and "_rst_" in override_thread_id):
+                affect_engine.on_turn_start(agent, prompt=prompt, is_nomem=is_nomem, session_id=nomem_sid)
+            stream_filter = affect_engine.AffectStreamFilter()
+            u_name = toolbox.load_global_settings().get("user_name", "User")
+            participants = [u_name, "User"] + list(agent_view.session_manager.active_sessions.keys())
+            toolbox.thread_context.inner_life_active = True
+            toolbox.thread_context.inner_life_is_nomem = is_nomem
+            toolbox.thread_context.inner_life_session_id = nomem_sid
+            ic_senders = re.findall(r'<AGENT_INTERCOM\s+sender="([^"]+)"[^>]*>', prompt or "")
+            interlocutor = ic_senders[-1].strip() if ic_senders else "User"
+            toolbox.thread_context.inner_life_participants = participants
+            toolbox.thread_context.inner_life_prompt = prompt
+            toolbox.thread_context.inner_life_interlocutor = interlocutor
+        except Exception:
+            emotions_active = False
+            stream_filter = None
     try:
         if not agent_view.ensure_chatgpt_auth_for_agent(agent):
             agent_view.log_to_ui(f"[bold red]ChatGPT OAuth authentication required for {agent.name}. Task cancelled.[/bold red]")
@@ -672,7 +747,14 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
         spinner_started = True
         agent_view.app.call_from_thread(agent_view.update_tokens)
         if getattr(agent_view, "tts_enabled", False):
-            agent_view.tts_manager.start_stream(voice=agent.tts_voice, agent_name=agent.name)
+            tts_speed_off = 0.0
+            if emotions_active:
+                try:
+                    import affect_engine
+                    tts_speed_off = affect_engine.get_tts_speed_offset(agent.name, agent, is_nomem=is_nomem, session_id=nomem_sid)
+                except Exception:
+                    tts_speed_off = 0.0
+            agent_view.tts_manager.start_stream(voice=agent.tts_voice, agent_name=agent.name, speed_offset=tts_speed_off)
         thread_id = override_thread_id or f"{agent_view.session_manager.current_session_id}_{agent.name}"
         run_config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 5000}
 
@@ -899,17 +981,19 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                         if event_type == "messages":
                             chunk, metadata = event_data
                             if metadata.get("langgraph_node") == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
-                                text_chunk = str(chunk.content)
-                                current_ai_text += text_chunk
-                                full_ai_response += text_chunk
-                                if getattr(agent_view, "tts_enabled", False):
-                                    agent_view.tts_manager.stream_text(text_chunk, agent_name=agent.name, voice=agent.tts_voice)
-                                if not has_mounted_ai_box:
-                                    agent_view.app.call_from_thread(agent_view.mount_ai_message_box, agent.name, agent.color)
-                                    has_mounted_ai_box = True
-                                    
-                                display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
-                                agent_view.app.call_from_thread(agent_view.update_ai_message, display_text, agent.name)
+                                raw_c = chunk.content
+                                text_chunk = raw_c if isinstance(raw_c, str) else ("".join(b.get("text", "") for b in raw_c if isinstance(b, dict) and b.get("type") == "text") if isinstance(raw_c, list) else str(raw_c))
+                                visible_chunk = stream_filter.feed(text_chunk) if (emotions_active and stream_filter is not None) else text_chunk
+                                if visible_chunk:
+                                    current_ai_text += visible_chunk
+                                    full_ai_response += visible_chunk
+                                    if getattr(agent_view, "tts_enabled", False):
+                                        agent_view.tts_manager.stream_text(visible_chunk, agent_name=agent.name, voice=agent.tts_voice)
+                                    if not has_mounted_ai_box:
+                                        agent_view.app.call_from_thread(agent_view.mount_ai_message_box, agent.name, agent.color)
+                                        has_mounted_ai_box = True
+                                    display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
+                                    agent_view.app.call_from_thread(agent_view.update_ai_message, display_text, agent.name)
 
                         elif event_type == "updates":
                             consecutive_fail_count = 0
@@ -920,6 +1004,20 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                     messages = [messages]
 
                                 if node_name == "agent":
+                                    if emotions_active and stream_filter is not None:
+                                        rem_visible, seg_updates = stream_filter.finalize_segment()
+                                        if seg_updates:
+                                            turn_affect_updates.extend(seg_updates)
+                                        if rem_visible:
+                                            current_ai_text += rem_visible
+                                            full_ai_response += rem_visible
+                                            if getattr(agent_view, "tts_enabled", False):
+                                                agent_view.tts_manager.stream_text(rem_visible, agent_name=agent.name, voice=agent.tts_voice)
+                                            if not has_mounted_ai_box:
+                                                agent_view.app.call_from_thread(agent_view.mount_ai_message_box, agent.name, agent.color)
+                                                has_mounted_ai_box = True
+                                            display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
+                                            agent_view.app.call_from_thread(agent_view.update_ai_message, display_text, agent.name)
                                     for msg in messages:
                                         if hasattr(msg, 'additional_kwargs') and 'thought' in msg.additional_kwargs:
                                             agent_view.log_to_ui(f"[dim]Thought:[/dim] {msg.additional_kwargs['thought']}")
@@ -940,7 +1038,14 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                                 agent_view.write_message_block(f"[bold {agent.color}]{agent.name} (Tool Call):[/bold {agent.color}]", call_text, "#808080", is_markdown=False)
 
                                         if getattr(agent_view, "tts_enabled", False):
-                                            agent_view.tts_manager.flush_stream(agent_name=agent.name, voice=agent.tts_voice)
+                                            tts_speed_off = 0.0
+                                            if emotions_active:
+                                                try:
+                                                    import affect_engine
+                                                    tts_speed_off = affect_engine.get_tts_speed_offset(agent.name, agent, is_nomem=is_nomem, session_id=nomem_sid)
+                                                except Exception:
+                                                    tts_speed_off = 0.0
+                                            agent_view.tts_manager.flush_stream(agent_name=agent.name, voice=agent.tts_voice, speed_offset=tts_speed_off)
                                         has_mounted_ai_box = False
                                         current_ai_text = ""
 
@@ -968,6 +1073,22 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                         if raw_popped is not None:
                                             output_entry["compressed_content"] = display_content
                                         tool_outputs.append(output_entry)
+                                        if emotions_active and tool_name not in ("update_core_memory", "update_inner_life", "search_episodic_memory", "retrieve_episodic_memory", "get_toolresult", "set_toolresult", "list_skills", "read_skill"):
+                                            try:
+                                                import affect_engine
+                                                c_str = str(content_to_save)
+                                                if "was rejected by the user" in c_str:
+                                                    ev_name = "user_confirm_rejected_with_comment" if "User comment:" in c_str else "user_confirm_rejected"
+                                                elif "No match found" in c_str:
+                                                    ev_name = "edit_miss"
+                                                elif c_str.startswith(("Error:", "Error ", "MCP Error:", "FAILURE:", "Pip install failed:")):
+                                                    ev_name = "tool_error"
+                                                else:
+                                                    ev_name = "tool_success"
+                                                tgt_ent = "User" if ev_name.startswith("user_confirm") else None
+                                                affect_engine.apply_telemetry_event(agent.name, agent, ev_name, is_nomem=is_nomem, session_id=nomem_sid, target_entity=tgt_ent)
+                                            except Exception:
+                                                pass
                                         
                                         if "[Attached Image:" in str(content_to_save):
                                             img_match = re.search(r'\[Attached Image: (.*?)\]', str(content_to_save))
@@ -989,6 +1110,12 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                         
                                         agent_view.app.call_from_thread(agent_view.render_tool_result_box, agent.name, agent.color, summary, ui_diff)
                     
+                    if emotions_active:
+                        try:
+                            import affect_engine
+                            full_ai_response = affect_engine.strip_affect_tags(full_ai_response)
+                        except Exception:
+                            pass
                     if not full_ai_response.strip():
                         consecutive_fail_count += 1
                         if consecutive_fail_count < MAX_CONSECUTIVE_FAILS:
@@ -997,6 +1124,12 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                             current_ai_text = ""
                             full_ai_response = ""
                             has_mounted_ai_box = False
+                            if emotions_active:
+                                try:
+                                    import affect_engine
+                                    stream_filter = affect_engine.AffectStreamFilter()
+                                except Exception:
+                                    pass
                             continue
                         else:
                             raise ValueError("Empty response received from API after multiple retries")
@@ -1016,8 +1149,31 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
             if full_ai_response.strip() or tool_outputs or tool_calls:
                 ai_response = full_ai_response.strip()
+                affect_snap = None
+                if emotions_active:
+                    try:
+                        import affect_engine
+                        ai_response = affect_engine.strip_affect_tags(ai_response)
+                        is_consolidation = "[Memory Consolidation Task]" in (prompt or "")
+                        cur_interlocutor = getattr(toolbox.thread_context, "inner_life_interlocutor", "User")
+                        affect_engine.on_turn_complete(
+                            agent, turn_affect_updates, is_consolidation=is_consolidation,
+                            had_tool_work=bool(tool_outputs), default_target=cur_interlocutor,
+                            is_nomem=is_nomem, session_id=nomem_sid
+                        )
+                        last_thought = ""
+                        for upd in reversed(turn_affect_updates):
+                            if upd.get("thought"):
+                                last_thought = upd["thought"]
+                                break
+                        affect_snap = affect_engine.get_affect_snapshot(
+                            agent.name, agent, thought=last_thought, is_nomem=is_nomem,
+                            session_id=nomem_sid, interlocutor=cur_interlocutor
+                        )
+                    except Exception:
+                        affect_snap = None
                 agent_view.app.call_from_thread(agent_view.mark_agent_concise_done, agent.name)
-                agent_view.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls)
+                agent_view.session_manager.broadcast_message(agent.name, ai_response, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls, affect_snapshot=affect_snap)
                 agent_view.app.call_from_thread(agent_view.update_tokens)
                 
                 toolbox.auto_commit_state(f"{agent.name}: Completed response turn")
@@ -1076,10 +1232,18 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                         tool_outputs.append(aborted_output)
                         agent_view.app.call_from_thread(agent_view.render_tool_error_box, agent.name, agent.color, "Error: Tool execution aborted by user.")
 
+                abort_snap = None
+                if emotions_active:
+                    try:
+                        import affect_engine
+                        affect_engine.on_turn_abort(agent, is_nomem=is_nomem, session_id=nomem_sid)
+                        abort_snap = affect_engine.get_affect_snapshot(agent.name, agent, is_nomem=is_nomem, session_id=nomem_sid)
+                    except Exception:
+                        abort_snap = None
                 if tool_outputs or tool_calls:
                     ai_resp = full_ai_response.strip() or "[Operation Aborted by User]"
                     agent_view.session_manager.broadcast_message(
-                        agent.name, ai_resp, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls
+                        agent.name, ai_resp, is_ai=True, tool_outputs=tool_outputs, tool_calls=tool_calls, affect_snapshot=abort_snap
                     )
                     agent_view.app.call_from_thread(agent_view.update_tokens)
 
@@ -1096,6 +1260,12 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
             agent_view.log_to_ui(f"[bold red]Execution Error ({agent.name}):[/bold red] {e}")
     finally:
+        toolbox.thread_context.inner_life_active = False
+        toolbox.thread_context.inner_life_is_nomem = False
+        toolbox.thread_context.inner_life_session_id = None
+        toolbox.thread_context.inner_life_participants = None
+        toolbox.thread_context.inner_life_prompt = ""
+        toolbox.thread_context.inner_life_interlocutor = "User"
         if hasattr(agent_view, "clear_ui_tool_diffs"):
             agent_view.clear_ui_tool_diffs(agent.name)
 
@@ -1260,7 +1430,7 @@ def get_last_responder_agent(agent_view, current_agent_name: str) -> Optional[Ag
     history = agent_view.session_manager.active_sessions.get(current_agent_name, [])
     for msg in reversed(history):
         if msg.role == "human" and msg.content:
-            m = re.search(r'<AGENT_INTERCOM\s+sender="([^"]+)">', msg.content)
+            m = re.search(r'<AGENT_INTERCOM\s+sender="([^"]+)"[^>]*>', msg.content)
             if m:
                 s_name = m.group(1).strip()
                 if s_name != current_agent_name:
@@ -1617,6 +1787,12 @@ CONVERSATION TO SUMMARIZE:
     
     agent_view.session_manager.active_sessions[agent.name] = new_history
     agent_view.session_manager.save_session(agent.name)
+    if getattr(agent, "enable_emotions", True) and not agent_view.session_manager.is_no_memory():
+        try:
+            import affect_engine
+            affect_engine.notify_telemetry_for_agent(agent.name, "session_compressed")
+        except Exception:
+            pass
     final_tokens = estimate_history_tokens(new_history, agent)
     
     try:

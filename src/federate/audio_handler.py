@@ -600,6 +600,7 @@ class TTSManager:
         self.generator_thread.start()
         
         self.text_stream_buffer = {}
+        self.stream_speed_offsets = {}
         self.reload_config()
 
     def reload_config(self):
@@ -679,7 +680,11 @@ class TTSManager:
                 self.generator_queue.task_done()
                 continue
                 
-            text, voice_to_use = item
+            if isinstance(item, tuple) and len(item) == 3:
+                text, voice_to_use, effective_speed = item
+            else:
+                text, voice_to_use = item
+                effective_speed = self.speed
             try:
                 self.load_model()
                 if self.model and not self.stop_event.is_set():
@@ -687,7 +692,7 @@ class TTSManager:
                     sample_rate = 24000
                     for s in re.split(r'(?<=[.!?])\s+', text):
                         if s.strip() and not self.stop_event.is_set():
-                            samples, sr = self.model.create(s.strip(), voice=voice_to_use, speed=self.speed, lang="en-us")
+                            samples, sr = self.model.create(s.strip(), voice=voice_to_use, speed=effective_speed, lang="en-us")
                             sample_rate = sr
                             generated_chunks.append(samples)
                             if not self.stop_event.is_set():
@@ -706,12 +711,15 @@ class TTSManager:
             finally:
                 self.generator_queue.task_done()
 
-    def start_stream(self, voice=None, agent_name: str = "default"):
+    def start_stream(self, voice=None, agent_name: str = "default", speed_offset: float = 0.0):
         """Prepares the TTS to receive a chunked token stream."""
         self.stop_event.clear()
         if not isinstance(self.text_stream_buffer, dict):
             self.text_stream_buffer = {}
         self.text_stream_buffer[agent_name] = ""
+        if not isinstance(getattr(self, "stream_speed_offsets", None), dict):
+            self.stream_speed_offsets = {}
+        self.stream_speed_offsets[agent_name] = max(-0.15, min(0.15, float(speed_offset or 0.0)))
         if voice:
             self.voice = voice
         else:
@@ -728,17 +736,22 @@ class TTSManager:
         if voice:
             self.voice = voice
 
-    def flush_stream(self, agent_name: str = "default", voice: str = None):
+    def flush_stream(self, agent_name: str = "default", voice: str = None, speed_offset: float = None):
         """Pushes any remaining text in the buffer to the generator."""
         if not isinstance(self.text_stream_buffer, dict):
             self.text_stream_buffer = {}
         buffer = self.text_stream_buffer.get(agent_name, "")
         voice_to_use = voice or self.voice
+        if speed_offset is None:
+            offset = float(getattr(self, "stream_speed_offsets", {}).get(agent_name, 0.0))
+        else:
+            offset = max(-0.15, min(0.15, float(speed_offset or 0.0)))
+        effective_speed = round(max(0.7, min(1.6, float(self.speed) + offset)), 3)
         
         if buffer.strip() and not self.stop_event.is_set():
             to_speak = clean_markdown_for_speech(buffer.strip())
             if to_speak:
-                self.generator_queue.put((to_speak, voice_to_use))
+                self.generator_queue.put((to_speak, voice_to_use, effective_speed))
         self.text_stream_buffer[agent_name] = ""
 
     def speak(self, text: str, voice=None):
