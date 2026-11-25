@@ -719,6 +719,7 @@ class FEDERaiDE(App):
         # Bubble up agent bindings so they are accessible directly from the Editor
         Binding("f1", "open_teams", "Teams", priority=True),
         Binding("ctrl+k", "new_chat", "New Chat", priority=True),
+        Binding("ctrl+shift+k", "new_chat_nomem", "New Chat (NoMem)", priority=True),
         Binding("f2", "open_chat_manager", "Sessions", priority=True),
         Binding("f4", "open_active_config", "Manage Agents", priority=True),
         Binding("f5", "switch_agent", "Switch Agent", priority=True),
@@ -926,6 +927,21 @@ class FEDERaiDE(App):
                 except Exception: self.query_one("#dir_tree").focus()
             else: self.query_one("#dir_tree").focus()
     
+    def action_new_chat_nomem(self):
+        """Switch to AI view and initiate a fresh no-memory multi-agent chat."""
+        if not self.with_agent:
+            return
+        switcher = self.query_one("#main_switcher")
+        self.current_view_index = self.views.index("ai_chat_view")
+        switcher.current = "ai_chat_view"
+        if HAS_AI_AGENT:
+            try:
+                ai_view = self.query_one("#ai_agent_view")
+                ai_view.action_clear_all_contexts(no_memory=True)
+                self.query_one("#ai_chat_input").focus()
+            except Exception:
+                pass
+
     def action_new_chat(self):
         """Switch to AI view and initiate a fresh multi-agent chat."""
         if not self.with_agent:

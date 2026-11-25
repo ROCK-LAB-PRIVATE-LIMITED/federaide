@@ -4354,8 +4354,12 @@ class InnerLifeModal(ModalScreen[None]):
 
         out = Text()
         if not info["enabled"]:
-            out.append(f"Agent: {a_name}  |  Status: DISABLED (Emotionless Mode)\n", style="bold red")
-            out.append("Enable 'Emotions / Inner Life' in Agent Config (F4) to activate all 4 timescales.\n", style="dim")
+            reason = "No-Memory Mode" if is_nomem else "Emotionless Mode"
+            out.append(f"Agent: {a_name}  |  Status: DISABLED ({reason})\n", style="bold red")
+            if is_nomem:
+                out.append("Emotions and inner life are completely disabled in No-Memory sessions.\n", style="dim")
+            else:
+                out.append("Enable 'Emotions / Inner Life' in Agent Config (F4) to activate all 4 timescales.\n", style="dim")
             self.query_one("#il_body", Static).update(out)
             return
 
@@ -4499,6 +4503,7 @@ class AIAgentView(Vertical):
     BINDINGS =[
         Binding("f2", "open_chat_manager", "Sessions", priority=True),
         Binding("ctrl+k", "clear_all_contexts", "New Chat", priority=True),
+        Binding("ctrl+shift+k", "clear_all_contexts_nomem", "New Chat (NoMem)", priority=True),
         Binding("f4", "open_active_config", "Manage Agents", priority=True),
         Binding("f5", "switch_agent", "Switch Agent", priority=True),
         Binding("f12", "toggle_direct_stt", "Hold to Talk", priority=True),
@@ -4934,7 +4939,7 @@ class AIAgentView(Vertical):
             try:
                 import affect_engine
                 a_cfg = self.agent_manager.get_agent(agent_name)
-                if a_cfg and getattr(a_cfg, "enable_emotions", True):
+                if a_cfg and getattr(a_cfg, "enable_emotions", True) and not self.session_manager.is_no_memory():
                     is_nomem = self.session_manager.is_no_memory()
                     sid = self.session_manager.current_session_id if is_nomem else None
                     affect_engine.apply_telemetry_event(agent_name, a_cfg, "user_confirm_approved", is_nomem=is_nomem, session_id=sid, target_entity="User")
@@ -4943,6 +4948,9 @@ class AIAgentView(Vertical):
 
         return final_result[0]
     
+    def action_clear_all_contexts_nomem(self):
+        self.action_clear_all_contexts(no_memory=True)
+
     def action_clear_all_contexts(self, no_memory: bool = False):
         self.action_abort() 
         toolbox.ABORT_EVENT.clear()
@@ -6168,7 +6176,7 @@ class AIAgentView(Vertical):
 
                     model = (a_cfg.backup_model if (a_cfg.use_backup and a_cfg.backup_model) else a_cfg.model) or "unknown"
                     mood_suffix = ""
-                    if getattr(a_cfg, "enable_emotions", True):
+                    if getattr(a_cfg, "enable_emotions", True) and not (hasattr(self, "session_manager") and self.session_manager.is_no_memory()):
                         try:
                             import affect_engine
                             is_nomem = self.session_manager.is_no_memory() if hasattr(self, "session_manager") else False
@@ -6545,7 +6553,7 @@ class AIAgentView(Vertical):
             for sess_agent_name in list(self.session_manager.active_sessions.keys()):
                 if sess_agent_name not in engaged:
                     cfg = self.agent_manager.get_agent(sess_agent_name)
-                    if cfg and getattr(cfg, "enable_emotions", True):
+                    if not is_nomem and cfg and getattr(cfg, "enable_emotions", True):
                         affect_engine.apply_telemetry_event(sess_agent_name, cfg, "sidelined_turn", is_nomem=is_nomem, session_id=sid)
         except Exception:
             pass

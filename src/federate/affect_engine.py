@@ -521,7 +521,16 @@ def _get_agent_config(agent_name: str, agent_config: Any = None) -> Any:
     return None
 
 
-def is_agent_emotions_enabled(agent_name: str, agent_config: Any = None) -> bool:
+def is_agent_emotions_enabled(agent_name: str, agent_config: Any = None, is_nomem: bool = False) -> bool:
+    if is_nomem:
+        return False
+    try:
+        import toolbox
+        av = toolbox._get_agent_view_ref()
+        if av and hasattr(av, "session_manager") and av.session_manager.is_no_memory():
+            return False
+    except Exception:
+        pass
     cfg = _get_agent_config(agent_name, agent_config)
     if cfg is None:
         return True
@@ -673,11 +682,7 @@ def load_inner_state(
 ) -> Dict[str, Any]:
     schema = load_affect_schema()
     if is_nomem:
-        ekey = f"{session_id or 'nomem'}:{agent_name}"
-        with _EPHEMERAL_LOCK:
-            if ekey not in _EPHEMERAL_STATES:
-                _EPHEMERAL_STATES[ekey] = _make_fresh_state(schema)
-            return _sync_state_to_schema(copy.deepcopy(_EPHEMERAL_STATES[ekey]), schema)
+        return _make_fresh_state(schema)
 
     lock = _get_agent_lock(agent_name)
     with lock:
@@ -701,9 +706,6 @@ def save_inner_state(
     session_id: Optional[str] = None,
 ) -> None:
     if is_nomem:
-        ekey = f"{session_id or 'nomem'}:{agent_name}"
-        with _EPHEMERAL_LOCK:
-            _EPHEMERAL_STATES[ekey] = copy.deepcopy(state)
         return
 
     lock = _get_agent_lock(agent_name)
@@ -857,7 +859,7 @@ def advance_time(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
     t_now = time.time() if now_ts is None else float(now_ts)
@@ -881,7 +883,7 @@ def simulate_time_passage(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
     lock = _get_agent_lock(agent_name)
@@ -1001,7 +1003,7 @@ def apply_telemetry_event(
     target_entity: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
     raw_weights = schema.get("telemetry_events", {}).get(event_name, {})
@@ -1049,7 +1051,7 @@ def apply_manual_axis_nudge(
     target_entity: str = "User",
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
     lock = _get_agent_lock(agent_name)
@@ -1088,7 +1090,7 @@ def apply_self_appraisal(
     default_target: str = "User",
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg) or not updates:
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem) or not updates:
         return None
     schema = load_affect_schema()
     lock = _get_agent_lock(agent_name)
@@ -1112,7 +1114,7 @@ def on_turn_start(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     agent_name = getattr(agent_config, "name", "")
-    if not is_agent_emotions_enabled(agent_name, agent_config):
+    if not is_agent_emotions_enabled(agent_name, agent_config, is_nomem=is_nomem):
         return None
     lock = _get_agent_lock(agent_name)
     with lock:
@@ -1142,7 +1144,7 @@ def on_turn_complete(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     agent_name = getattr(agent_config, "name", "")
-    if not is_agent_emotions_enabled(agent_name, agent_config):
+    if not is_agent_emotions_enabled(agent_name, agent_config, is_nomem=is_nomem):
         return None
     lock = _get_agent_lock(agent_name)
     with lock:
@@ -1181,7 +1183,7 @@ def on_turn_abort(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     agent_name = getattr(agent_config, "name", "")
-    if not is_agent_emotions_enabled(agent_name, agent_config):
+    if not is_agent_emotions_enabled(agent_name, agent_config, is_nomem=is_nomem):
         return None
     lock = _get_agent_lock(agent_name)
     with lock:
@@ -1222,7 +1224,7 @@ def notify_intercom_received(
     session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     return apply_telemetry_event(
         agent_name,
@@ -1260,7 +1262,7 @@ def get_mood_label(
     session_id: Optional[str] = None,
 ) -> str:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return ""
     schema = load_affect_schema()
     eff_w = get_acute_effective_weight(schema)
@@ -1322,7 +1324,7 @@ def get_affect_snapshot(
     interlocutor: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
     state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
@@ -1349,7 +1351,7 @@ def get_tts_speed_offset(
     session_id: Optional[str] = None,
 ) -> float:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return 0.0
     schema = load_affect_schema()
     eff_w = get_acute_effective_weight(schema)
@@ -1492,7 +1494,7 @@ def manage_desire(
     session_id: Optional[str] = None,
 ) -> str:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return f"[{agent_name}] Emotions are disabled for this agent."
 
     act = (action or "add").strip().lower()
@@ -1584,7 +1586,7 @@ def _pick_anchor(val: float, anchors: List[List[Any]]) -> str:
 
 
 def get_system_prompt_section(agent_config: Any, is_no_memory: bool = False) -> str:
-    if not getattr(agent_config, "enable_emotions", True):
+    if is_no_memory or not getattr(agent_config, "enable_emotions", True):
         return ""
     expr = getattr(agent_config, "emotional_expressiveness", "balanced") or "balanced"
     expr_rule = {
@@ -1622,7 +1624,7 @@ def build_turn_inner_state_block(
     session_id: Optional[str] = None,
 ) -> str:
     agent_name = getattr(agent_config, "name", "")
-    if not is_agent_emotions_enabled(agent_name, agent_config):
+    if not is_agent_emotions_enabled(agent_name, agent_config, is_nomem=is_nomem):
         return ""
 
     schema = load_affect_schema()
@@ -1902,10 +1904,10 @@ def get_inspector_summary(
     session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     cfg = _get_agent_config(agent_name, agent_config)
-    enabled = is_agent_emotions_enabled(agent_name, cfg)
+    enabled = is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem)
     schema = load_affect_schema()
-    state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
-    sentiments = load_sentiments(agent_name)
+    state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id) if enabled else _make_fresh_state(schema)
+    sentiments = load_sentiments(agent_name) if enabled else []
     return {
         "agent_name": agent_name,
         "enabled": enabled,
