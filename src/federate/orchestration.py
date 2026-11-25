@@ -359,7 +359,7 @@ class AgentConfig:
             prompt += "\n- DISTILLATION: When you successfully resolve a difficult, multi-step task, autonomously use `distill_journey` to save the happy-path workflow for the future."
             prompt += "\n- QUAGMIRES: Only use `mark_quagmire` if the user explicitly asks you to log a trap, failure, or dead-end."
         
-        if getattr(self, "enable_emotions", True):
+        if getattr(self, "enable_emotions", True) and not is_no_memory:
             try:
                 import affect_engine
                 prompt += affect_engine.get_system_prompt_section(self, is_no_memory=is_no_memory)
@@ -771,13 +771,14 @@ class SessionManager:
                         import affect_engine
                         intercom_content = affect_engine.format_intercom_tag(sender_name, agent_name, content, affect_snapshot)
                         history.append(HistoryMessage(role="human", content=intercom_content))
-                        affect_engine.notify_intercom_received(
-                            agent_name,
-                            sender_affect=affect_snapshot,
-                            sender_name=sender_name,
-                            is_nomem=self.is_no_memory(),
-                            session_id=self.current_session_id
-                        )
+                        if not self.is_no_memory():
+                            affect_engine.notify_intercom_received(
+                                agent_name,
+                                sender_affect=affect_snapshot,
+                                sender_name=sender_name,
+                                is_nomem=False,
+                                session_id=self.current_session_id
+                            )
                         if tool_outputs:
                             for output in tool_outputs:
                                 gid = output.get("global_id")

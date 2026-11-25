@@ -692,8 +692,8 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
     new_par_candidates = []
     new_seq_candidates = []
     pause_for_askuser = False
-    emotions_active = bool(getattr(agent, "enable_emotions", True))
     is_nomem = agent_view.session_manager.is_no_memory()
+    emotions_active = bool(getattr(agent, "enable_emotions", True)) and not is_nomem
     nomem_sid = agent_view.session_manager.current_session_id if is_nomem else None
     stream_filter = None
     turn_affect_updates = []
