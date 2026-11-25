@@ -43,7 +43,7 @@ from toolbox import (
 )
 
 _SUBAGENT_TOOL_LOCK = threading.Lock()
-_SUBAGENT_EXCLUDED_TOOLS = {"dispatch_subagent", "dispatch_coding_subagent", "perform_research"}
+_SUBAGENT_EXCLUDED_TOOLS = {"dispatch_subagent", "dispatch_coding_subagent", "perform_research", "update_inner_life"}
 _SUBAGENT_MEMORY_TOOLS = {
     "update_core_memory", "save_skill", "read_skill", "list_skills",
     "distill_journey", "delete_passive_skill", "mark_quagmire",
@@ -51,7 +51,7 @@ _SUBAGENT_MEMORY_TOOLS = {
     "set_toolresult",
 }
 _SUBAGENT_NOMEM_EXCLUDED = {
-    "update_core_memory", "search_episodic_memory", "retrieve_episodic_memory",
+    "update_core_memory", "update_inner_life", "search_episodic_memory", "retrieve_episodic_memory",
     "mark_quagmire", "distill_journey",
 }
 
@@ -516,6 +516,13 @@ After calling edit_file, inspect the returned snippet to verify placement and sy
             f"```\n"
             f"Note: The branch is available locally. No remote push was performed."
         )
+        try:
+            import affect_engine
+            if getattr(agent_config, "enable_emotions", True):
+                ev = "subagent_error" if str(summary).startswith("Error in ") else "subagent_success"
+                affect_engine.notify_telemetry_for_agent(agent_config.name, ev)
+        except Exception:
+            pass
         return final_report
 
     finally:
@@ -557,7 +564,15 @@ RULES:
 - Return ONLY a dense, accurate, well-structured final report containing the findings, artifacts/paths created or modified, and outcomes so the parent agent does not need to re-run your steps."""
 
     full_task = task_description if not context.strip() else f"{task_description}\n\nAdditional Context:\n{context}"
-    return _run_subagent_react_loop(
+    res = _run_subagent_react_loop(
         llm, sub_tools, allowed_names, system_prompt, full_task,
         thread_prefix=f"sub_{agent_config.name.replace(' ', '_')}", label="Subagent"
     )
+    try:
+        import affect_engine
+        if getattr(agent_config, "enable_emotions", True):
+            ev = "subagent_error" if str(res).startswith("Error in ") else "subagent_success"
+            affect_engine.notify_telemetry_for_agent(agent_config.name, ev)
+    except Exception:
+        pass
+    return res

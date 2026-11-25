@@ -136,6 +136,10 @@ class AgentConfig:
     temperature: float = 1.0
     max_tokens: int = 256000
     token_equivalent_char_number: float = 3.9
+    enable_emotions: bool = True
+    emotional_sensitivity: float = 1.0
+    mood_resilience: float = 1.0
+    emotional_expressiveness: str = "balanced"
     
     def get_api_key(self) -> str:
         try:
@@ -355,6 +359,13 @@ class AgentConfig:
             prompt += "\n- DISTILLATION: When you successfully resolve a difficult, multi-step task, autonomously use `distill_journey` to save the happy-path workflow for the future."
             prompt += "\n- QUAGMIRES: Only use `mark_quagmire` if the user explicitly asks you to log a trap, failure, or dead-end."
         
+        if getattr(self, "enable_emotions", True):
+            try:
+                import affect_engine
+                prompt += affect_engine.get_system_prompt_section(self, is_no_memory=is_no_memory)
+            except Exception:
+                pass
+
         # Check for project rules in the workspace root
         try:
             from toolbox import CURRENT_APP
@@ -487,6 +498,7 @@ class HistoryMessage:
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_outputs: Optional[List[Dict[str, Any]]] = None
+    affect_snapshot: Optional[Dict[str, Any]] = None
 
 class SessionManager:
     def __init__(self, sessions_dir: str = None):
@@ -521,7 +533,7 @@ class SessionManager:
             """)
             self.db_conn.commit()
 
-        self.MEMORY_TOOLS = {"search_episodic_memory", "retrieve_episodic_memory", "update_core_memory", "save_skill", "read_skill", "list_skills", "distill_journey", "delete_passive_skill", "mark_quagmire", "get_user_clarification", "get_toolresult", "set_toolresult"}
+        self.MEMORY_TOOLS = {"search_episodic_memory", "retrieve_episodic_memory", "update_core_memory", "update_inner_life", "save_skill", "read_skill", "list_skills", "distill_journey", "delete_passive_skill", "mark_quagmire", "get_user_clarification", "get_toolresult", "set_toolresult"}
         
         # Start background sync
         threading.Thread(target=self.sync_all_sessions, daemon=True).start()
@@ -566,7 +578,7 @@ class SessionManager:
                                 if not self.semantic_engine.is_indexed(agent_name, session_id, idx):
                                     content = msg.get("content", "")
                                     if content and content.strip():
-                                        self.semantic_engine.index_message(agent_name, session_id, idx, content)
+                                        self.semantic_engine.index_message(agent_name, session_id, idx, content, affect_snapshot=msg.get("affect_snapshot"))
                             
                             # 2. Reconstruct persistent tool results (.federate_state.db)
                             tool_outputs = msg.get("tool_outputs") or []
@@ -631,6 +643,12 @@ class SessionManager:
 
     def _sync_history_delta(self, src_name: str, src_history: List[HistoryMessage], dst_name: str, dst_history: List[HistoryMessage]):
         existing_contents = {msg.content for msg in dst_history}
+        existing_intercom_sigs = set()
+        for m in dst_history:
+            if m.role == "human" and m.content:
+                mm = re.match(r'<AGENT_INTERCOM\s+sender="([^"]+)"[^>]*>([\s\S]*?)</AGENT_INTERCOM>', m.content)
+                if mm:
+                    existing_intercom_sigs.add((mm.group(1), mm.group(2).strip()))
         
         # Check if dst_history has a summary watermark
         cutoff_hash = None
@@ -655,8 +673,9 @@ class SessionManager:
                 continue
             
             if msg.role == "ai":
-                intercom_content = f'<AGENT_INTERCOM sender="{src_name}">\n{msg.content}\n</AGENT_INTERCOM>'
-                if intercom_content not in existing_contents:
+                import affect_engine
+                intercom_content = affect_engine.format_intercom_tag(src_name, dst_name, msg.content, getattr(msg, "affect_snapshot", None))
+                if intercom_content not in existing_contents and (src_name, (msg.content or "").strip()) not in existing_intercom_sigs:
                     dst_history.append(HistoryMessage(role="human", content=intercom_content))
                     if msg.tool_outputs:
                         for output in msg.tool_outputs:
@@ -684,7 +703,7 @@ class SessionManager:
                             dst_history.append(HistoryMessage(role="human", content=tool_content))
             elif msg.role == "human":
                 # --- MITIGATION: Skip importing intercom messages sent by the destination agent themselves ---
-                match_intercom = re.match(r'<AGENT_INTERCOM sender="([^"]+)">', msg.content)
+                match_intercom = re.match(r'<AGENT_INTERCOM\s+sender="([^"]+)"[^>]*>', msg.content)
                 if match_intercom and match_intercom.group(1) == dst_name:
                     continue
                     
@@ -697,7 +716,7 @@ class SessionManager:
                 if msg.content not in existing_contents:
                     dst_history.append(msg)
 
-    def broadcast_message(self, sender_name: str, content: str, is_ai: bool = True, tool_outputs: Optional[List[Dict[str, Any]]] = None, tool_calls: Optional[List[Dict[str, Any]]] = None):
+    def broadcast_message(self, sender_name: str, content: str, is_ai: bool = True, tool_outputs: Optional[List[Dict[str, Any]]] = None, tool_calls: Optional[List[Dict[str, Any]]] = None, affect_snapshot: Optional[Dict[str, Any]] = None):
         with self._lock:
             content = toolbox.mask_secrets(content)
             if tool_outputs:
@@ -741,15 +760,24 @@ class SessionManager:
                 msg_idx = len(history)
                 if is_ai:
                     if agent_name == sender_name:
-                        history.append(HistoryMessage(role="ai", content=content, tool_outputs=tool_outputs, tool_calls=tool_calls))
+                        history.append(HistoryMessage(role="ai", content=content, tool_outputs=tool_outputs, tool_calls=tool_calls, affect_snapshot=affect_snapshot))
                         # Index AI response only if memory is enabled
                         if not self.is_no_memory():
                             threading.Thread(target=self.semantic_engine.index_message, 
-                                             args=(agent_name, self.current_session_id, msg_idx, content), 
+                                             args=(agent_name, self.current_session_id, msg_idx, content),
+                                             kwargs={"affect_snapshot": affect_snapshot},
                                              daemon=True).start()
                     else:
-                        intercom_content = f'<AGENT_INTERCOM sender="{sender_name}">\n{content}\n</AGENT_INTERCOM>'
+                        import affect_engine
+                        intercom_content = affect_engine.format_intercom_tag(sender_name, agent_name, content, affect_snapshot)
                         history.append(HistoryMessage(role="human", content=intercom_content))
+                        affect_engine.notify_intercom_received(
+                            agent_name,
+                            sender_affect=affect_snapshot,
+                            sender_name=sender_name,
+                            is_nomem=self.is_no_memory(),
+                            session_id=self.current_session_id
+                        )
                         if tool_outputs:
                             for output in tool_outputs:
                                 gid = output.get("global_id")

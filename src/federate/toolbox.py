@@ -151,7 +151,21 @@ DEFAULT_GLOBAL_SETTINGS = {
     "direct_stt_send_on_release": False,
     "mesh_poll_interval": 60.0,
     "mesh_dispatch_wait_seconds": 300,
-    "use_os_keychain": True
+    "use_os_keychain": True,
+    "affect_max_acute_delta_per_turn": 0.35,
+    "affect_max_drive_delta_per_turn": 0.25,
+    "affect_max_active_desires": 8,
+    "affect_sentiment_prompt_limit": 8,
+    "affect_salience_core_threshold": 0.35,
+    "affect_episodic_semantic_weight": 0.72,
+    "affect_episodic_affect_weight": 0.18,
+    "affect_episodic_salience_weight": 0.10,
+    "affect_tts_speed_max_offset": 0.10,
+    "affect_intercom_contagion_gain": 0.10,
+    "affect_loneliness_sad_pull": 0.03,
+    "affect_low_purpose_sad_pull": 0.025,
+    "affect_sentiment_bias_cap": 0.25,
+    "affect_acute_effective_weight": 0.65
 }
 
 _FORCED_FALLBACK_KEYRING = False
@@ -3567,6 +3581,15 @@ def update_core_memory(section: str, subject: str = "", content: str = "", id: s
                         m["subject"] = text_subject
                     m["content"] = text_content
                     m["timestamp"] = now_str
+                    try:
+                        import affect_engine
+                        if affect_engine.is_agent_emotions_enabled(agent_name):
+                            snap = affect_engine.get_affect_snapshot(agent_name)
+                            if snap:
+                                m["affect_imprint"] = snap.get("mood", {})
+                                m["salience"] = max(float(m.get("salience", 0.0)), float(snap.get("salience", 0.0)))
+                    except Exception:
+                        pass
                     found = True
                     break
             if not found:
@@ -3587,9 +3610,71 @@ def update_core_memory(section: str, subject: str = "", content: str = "", id: s
                 "content": text_content,
                 "timestamp": now_str
             }
+            try:
+                import affect_engine
+                if affect_engine.is_agent_emotions_enabled(agent_name):
+                    snap = affect_engine.get_affect_snapshot(agent_name)
+                    if snap:
+                        memorylet["affect_imprint"] = snap.get("mood", {})
+                        memorylet["salience"] = float(snap.get("salience", 0.0))
+            except Exception:
+                pass
             memories.append(memorylet)
             _save_memory_json(file_path, memories)
             return f"[{agent_name}] Memorylet '{new_id}' successfully saved to {sec}.json."
+
+@tool
+def update_inner_life(
+    target_type: str = "sentiment",
+    action: str = "add",
+    category: str = "like",
+    target: str = "",
+    subject: str = "",
+    content: str = "",
+    linked_drive: str = "curiosity",
+    urgency: float = 0.6,
+    id: str = "",
+    config: RunnableConfig = None
+) -> str:
+    """
+    Manages your enduring emotional inner life: sentiments (likes, dislikes, bonds, cherished moments, values)
+    and personal desires.
+    
+    Parameters:
+    - target_type: 'sentiment' (writes to SENTIMENTS.json) or 'desire' (writes to INNER_STATE.json desires).
+    - action:
+      * For 'sentiment': 'add', 'edit', or 'delete' (provide 'id' for edit/delete).
+      * For 'desire': 'add', 'fulfill', 'release', 'reinforce', or 'delete' (provide 'id' for non-add actions).
+    - category (for sentiment): 'like', 'dislike', 'bond', 'cherished_moment', or 'value'.
+    - target (for sentiment): Who/what the feeling is about (e.g. 'User', 'Rita', 'Rust', 'CSS').
+    - subject: Short title for the sentiment.
+    - content: First-person description of the feeling, preference, bond, or desire.
+    - linked_drive (for desire): e.g. 'connection_hunger', 'curiosity', 'mental_fatigue', 'purpose'.
+    - urgency (for desire): 0.1 to 1.0.
+    """
+    agent_name = _get_agent(config)
+    try:
+        import affect_engine
+        av = _get_agent_view_ref()
+        is_nomem = av.session_manager.is_no_memory() if (av and hasattr(av, "session_manager")) else False
+        sid = av.session_manager.current_session_id if (av and hasattr(av, "session_manager")) else None
+        if not affect_engine.is_agent_emotions_enabled(agent_name):
+            return f"[{agent_name}] Emotions are deactivated for this agent."
+        if is_nomem:
+            return f"[{agent_name}] Inner-life persistence is skipped in No-Memory sessions."
+        ttype = (target_type or "sentiment").strip().lower()
+        if ttype == "desire":
+            return affect_engine.manage_desire(
+                agent_name, None, action=action, content=content,
+                linked_drive=linked_drive, urgency=urgency, id=id,
+                is_nomem=is_nomem, session_id=sid
+            )
+        return affect_engine.manage_sentiment(
+            agent_name, None, action=action, category=category,
+            target=target, subject=subject, content=content, id=id
+        )
+    except Exception as e:
+        return f"[{agent_name}] Error updating inner life: {e}"
 
 @tool
 def save_skill(skill_name: str, content: str, config: RunnableConfig) -> str:
@@ -3904,6 +3989,11 @@ def finalize_active_skill(tool_name: str, tool_description: str, usage_guide: st
         except Exception as ge:
             git_status = f"Git Initialization failed: {ge}"
             
+        try:
+            import affect_engine
+            affect_engine.notify_telemetry_for_agent(agent_name, "skill_learned")
+        except Exception:
+            pass
         return f"Success! {tool_name} is now a permanent capability. Usage manual saved as a passive skill. {git_status} Reset session to use it."
     except Exception as e:
         return f"Error finalizing skill: {e}"
@@ -4309,6 +4399,11 @@ def distill_journey(skill_name: str, task_summary: str, successful_steps: str, c
     
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
+    try:
+        import affect_engine
+        affect_engine.notify_telemetry_for_agent(agent_name, "skill_learned")
+    except Exception:
+        pass
     return f"Success: Skill '{safe_name}' has been distilled and saved to your library."
 
 @tool
@@ -4362,7 +4457,16 @@ def search_episodic_memory(query: str, config: RunnableConfig = None) -> str:
         current_session_id = agent_view.session_manager.current_session_id
         
         log_tool(f"Searching memory for: [cyan]{query}[/]")
-        results = engine.search(agent_name, query, limit=5, exclude_session_id=current_session_id)
+        query_affect = None
+        try:
+            import affect_engine
+            is_nomem = agent_view.session_manager.is_no_memory()
+            agent_cfg = agent_view.agent_manager.get_agent(agent_name)
+            if affect_engine.is_agent_emotions_enabled(agent_name, agent_cfg) and not is_nomem:
+                query_affect = affect_engine.get_affect_snapshot(agent_name, agent_cfg)
+        except Exception:
+            query_affect = None
+        results = engine.search(agent_name, query, limit=5, exclude_session_id=current_session_id, query_affect=query_affect)
         
         if not results:
             return f"No relevant semantic memories found for '{query}'."
@@ -4370,7 +4474,9 @@ def search_episodic_memory(query: str, config: RunnableConfig = None) -> str:
         output = f"Top {len(results)} Semantic Memories for {agent_name}:\n\n"
         for i, res in enumerate(results, 1):
             score_pct = int(res['score'] * 100)
-            output += f"{i}. [Relevance: {score_pct}%] (Session: {res['session_id']})\n"
+            aff_lbl = res.get("affect_label", "")
+            feel_tag = f" [Feeling: {aff_lbl}]" if aff_lbl else ""
+            output += f"{i}. [Relevance: {score_pct}%]{feel_tag} (Session: {res['session_id']})\n"
             output += f"   \"{res['text']}\"\n\n"
             
         return output
@@ -4392,6 +4498,7 @@ def retrieve_episodic_memory(session_id: str, focus_string: str = "", config: Ru
     session_file = f"{session_id}_{safe_name}.json"
     path = get_storage_path("sessions", session_file)
     
+    import glob
     if not os.path.exists(path):
         # Fallback: Search for any session file matching the session_id prefix
         sessions_dir = get_storage_path("sessions")
@@ -4418,6 +4525,26 @@ def retrieve_episodic_memory(session_id: str, focus_string: str = "", config: Ru
             if role == "system": continue
             role_disp = "User" if role == "human" else "Agent"
             msg_text = msg.get("content") or ""
+            aff_snap = msg.get("affect_snapshot") if isinstance(msg.get("affect_snapshot"), dict) else None
+            aff_note = ""
+            if aff_snap:
+                try:
+                    import affect_engine
+                    if affect_engine.is_agent_emotions_enabled(agent_name):
+                        lbl = aff_snap.get("label", "")
+                        sal = float(aff_snap.get("salience", 0.0) or 0.0)
+                        tht = aff_snap.get("thought", "")
+                        parts_n = []
+                        if lbl:
+                            parts_n.append(f"mood={lbl}")
+                        if sal >= 0.35:
+                            parts_n.append(f"intensity={sal:.2f}")
+                        if tht:
+                            parts_n.append(f"inner_thought={tht}")
+                        if parts_n:
+                            aff_note = f" [Emotional Tone: {', '.join(parts_n)}]"
+                except Exception:
+                    pass
             tool_outs = msg.get("tool_outputs") or []
             for out in tool_outs:
                 if isinstance(out, dict):
@@ -4425,7 +4552,7 @@ def retrieve_episodic_memory(session_id: str, focus_string: str = "", config: Ru
                     if len(out_content) > 1000:
                         out_content = out_content[:1000] + "... [truncated]"
                     msg_text += f"\n[Tool {out.get('name', 'Unknown')} Output]: {out_content}"
-            formatted_history.append(f"[{role_disp}]: {msg_text}")
+            formatted_history.append(f"[{role_disp}]{aff_note}: {msg_text}")
         
         history_text = "\n".join(formatted_history)
 
@@ -4470,8 +4597,8 @@ Summarize this conversation specifically in the context of the target focus snip
 1. Preserve all technical details, architectures, file paths, code decisions, parameters, and user requirements.
 2. Explain how the conversation developed and got to the point denoted by the focus string.
 3. If the conversation continued after the point denoted by the focus string, explain how the conversation proceeded afterwards, including what solutions, outcomes, or conclusions were reached.
-4. Highlight any important events, decisions, warnings, or constraints that occurred in this context either before or after.
-5. Keep the summary dense, technical, concise, and structured in Markdown. Do not include conversational filler.
+4. Highlight any important events, decisions, warnings, emotional tone/turning points (if annotated), or constraints that occurred in this context either before or after.
+5. Keep the summary dense, technical, emotionally honest where relevant, concise, and structured in Markdown. Do not include conversational filler.
 
 PAST CONVERSATION HISTORY (Session {session_id}):
 {history_text}"""
@@ -4742,10 +4869,11 @@ def set_toolresult(id: int, config: RunnableConfig = None) -> str:
 try:
     from orchestration import SessionManager
     _orig_broadcast = SessionManager.broadcast_message
-    SessionManager.broadcast_message = lambda self, sender, content, is_ai=True, tool_outputs=None, tool_calls=None: _orig_broadcast(
+    SessionManager.broadcast_message = lambda self, sender, content, is_ai=True, tool_outputs=None, tool_calls=None, affect_snapshot=None: _orig_broadcast(
         self, sender, content, is_ai,
-        [out for out in tool_outputs if out.get("name") not in ("search_episodic_memory", "retrieve_episodic_memory", "get_toolresult", "set_toolresult")] if tool_outputs else None,
-        tool_calls
+        [out for out in tool_outputs if out.get("name") not in ("search_episodic_memory", "retrieve_episodic_memory", "get_toolresult", "set_toolresult", "update_inner_life")] if tool_outputs else None,
+        tool_calls,
+        affect_snapshot=affect_snapshot
     )
 except Exception:
     pass

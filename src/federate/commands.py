@@ -46,7 +46,8 @@ SLASH_COMMANDS =[
     "/update", "/version",
     "/help",
     "/backstory",
-    "/consolidate"
+    "/consolidate",
+    "/inner_life", "/mood"
 ]
 
 class ChatSuggester(Suggester):
@@ -502,6 +503,11 @@ def process_slash_command(command: str, agent_view):
 
     elif cmd == "/consolidate":
         agent_view.consolidate_memories(manual=True)
+
+    elif cmd in ["/inner_life", "/mood"]:
+        from agent import InnerLifeModal
+        agent_view.app.push_screen(InnerLifeModal(agent_view))
+        return
     
     elif cmd == "/send_team":
         if len(args) < 2:
