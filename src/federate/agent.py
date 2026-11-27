@@ -1920,23 +1920,9 @@ class ConfigModal(ModalScreen[str]):
                 self.query_one(wid).disabled = not enabled
             except Exception:
                 pass
-        try:
-            pronouns_val = self.query_one("#ai_pronouns", Select).value
-            nsfw_allowed = bool(enabled) and pronouns_val not in ("neither", Select.BLANK, None, "")
-            nsfw_cb = self.query_one("#ai_enable_nsfw_affect", Checkbox)
-            nsfw_cb.disabled = not nsfw_allowed
-            if not nsfw_allowed and nsfw_cb.value:
-                with self.prevent(Checkbox.Changed):
-                    nsfw_cb.value = False
-        except Exception:
-            pass
 
     @on(Checkbox.Changed, "#ai_enable_emotions")
     def on_enable_emotions_changed(self, event: Checkbox.Changed):
-        self.update_emotion_fields_visibility()
-
-    @on(Select.Changed, "#ai_pronouns")
-    def on_pronouns_changed(self, event: Select.Changed):
         self.update_emotion_fields_visibility()
 
     def on_mount(self):
@@ -2001,15 +1987,6 @@ class ConfigModal(ModalScreen[str]):
                     yield Label("Emotions & Inner Life", classes="section_label")
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Enable Emotions / Inner Life", id="ai_enable_emotions", value=getattr(self.agent_config, "enable_emotions", True))
-                        yield Checkbox(
-                            "Enable NSFW Affect (Romance/Sexual)",
-                            id="ai_enable_nsfw_affect",
-                            value=(
-                                bool(getattr(self.agent_config, "enable_nsfw_affect", False))
-                                and bool(getattr(self.agent_config, "enable_emotions", True))
-                                and getattr(self.agent_config, "pronouns", "she/her") != "neither"
-                            ),
-                        )
                     yield Label("Emotional Expressiveness:")
                     yield Select([("Subtle", "subtle"), ("Balanced", "balanced"), ("Expressive", "expressive")], value=getattr(self.agent_config, "emotional_expressiveness", "balanced") or "balanced", id="ai_emotional_expressiveness", allow_blank=False)
                     yield Label("Emotional Sensitivity (e.g. 1.0):")
@@ -2164,13 +2141,12 @@ class ConfigModal(ModalScreen[str]):
             "enabled_tools": enabled_tools,
             "disabled_tools": disabled_tools,
             "tts_voice": (self.query_one("#ai_tts_voice", Select).value if self.query_one("#ai_tts_voice", Select).value != Select.BLANK else None) or "af_sarah",
-            "pronouns": (pronouns_val := (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her"),
+            "pronouns": (self.query_one("#ai_pronouns", Select).value if self.query_one("#ai_pronouns", Select).value != Select.BLANK else None) or "she/her",
             "reasoning_effort": (self.query_one("#ai_reasoning_effort", Select).value if self.query_one("#ai_reasoning_effort", Select).value != Select.BLANK else None) or "none",
             "temperature": temp,
             "max_tokens": max_tokens,
             "token_equivalent_char_number": token_char_num,
-            "enable_emotions": (emo_enabled_val := self.query_one("#ai_enable_emotions", Checkbox).value),
-            "enable_nsfw_affect": bool(self.query_one("#ai_enable_nsfw_affect", Checkbox).value and emo_enabled_val and pronouns_val != "neither"),
+            "enable_emotions": self.query_one("#ai_enable_emotions", Checkbox).value,
             "emotional_expressiveness": (self.query_one("#ai_emotional_expressiveness", Select).value if self.query_one("#ai_emotional_expressiveness", Select).value != Select.BLANK else None) or "balanced",
             "emotional_sensitivity": emo_sens,
             "mood_resilience": mood_res
@@ -4428,12 +4404,6 @@ class InnerLifeModal(ModalScreen[None]):
         mode_tag = " [No-Memory Ephemeral]" if is_nomem else ""
         out.append(f"Agent: {a_name}{mode_tag}  |  Mood: {info['mood_label']}  |  Salience: {info['salience']:.2f}\n", style="bold cyan")
         out.append(f"Expressiveness: {info['expressiveness']}  |  Sensitivity: {info['sensitivity']:.2f}  |  Resilience: {info['resilience']:.2f}\n", style="dim")
-        rel_st = info.get("release_status") or {}
-        if info.get("nsfw_enabled"):
-            if rel_st.get("available"):
-                out.append(f"Release Trigger: ✦ AVAILABLE toward {rel_st.get('target', 'User')} (desire={rel_st.get('desire', 0.0):.2f})\n", style="bold magenta")
-            elif rel_st.get("recent_activation"):
-                out.append(f"Release Trigger: ✧ ACTIVATED (afterglow with {rel_st.get('last_release_target') or 'partner'})\n", style="dim magenta")
         if state.get("last_session_ending_context"):
             out.append(f"Carryover Context: {state['last_session_ending_context']}\n", style="italic yellow")
 
@@ -6304,11 +6274,6 @@ class AIAgentView(Vertical):
                             mlbl = affect_engine.get_mood_label(a_cfg.name, a_cfg, is_nomem=is_nomem, session_id=sid)
                             if mlbl:
                                 mood_suffix = f" [dim italic]{escape(f'[{mlbl}]')}[/dim italic]"
-                            rel_st = affect_engine.get_release_status(a_cfg.name, a_cfg, is_nomem=is_nomem, session_id=sid)
-                            if rel_st.get("available"):
-                                mood_suffix += " [dim magenta]✦ ready[/dim magenta]"
-                            elif rel_st.get("recent_activation"):
-                                mood_suffix += " [dim #dda0dd]✧ afterglow[/dim #dda0dd]"
                         except Exception:
                             mood_suffix = ""
                     agent_lines.append(

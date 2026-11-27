@@ -138,7 +138,6 @@ class AgentConfig:
     max_tokens: int = 256000
     token_equivalent_char_number: float = 3.9
     enable_emotions: bool = True
-    enable_nsfw_affect: bool = False
     emotional_sensitivity: float = 1.0
     mood_resilience: float = 1.0
     emotional_expressiveness: str = "balanced"
@@ -477,8 +476,6 @@ class AgentManager:
         return valid_names
 
     def save_agent(self, agent: AgentConfig):
-        if getattr(agent, "pronouns", "she/her") == "neither" or not getattr(agent, "enable_emotions", True):
-            agent.enable_nsfw_affect = False
         path = os.path.join(self.agents_dir, f"{agent.name}.json")
         with open(path, "w") as f:
             json.dump(asdict(agent), f, indent=4)
