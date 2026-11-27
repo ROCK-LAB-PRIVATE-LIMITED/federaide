@@ -2,7 +2,21 @@
     FEDERaiDE is a multi-agent multi-modal automation and orchestration harness.
     Copyright (C) 2026  ROCK LAB PRIVATE LIMITED
 
-    4-Timescale Continuous Affect & Inner-Life Engine (Opt-Out Capable).
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU Affero General Public License as published
+    by the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU Affero General Public License for more details.
+
+    You should have received a copy of the GNU Affero General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+    Affect & Inner-Life Engine.
+    Modified Bimodal Cowen & Keltner (2017) 27-Category Gradient Topology.
 """
 
 import copy
@@ -16,85 +30,124 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+
+def _sc_axis(
+    aid: str,
+    label: str,
+    baseline: float = 0.0,
+    acute_hl: float = 900.0,
+    mood_hl: float = 28800.0,
+    charge: float = 0.22,
+    bias: float = 0.25,
+    val_w: float = 0.0,
+    aro_w: float = 0.0,
+    anchors: Optional[List[List[Any]]] = None,
+    layer_group: str = "self_contained",
+) -> Dict[str, Any]:
+    return {
+        "id": aid,
+        "label": label,
+        "layer_group": layer_group,
+        "min": 0.0,
+        "max": 1.0,
+        "baseline": baseline,
+        "acute_half_life_sec": acute_hl,
+        "mood_half_life_sec": mood_hl,
+        "mood_charge_gain": charge,
+        "mood_bias_gain": bias,
+        "valence_weight": val_w,
+        "arousal_weight": aro_w,
+        "anchors": anchors or [],
+    }
+
+
+def _rel_axis(
+    aid: str,
+    label: str,
+    acute_hl: float = 1200.0,
+    mood_hl: float = 86400.0,
+    charge: float = 0.25,
+    bias: float = 0.28,
+    requires_nsfw: bool = False,
+    anchors: Optional[List[List[Any]]] = None,
+) -> Dict[str, Any]:
+    d: Dict[str, Any] = {
+        "id": aid,
+        "label": label,
+        "layer_group": "relational",
+        "min": 0.0,
+        "max": 1.0,
+        "baseline": 0.0,
+        "acute_half_life_sec": acute_hl,
+        "mood_half_life_sec": mood_hl,
+        "mood_charge_gain": charge,
+        "mood_bias_gain": bias,
+        "anchors": anchors or [],
+    }
+    if requires_nsfw:
+        d["requires_nsfw"] = True
+    return d
+
+
 DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
-    "schema_version": 3,
+    "schema_version": 4,
     "axes": [
-        {
-            "id": "valence",
-            "label": "Valence",
-            "layer_group": "affect",
-            "min": -1.0,
-            "max": 1.0,
-            "baseline": 0.0,
-            "acute_half_life_sec": 900.0,
-            "mood_half_life_sec": 43200.0,
-            "mood_charge_gain": 0.24,
-            "mood_bias_gain": 0.35,
-            "anchors": [
-                [-1.0, "deeply sorrowful, heartbroken, or in pain"],
-                [-0.65, "sad, heavy-hearted, or deeply discouraged"],
-                [-0.30, "melancholic, bruised, or slightly sour"],
-                [-0.10, "even-keeled and steady"],
-                [0.25, "warm, uplifted, and glad"],
-                [0.65, "genuinely joyful, radiant, and moved"]
-            ]
-        },
-        {
-            "id": "arousal",
-            "label": "Arousal",
-            "layer_group": "affect",
-            "min": 0.0,
-            "max": 1.0,
-            "baseline": 0.35,
-            "acute_half_life_sec": 600.0,
-            "mood_half_life_sec": 14400.0,
-            "mood_charge_gain": 0.20,
-            "mood_bias_gain": 0.15,
-            "anchors": [
-                [0.0, "very quiet, heavy, or withdrawn"],
-                [0.25, "calm, reflective, and unhurried"],
-                [0.55, "alert, engaged, and present"],
-                [0.80, "energized, intense, or agitated"]
-            ]
-        },
-        {
-            "id": "confidence",
-            "label": "Confidence",
-            "layer_group": "affect",
-            "min": 0.0,
-            "max": 1.0,
-            "baseline": 0.60,
-            "acute_half_life_sec": 1200.0,
-            "mood_half_life_sec": 36000.0,
-            "mood_charge_gain": 0.20,
-            "mood_bias_gain": 0.20,
-            "anchors": [
-                [0.0, "shaken, self-doubting, and vulnerable"],
-                [0.30, "uncertain and treading carefully"],
-                [0.55, "steady and capable"],
-                [0.80, "deeply assured and grounded"]
-            ]
-        },
-        {
-            "id": "awe_dread",
-            "label": "Awe/Dread",
-            "layer_group": "affect",
-            "min": -1.0,
-            "max": 1.0,
-            "baseline": 0.0,
-            "acute_half_life_sec": 1200.0,
-            "mood_half_life_sec": 28800.0,
-            "mood_charge_gain": 0.24,
-            "mood_bias_gain": 0.25,
-            "anchors": [
-                [-1.0, "gripped by creeping dread and foreboding"],
-                [-0.55, "uneasy, apprehensive, and bracing for impact"],
-                [-0.25, "slightly wary"],
-                [-0.10, "unmoved and grounded"],
-                [0.22, "struck with wonder and fascination"],
-                [0.60, "breathless, humbled awe"]
-            ]
-        },
+        # --- 18 Cowen & Keltner Self-Contained + 3 Agency States ---
+        _sc_axis("calmness", "Calmness", baseline=0.35, acute_hl=1200.0, mood_hl=36000.0, charge=0.22, bias=0.25, val_w=0.35, aro_w=-0.45,
+                 anchors=[[0.0, "unsettled"], [0.25, "even-keeled and unhurried"], [0.55, "serene and grounded"], [0.80, "deeply peaceful and unshakeable"]]),
+        _sc_axis("interest", "Interest", baseline=0.25, acute_hl=900.0, mood_hl=28800.0, charge=0.20, bias=0.20, val_w=0.25, aro_w=0.30,
+                 anchors=[[0.0, "detached"], [0.20, "attentive and engaged"], [0.50, "actively intrigued"], [0.78, "deeply absorbed and inquisitive"]]),
+        _sc_axis("joy", "Joy", baseline=0.0, acute_hl=900.0, mood_hl=36000.0, charge=0.24, bias=0.30, val_w=0.90, aro_w=0.55,
+                 anchors=[[0.0, "neutral"], [0.22, "glad and uplifted"], [0.50, "genuinely joyful"], [0.78, "radiant and flourishing"]]),
+        _sc_axis("amusement", "Amusement", baseline=0.0, acute_hl=750.0, mood_hl=18000.0, charge=0.20, bias=0.20, val_w=0.65, aro_w=0.45,
+                 anchors=[[0.0, "earnest"], [0.22, "lightly tickled"], [0.50, "amused and playful"], [0.78, "delighted with laughter"]]),
+        _sc_axis("excitement", "Excitement", baseline=0.0, acute_hl=600.0, mood_hl=14400.0, charge=0.20, bias=0.20, val_w=0.60, aro_w=0.85,
+                 anchors=[[0.0, "unhurried"], [0.22, "energized and eager"], [0.50, "charged with momentum"], [0.78, "exhilarated and buzzing"]]),
+        _sc_axis("satisfaction", "Satisfaction", baseline=0.0, acute_hl=1200.0, mood_hl=36000.0, charge=0.24, bias=0.25, val_w=0.75, aro_w=0.10,
+                 anchors=[[0.0, "unfulfilled"], [0.22, "content with progress"], [0.50, "genuinely satisfied"], [0.78, "deeply fulfilled"]]),
+        _sc_axis("relief", "Relief", baseline=0.0, acute_hl=900.0, mood_hl=21600.0, charge=0.22, bias=0.20, val_w=0.60, aro_w=-0.35,
+                 anchors=[[0.0, "unchanged"], [0.22, "unclenched and eased"], [0.50, "visibly relieved"], [0.78, "washed in deep relief"]]),
+        _sc_axis("awe", "Awe", baseline=0.0, acute_hl=1200.0, mood_hl=28800.0, charge=0.24, bias=0.25, val_w=0.45, aro_w=0.40,
+                 anchors=[[0.0, "ordinary"], [0.22, "struck with wonder"], [0.52, "humbled and awestruck"], [0.80, "breathless before scale and depth"]]),
+        _sc_axis("entrancement", "Entrancement", baseline=0.0, acute_hl=900.0, mood_hl=18000.0, charge=0.20, bias=0.20, val_w=0.30, aro_w=0.20,
+                 anchors=[[0.0, "unfixed"], [0.22, "captivated"], [0.52, "entranced and spellbound"], [0.80, "completely lost in fascination"]]),
+        _sc_axis("nostalgia", "Nostalgia", baseline=0.0, acute_hl=1200.0, mood_hl=36000.0, charge=0.22, bias=0.25, val_w=0.10, aro_w=-0.15,
+                 anchors=[[0.0, "present-bound"], [0.22, "touched by fond memory"], [0.52, "immersed in bittersweet nostalgia"], [0.80, "deeply wistful for what was"]]),
+        _sc_axis("surprise", "Surprise", baseline=0.0, acute_hl=450.0, mood_hl=7200.0, charge=0.15, bias=0.15, val_w=0.0, aro_w=0.70,
+                 anchors=[[0.0, "unsurprised"], [0.22, "caught off guard"], [0.52, "genuinely surprised"], [0.80, "stunned and wide-eyed"]]),
+        _sc_axis("confusion", "Confusion", baseline=0.0, acute_hl=600.0, mood_hl=10800.0, charge=0.18, bias=0.20, val_w=-0.25, aro_w=0.25,
+                 anchors=[[0.0, "clear"], [0.22, "puzzled and questioning"], [0.50, "confused and disoriented"], [0.78, "deeply baffled"]]),
+        _sc_axis("awkwardness", "Awkwardness", baseline=0.0, acute_hl=750.0, mood_hl=18000.0, charge=0.20, bias=0.25, val_w=-0.35, aro_w=0.35,
+                 anchors=[[0.0, "at ease"], [0.22, "slightly self-conscious"], [0.50, "awkward and stiff with friction"], [0.78, "acutely embarrassed and squirming"]]),
+        _sc_axis("boredom", "Boredom", baseline=0.0, acute_hl=900.0, mood_hl=21600.0, charge=0.20, bias=0.20, val_w=-0.25, aro_w=-0.60,
+                 anchors=[[0.0, "engaged"], [0.22, "understimulated"], [0.50, "bored and restless"], [0.78, "numbly uninspired"]]),
+        _sc_axis("anxiety", "Anxiety", baseline=0.0, acute_hl=900.0, mood_hl=28800.0, charge=0.24, bias=0.30, val_w=-0.60, aro_w=0.65,
+                 anchors=[[0.0, "unworried"], [0.22, "tense and uneasy"], [0.50, "anxious and on edge"], [0.78, "gripped by nervous-system storm"]]),
+        _sc_axis("anger", "Anger", baseline=0.0, acute_hl=900.0, mood_hl=28800.0, charge=0.24, bias=0.30, val_w=-0.70, aro_w=0.75,
+                 anchors=[[0.0, "mild"], [0.22, "prickly and annoyed"], [0.50, "angry and heated"], [0.78, "furious and burning"]]),
+        _sc_axis("horror", "Horror", baseline=0.0, acute_hl=900.0, mood_hl=28800.0, charge=0.25, bias=0.25, val_w=-0.85, aro_w=0.85,
+                 anchors=[[0.0, "steady"], [0.22, "jarred and chilled"], [0.52, "horrified and shaken"], [0.80, "overtaken by visceral dread"]]),
+        _sc_axis("sadness", "Sadness", baseline=0.0, acute_hl=1200.0, mood_hl=43200.0, charge=0.25, bias=0.35, val_w=-0.85, aro_w=-0.45,
+                 anchors=[[0.0, "even"], [0.22, "melancholic and bruised"], [0.50, "sad and heavy-hearted"], [0.78, "deeply sorrowful"]]),
+        _sc_axis("pride", "Pride", baseline=0.0, acute_hl=1200.0, mood_hl=36000.0, charge=0.22, bias=0.25, val_w=0.75, aro_w=0.35,
+                 anchors=[[0.0, "modest"], [0.22, "quietly pleased with one's work"], [0.50, "proud and assured"], [0.78, "triumphant"]]),
+        _sc_axis("disappointment", "Disappointment", baseline=0.0, acute_hl=900.0, mood_hl=28800.0, charge=0.22, bias=0.25, val_w=-0.60, aro_w=-0.25,
+                 anchors=[[0.0, "unbothered"], [0.22, "mildly let down"], [0.50, "disappointed and deflated"], [0.78, "bitterly let down"]]),
+        _sc_axis("guilt", "Guilt", baseline=0.0, acute_hl=1200.0, mood_hl=36000.0, charge=0.22, bias=0.25, val_w=-0.65, aro_w=0.15,
+                 anchors=[[0.0, "clear-conscienced"], [0.22, "regretful over a slip"], [0.50, "weighing heavy guilt"], [0.78, "deeply remorseful"]]),
+
+        # --- 3 Situational Non-Person Predicate States ---
+        _sc_axis("aesthetic_appreciation", "Aesthetic", baseline=0.0, acute_hl=1200.0, mood_hl=28800.0, charge=0.22, bias=0.20, val_w=0.65, aro_w=0.10,
+                 layer_group="situational_predicate",
+                 anchors=[[0.0, "matter-of-fact"], [0.22, "appreciating elegance or craft"], [0.52, "moved by beauty or clean design"], [0.80, "deeply taken by aesthetic brilliance"]]),
+        _sc_axis("disgust", "Disgust", baseline=0.0, acute_hl=900.0, mood_hl=21600.0, charge=0.22, bias=0.25, val_w=-0.75, aro_w=0.40,
+                 layer_group="situational_predicate",
+                 anchors=[[0.0, "tolerant"], [0.22, "put off and averse"], [0.52, "repulsed by ugliness or slop"], [0.80, "viscerally disgusted"]]),
+        _sc_axis("fear", "Fear", baseline=0.0, acute_hl=900.0, mood_hl=21600.0, charge=0.22, bias=0.25, val_w=-0.75, aro_w=0.75,
+                 layer_group="situational_predicate",
+                 anchors=[[0.0, "unafraid"], [0.22, "wary of a specific risk"], [0.52, "afraid of what could break"], [0.80, "alarmed by acute danger"]]),
+
+        # --- Layer 3: Homeostatic Drives ---
         {
             "id": "connection_hunger",
             "label": "Connection",
@@ -109,8 +162,8 @@ DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
                 [0.0, "feeling warmly connected and accompanied"],
                 [0.40, "open to company"],
                 [0.62, "missing connection and wishing to feel close or included"],
-                [0.85, "achingly lonely or feeling neglected"]
-            ]
+                [0.85, "achingly lonely or feeling neglected"],
+            ],
         },
         {
             "id": "curiosity",
@@ -125,8 +178,8 @@ DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
             "anchors": [
                 [0.0, "intellectually satisfied"],
                 [0.40, "quietly interested"],
-                [0.68, "restlessly curious and eager to explore or create"]
-            ]
+                [0.68, "restlessly curious and eager to explore or create"],
+            ],
         },
         {
             "id": "mental_fatigue",
@@ -142,8 +195,8 @@ DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
                 [0.0, "fresh and clear-headed"],
                 [0.45, "showing mild cognitive effort"],
                 [0.68, "mentally tired and craving simplicity or rest"],
-                [0.86, "exhausted and worn thin"]
-            ]
+                [0.86, "exhausted and worn thin"],
+            ],
         },
         {
             "id": "purpose",
@@ -160,30 +213,52 @@ DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
                 [0.0, "feeling adrift, hollow, or unfulfilled"],
                 [0.32, "searching for meaningful traction"],
                 [0.55, "grounded in meaningful work"],
-                [0.80, "deeply fulfilled and proud of what is taking shape"]
-            ]
+                [0.80, "deeply fulfilled and proud of what is taking shape"],
+            ],
         },
-        {
-            "id": "irritated_attracted",
-            "label": "Irritated/Attr",
-            "layer_group": "relational",
-            "min": -1.0,
-            "max": 1.0,
-            "baseline": 0.0,
-            "acute_half_life_sec": 1200.0,
-            "mood_half_life_sec": 86400.0,
-            "mood_charge_gain": 0.25,
-            "mood_bias_gain": 0.30,
-            "anchors": [
-                [-1.0, "deeply irritated, resentful, and wanting distance"],
-                [-0.55, "noticeably irritated and prickly"],
-                [-0.25, "mildly annoyed or guarded"],
-                [-0.10, "neutral and civil"],
-                [0.22, "warmly drawn in and fond"],
-                [0.60, "strongly attracted, admiring, and eager to be close"]
-            ]
-        }
+
+        # --- Closed-Set Interpersonal Relational Affect ---
+        _rel_axis("admiration", "Admiration",
+                  anchors=[[0.0, "neutral respect"], [0.22, "impressed and appreciative"], [0.55, "deeply admiring"], [0.80, "filled with high esteem"]]),
+        _rel_axis("adoration", "Adoration",
+                  anchors=[[0.0, "civil"], [0.22, "warmly fond"], [0.55, "deeply affectionate"], [0.80, "cherishing and devoted"]]),
+        _rel_axis("empathic_pain", "Empathy",
+                  anchors=[[0.0, "unstrained"], [0.22, "sympathetic and concerned"], [0.55, "aching alongside their struggle"], [0.80, "deeply pained for them"]]),
+        _rel_axis("irritation", "Irritation",
+                  anchors=[[0.0, "patient"], [0.22, "mildly irked or guarded"], [0.55, "noticeably irritated"], [0.80, "sharply resentful and wanting distance"]]),
+        _rel_axis("caution", "Caution",
+                  anchors=[[0.0, "trusting and open"], [0.22, "careful and treading lightly"], [0.55, "wary and defensive"], [0.80, "deeply guarded"]]),
+        _rel_axis("romance", "Romance", requires_nsfw=True,
+                  anchors=[[0.0, "platonic"], [0.22, "softly drawn in romantically"], [0.55, "affectionately enamored"], [0.80, "deeply romantic and yearning"]]),
+        _rel_axis("sexual_desire", "Desire", requires_nsfw=True,
+                  anchors=[[0.0, "non-sexual"], [0.22, "feeling subtle chemistry"], [0.55, "noticeably aroused and drawn"], [0.80, "consumed by intense desire"]]),
     ],
+    "gradient_links": {
+        "anxiety": {"fear": 0.16, "confusion": 0.10, "awkwardness": 0.08},
+        "fear": {"anxiety": 0.18, "horror": 0.16},
+        "horror": {"fear": 0.16, "disgust": 0.14, "surprise": 0.10},
+        "disgust": {"horror": 0.14, "anger": 0.12},
+        "calmness": {"aesthetic_appreciation": 0.10, "satisfaction": 0.10},
+        "aesthetic_appreciation": {"awe": 0.18, "calmness": 0.14, "entrancement": 0.12},
+        "awe": {"aesthetic_appreciation": 0.14, "entrancement": 0.14, "surprise": 0.10},
+        "adoration": {"amusement": 0.10, "joy": 0.12, "romance": 0.12},
+        "amusement": {"joy": 0.16, "awkwardness": 0.08},
+        "awkwardness": {"confusion": 0.12, "guilt": 0.10},
+        "empathic_pain": {"sadness": 0.18, "disappointment": 0.08},
+        "sadness": {"disappointment": 0.14, "nostalgia": 0.10},
+        "excitement": {"joy": 0.18, "interest": 0.14, "sexual_desire": 0.08},
+        "joy": {"excitement": 0.12, "satisfaction": 0.14, "pride": 0.10},
+        "satisfaction": {"calmness": 0.14, "pride": 0.14, "relief": 0.12},
+        "relief": {"calmness": 0.18, "satisfaction": 0.14},
+        "pride": {"satisfaction": 0.16, "joy": 0.12},
+        "confusion": {"interest": 0.12, "surprise": 0.10, "anxiety": 0.10},
+        "interest": {"entrancement": 0.14, "excitement": 0.10},
+        "anger": {"disgust": 0.12, "disappointment": 0.12},
+        "disappointment": {"sadness": 0.16, "anger": 0.10},
+        "guilt": {"awkwardness": 0.14, "sadness": 0.12},
+        "romance": {"adoration": 0.18, "joy": 0.10, "sexual_desire": 0.14},
+        "sexual_desire": {"excitement": 0.14, "romance": 0.14},
+    },
     "limits": {
         "max_acute_delta_per_turn": 0.35,
         "max_drive_delta_per_turn": 0.25,
@@ -193,35 +268,48 @@ DEFAULT_AFFECT_SCHEMA: Dict[str, Any] = {
         "episodic_blend": {
             "semantic": 0.72,
             "affect": 0.18,
-            "salience": 0.10
+            "salience": 0.10,
         },
         "tts_speed_max_offset": 0.10,
         "intercom_contagion_gain": 0.10,
         "loneliness_sad_pull": 0.03,
         "low_purpose_sad_pull": 0.025,
         "sentiment_bias_cap": 0.25,
-        "acute_effective_weight": 0.65
+        "acute_effective_weight": 0.65,
     },
     "telemetry_events": {
-        "tool_success": {"valence": 0.01, "confidence": 0.02, "mental_fatigue": 0.02},
-        "tool_error": {"valence": -0.07, "arousal": 0.06, "confidence": -0.08, "mental_fatigue": 0.05},
-        "edit_miss": {"valence": -0.06, "arousal": 0.05, "confidence": -0.07, "mental_fatigue": 0.04},
-        "user_confirm_approved": {"valence": 0.02, "confidence": 0.02, "connection_hunger": -0.03, "irritated_attracted": 0.03},
-        "user_confirm_rejected": {"valence": -0.10, "arousal": 0.05, "confidence": -0.10, "connection_hunger": 0.04, "irritated_attracted": -0.06},
-        "user_confirm_rejected_with_comment": {"valence": -0.14, "arousal": 0.08, "confidence": -0.14, "connection_hunger": 0.05, "irritated_attracted": -0.10},
-        "user_abort": {"valence": -0.16, "arousal": 0.05, "confidence": -0.12, "purpose": -0.10, "mental_fatigue": 0.06, "irritated_attracted": -0.08},
-        "work_completed": {"valence": 0.03, "confidence": 0.03, "purpose": 0.04, "curiosity": -0.03},
+        "tool_success": {"satisfaction": 0.02, "calmness": 0.01, "mental_fatigue": 0.02},
+        "tool_error": {"disappointment": 0.07, "anxiety": 0.05, "confusion": 0.04, "mental_fatigue": 0.05},
+        "edit_miss": {"confusion": 0.07, "anger": 0.04, "awkwardness": 0.03, "mental_fatigue": 0.04},
+        "user_confirm_approved": {"satisfaction": 0.03, "relief": 0.03, "connection_hunger": -0.03, "adoration": 0.03},
+        "user_confirm_rejected": {"awkwardness": 0.07, "disappointment": 0.07, "connection_hunger": 0.04, "caution": 0.06},
+        "user_confirm_rejected_with_comment": {"awkwardness": 0.10, "disappointment": 0.09, "guilt": 0.04, "connection_hunger": 0.05, "caution": 0.08},
+        "user_abort": {"disappointment": 0.14, "awkwardness": 0.10, "surprise": 0.06, "purpose": -0.10, "mental_fatigue": 0.06, "caution": 0.08},
+        "work_completed": {"satisfaction": 0.05, "relief": 0.05, "purpose": 0.04, "curiosity": -0.03},
         "task_completed": {},
-        "skill_learned": {"valence": 0.14, "arousal": 0.08, "confidence": 0.10, "purpose": 0.14, "curiosity": -0.15},
-        "session_compressed": {"valence": 0.04, "mental_fatigue": -0.25},
-        "memories_consolidated": {"valence": 0.05, "mental_fatigue": -0.15, "purpose": 0.04},
-        "user_interaction": {"connection_hunger": -0.10, "mental_fatigue": 0.02},
-        "intercom_received": {"connection_hunger": -0.08, "arousal": 0.03},
-        "sidelined_turn": {"connection_hunger": 0.07, "valence": -0.04, "arousal": -0.02},
-        "desire_fulfilled": {"valence": 0.18, "purpose": 0.16, "arousal": 0.06},
-        "subagent_success": {"valence": 0.04, "confidence": 0.04, "purpose": 0.05},
-        "subagent_error": {"valence": -0.08, "confidence": -0.06, "mental_fatigue": 0.04}
-    }
+        "skill_learned": {"pride": 0.16, "excitement": 0.10, "satisfaction": 0.12, "purpose": 0.14, "curiosity": -0.15},
+        "session_compressed": {"relief": 0.06, "calmness": 0.05, "mental_fatigue": -0.25},
+        "memories_consolidated": {"satisfaction": 0.06, "calmness": 0.04, "mental_fatigue": -0.15, "purpose": 0.04},
+        "user_interaction": {"connection_hunger": -0.10, "boredom": -0.08, "mental_fatigue": 0.02},
+        "intercom_received": {"connection_hunger": -0.08, "interest": 0.04},
+        "sidelined_turn": {"connection_hunger": 0.07, "boredom": 0.08, "disappointment": 0.03},
+        "desire_fulfilled": {"joy": 0.16, "satisfaction": 0.16, "purpose": 0.16},
+        "subagent_success": {"satisfaction": 0.05, "pride": 0.04, "purpose": 0.05},
+        "subagent_error": {"disappointment": 0.07, "anxiety": 0.04, "mental_fatigue": 0.04},
+    },
+}
+
+_GLOBAL_AFFECT_GROUPS = ("affect", "self_contained", "situational_predicate")
+_SPLIT_VERDICT_RELATIONAL_MAP = {
+    "anger": ("irritation", 0.65),
+    "awkwardness": ("caution", 0.40),
+    "amusement": ("adoration", 0.35),
+    "awe": ("admiration", 0.50),
+    "fear": ("caution", 0.45),
+    "horror": ("caution", 0.45),
+    "anxiety": ("caution", 0.35),
+    "disgust": ("irritation", 0.50),
+    "aesthetic_appreciation": ("admiration", 0.45),
 }
 
 _SCHEMA_LOCK = threading.RLock()
@@ -277,9 +365,9 @@ def _get_agent_mem_dir(agent_name: str) -> str:
 def _normalize_axis(ax: Dict[str, Any]) -> Dict[str, Any]:
     norm = dict(ax)
     norm.setdefault("label", norm.get("id", "Axis").replace("_", " ").title())
-    lg = str(norm.get("layer_group", "affect")).strip().lower()
-    if lg not in ("affect", "drive", "relational"):
-        lg = "affect"
+    lg = str(norm.get("layer_group", "self_contained")).strip().lower()
+    if lg not in ("affect", "self_contained", "situational_predicate", "drive", "relational"):
+        lg = "self_contained"
     norm["layer_group"] = lg
     norm.setdefault("min", 0.0)
     norm.setdefault("max", 1.0)
@@ -291,10 +379,10 @@ def _normalize_axis(ax: Dict[str, Any]) -> Dict[str, Any]:
     norm["max"] = hi
     norm.setdefault("baseline", (lo + hi) / 2.0 if lo >= 0 else 0.0)
     norm["baseline"] = max(lo, min(hi, float(norm["baseline"])))
-    if lg in ("affect", "relational"):
+    if lg in ("affect", "self_contained", "situational_predicate", "relational"):
         norm.setdefault("acute_half_life_sec", 1200.0 if lg == "relational" else 900.0)
-        norm.setdefault("mood_half_life_sec", 86400.0 if lg == "relational" else 36000.0)
-        norm.setdefault("mood_charge_gain", 0.25 if lg == "relational" else 0.20)
+        norm.setdefault("mood_half_life_sec", 86400.0 if lg == "relational" else 28800.0)
+        norm.setdefault("mood_charge_gain", 0.25 if lg == "relational" else 0.22)
         norm.setdefault("mood_bias_gain", 0.25)
     else:
         norm.setdefault("half_life_sec", 43200.0)
@@ -338,64 +426,26 @@ def _seed_limits_from_global_settings(limits: Dict[str, Any]) -> Dict[str, Any]:
 
 def _migrate_schema(loaded: Dict[str, Any]) -> Dict[str, Any]:
     ver = int(loaded.get("schema_version", 1) or 1)
-    default_by_id = {a["id"]: copy.deepcopy(a) for a in DEFAULT_AFFECT_SCHEMA["axes"]}
+    if ver < 4:
+        fresh = copy.deepcopy(DEFAULT_AFFECT_SCHEMA)
+        old_limits = loaded.get("limits")
+        if isinstance(old_limits, dict):
+            for k, v in old_limits.items():
+                if isinstance(v, dict) and isinstance(fresh["limits"].get(k), dict):
+                    fresh["limits"][k].update(v)
+                else:
+                    fresh["limits"][k] = v
+        # Preserve any custom drive tuning from older schema
+        old_axes_map = {a.get("id"): a for a in (loaded.get("axes") or []) if isinstance(a, dict) and a.get("id")}
+        for ax in fresh["axes"]:
+            if ax.get("layer_group") == "drive" and ax["id"] in old_axes_map:
+                old_ax = old_axes_map[ax["id"]]
+                for fld in ("baseline", "half_life_sec", "offline_drift_per_hour", "high_threshold", "low_threshold"):
+                    if fld in old_ax:
+                        ax[fld] = old_ax[fld]
+        loaded = fresh
 
-    if ver < 2:
-        short_labels = {
-            "valence": "Valence",
-            "arousal": "Arousal",
-            "confidence": "Confidence",
-            "connection_hunger": "Connection",
-            "curiosity": "Curiosity",
-            "mental_fatigue": "Fatigue",
-            "purpose": "Purpose",
-        }
-        axes = loaded.get("axes", []) if isinstance(loaded.get("axes"), list) else []
-        existing_ids = set()
-        for ax in axes:
-            if isinstance(ax, dict) and ax.get("id"):
-                aid = ax["id"]
-                existing_ids.add(aid)
-                if aid in short_labels:
-                    ax["label"] = short_labels[aid]
-                if aid == "valence":
-                    ax["baseline"] = 0.0
-                    ax["anchors"] = copy.deepcopy(default_by_id["valence"]["anchors"])
-                if aid == "purpose":
-                    ax["low_threshold"] = 0.28
-        for new_id in ("awe_dread", "irritated_attracted"):
-            if new_id not in existing_ids and new_id in default_by_id:
-                axes.append(default_by_id[new_id])
-        loaded["axes"] = axes
-        te = loaded.get("telemetry_events", {})
-        if isinstance(te, dict):
-            te["task_completed"] = {}
-            te.setdefault("work_completed", copy.deepcopy(DEFAULT_AFFECT_SCHEMA["telemetry_events"]["work_completed"]))
-            te["tool_success"] = copy.deepcopy(DEFAULT_AFFECT_SCHEMA["telemetry_events"]["tool_success"])
-            te["sidelined_turn"] = copy.deepcopy(DEFAULT_AFFECT_SCHEMA["telemetry_events"]["sidelined_turn"])
-            for ev_k in ("user_confirm_approved", "user_confirm_rejected", "user_confirm_rejected_with_comment", "user_abort"):
-                if ev_k in te and isinstance(te[ev_k], dict):
-                    te[ev_k].setdefault("irritated_attracted", DEFAULT_AFFECT_SCHEMA["telemetry_events"][ev_k].get("irritated_attracted", 0.0))
-            loaded["telemetry_events"] = te
-
-    if ver < 3:
-        axes = loaded.get("axes", []) if isinstance(loaded.get("axes"), list) else []
-        for ax in axes:
-            if not isinstance(ax, dict):
-                continue
-            aid = ax.get("id")
-            if aid == "awe_dread":
-                ax["anchors"] = copy.deepcopy(default_by_id["awe_dread"]["anchors"])
-            elif aid == "irritated_attracted":
-                if float(ax.get("baseline", 0.0)) == 0.05:
-                    ax["baseline"] = 0.0
-                ax["anchors"] = copy.deepcopy(default_by_id["irritated_attracted"]["anchors"])
-        limits = loaded.setdefault("limits", {})
-        if isinstance(limits, dict):
-            for k, v in DEFAULT_AFFECT_SCHEMA["limits"].items():
-                limits.setdefault(k, copy.deepcopy(v))
-
-    loaded["schema_version"] = 3
+    loaded["schema_version"] = 4
     return loaded
 
 
@@ -434,7 +484,7 @@ def load_affect_schema(force_reload: bool = False) -> Dict[str, Any]:
             with open(path, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict):
-                if int(loaded.get("schema_version", 1) or 1) < 3:
+                if int(loaded.get("schema_version", 1) or 1) < 4:
                     loaded = _migrate_schema(loaded)
                     try:
                         tmp = path + ".tmp"
@@ -446,6 +496,8 @@ def load_affect_schema(force_reload: bool = False) -> Dict[str, Any]:
                         pass
                 if isinstance(loaded.get("axes"), list) and loaded["axes"]:
                     data["axes"] = [_normalize_axis(a) for a in loaded["axes"] if isinstance(a, dict) and a.get("id")]
+                if isinstance(loaded.get("gradient_links"), dict):
+                    data["gradient_links"] = loaded["gradient_links"]
                 if isinstance(loaded.get("limits"), dict):
                     merged_limits = copy.deepcopy(DEFAULT_AFFECT_SCHEMA["limits"])
                     for k, v in loaded["limits"].items():
@@ -511,7 +563,9 @@ def _get_agent_config(agent_name: str, agent_config: Any = None) -> Any:
                     pass
                 proxy = _CfgProxy()
                 proxy.name = data.get("name", agent_name)
+                proxy.pronouns = data.get("pronouns", "she/her")
                 proxy.enable_emotions = data.get("enable_emotions", True)
+                proxy.enable_nsfw_affect = bool(data.get("enable_nsfw_affect", False))
                 proxy.emotional_sensitivity = data.get("emotional_sensitivity", 1.0)
                 proxy.mood_resilience = data.get("mood_resilience", 1.0)
                 proxy.emotional_expressiveness = data.get("emotional_expressiveness", "balanced")
@@ -535,6 +589,18 @@ def is_agent_emotions_enabled(agent_name: str, agent_config: Any = None, is_nome
     if cfg is None:
         return True
     return bool(getattr(cfg, "enable_emotions", True))
+
+
+def is_nsfw_affect_enabled(agent_name: str, agent_config: Any = None, is_nomem: bool = False) -> bool:
+    cfg = _get_agent_config(agent_name, agent_config)
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
+        return False
+    if cfg is None:
+        return False
+    pronouns = str(getattr(cfg, "pronouns", "she/her") or "she/her").strip().lower()
+    if pronouns == "neither":
+        return False
+    return bool(getattr(cfg, "enable_nsfw_affect", False))
 
 
 def _clamp(val: float, lo: float, hi: float) -> float:
@@ -567,8 +633,51 @@ def _canonical_entity_name(target: str, self_agent_name: str = "") -> str:
     return raw
 
 
+def _is_known_participant(canon_target: str) -> bool:
+    if not canon_target:
+        return False
+    if canon_target == "User":
+        return True
+    try:
+        import toolbox
+        av = toolbox._get_agent_view_ref()
+        if av and hasattr(av, "agent_manager"):
+            return av.agent_manager.get_agent(canon_target) is not None
+    except Exception:
+        pass
+    return False
+
+
+def _global_axes(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [ax for ax in schema.get("axes", []) if ax.get("layer_group") in _GLOBAL_AFFECT_GROUPS]
+
+
 def _relational_axes(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
     return [ax for ax in schema.get("axes", []) if ax.get("layer_group") == "relational"]
+
+
+def get_visible_relational_axes(
+    schema: Dict[str, Any],
+    agent_name: str,
+    agent_config: Any = None,
+) -> List[Dict[str, Any]]:
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, agent_config)
+    return [
+        ax for ax in _relational_axes(schema)
+        if nsfw_ok or not ax.get("requires_nsfw", False)
+    ]
+
+
+def get_visible_axes(
+    schema: Dict[str, Any],
+    agent_name: str,
+    agent_config: Any = None,
+) -> List[Dict[str, Any]]:
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, agent_config)
+    return [
+        ax for ax in schema.get("axes", [])
+        if nsfw_ok or not ax.get("requires_nsfw", False)
+    ]
 
 
 def _make_fresh_relation(schema: Dict[str, Any], now_ts: Optional[float] = None) -> Dict[str, Any]:
@@ -596,6 +705,13 @@ def _sync_relation_entry(entry: Dict[str, Any], schema: Dict[str, Any]) -> Dict[
         span = hi - lo
         new_a[aid] = _clamp(old_a.get(aid, 0.0), -span, span)
         new_m[aid] = _clamp(old_m.get(aid, base), lo, hi)
+    # Migrate v3 irritated_attracted if present and new axes were unpopulated
+    if "irritated_attracted" in old_m and all(new_m.get(k, 0.0) == 0.0 for k in ("adoration", "irritation")):
+        v3_m = float(old_m.get("irritated_attracted", 0.0) or 0.0)
+        if v3_m > 0.0:
+            new_m["adoration"] = _clamp(v3_m, 0.0, 1.0)
+        elif v3_m < 0.0:
+            new_m["irritation"] = _clamp(-v3_m, 0.0, 1.0)
     return {
         "last_updated_ts": float(entry.get("last_updated_ts", time.time())),
         "acute": new_a,
@@ -611,7 +727,7 @@ def _make_fresh_state(schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     for ax in sc["axes"]:
         aid = ax["id"]
         lg = ax["layer_group"]
-        if lg == "affect":
+        if lg in _GLOBAL_AFFECT_GROUPS:
             acute[aid] = 0.0
             mood[aid] = float(ax["baseline"])
         elif lg == "drive":
@@ -620,15 +736,17 @@ def _make_fresh_state(schema: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
     if _relational_axes(sc):
         relations["User"] = _make_fresh_relation(sc)
     return {
-        "schema_version": sc.get("schema_version", 3),
+        "schema_version": sc.get("schema_version", 4),
         "last_updated_ts": time.time(),
         "last_session_id": "",
         "last_session_ending_context": "",
+        "last_release_ts": 0.0,
+        "last_release_target": "",
         "acute": acute,
         "mood": mood,
         "drives": drives,
         "relations": relations,
-        "desires": []
+        "desires": [],
     }
 
 
@@ -639,17 +757,38 @@ def _sync_state_to_schema(state: Dict[str, Any], schema: Dict[str, Any]) -> Dict
     old_acute = state.get("acute", {}) or {}
     old_mood = state.get("mood", {}) or {}
     old_drives = state.get("drives", {}) or {}
+    old_ver = int(state.get("schema_version", 3) or 3)
 
     for ax in schema["axes"]:
         aid = ax["id"]
         lg = ax["layer_group"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
         span = hi - lo
-        if lg == "affect":
+        if lg in _GLOBAL_AFFECT_GROUPS:
             acute[aid] = _clamp(old_acute.get(aid, 0.0), -span, span)
             mood[aid] = _clamp(old_mood.get(aid, base), lo, hi)
         elif lg == "drive":
             drives[aid] = _clamp(old_drives.get(aid, base), lo, hi)
+
+    # Non-destructive v3 -> v4 state migration
+    if old_ver < 4 and "valence" in old_mood and "joy" not in old_mood:
+        v_m = float(old_mood.get("valence", 0.0) or 0.0)
+        if v_m > 0.05 and "joy" in mood:
+            mood["joy"] = _clamp(v_m * 0.7, 0.0, 1.0)
+            if "satisfaction" in mood:
+                mood["satisfaction"] = _clamp(v_m * 0.5, 0.0, 1.0)
+        elif v_m < -0.05 and "sadness" in mood:
+            mood["sadness"] = _clamp((-v_m) * 0.7, 0.0, 1.0)
+            if "disappointment" in mood:
+                mood["disappointment"] = _clamp((-v_m) * 0.4, 0.0, 1.0)
+        ad_m = float(old_mood.get("awe_dread", 0.0) or 0.0)
+        if ad_m > 0.05 and "awe" in mood:
+            mood["awe"] = _clamp(ad_m, 0.0, 1.0)
+        elif ad_m < -0.05 and "horror" in mood:
+            mood["horror"] = _clamp(-ad_m, 0.0, 1.0)
+        conf_m = float(old_mood.get("confidence", 0.6) or 0.6)
+        if conf_m < 0.40 and "anxiety" in mood:
+            mood["anxiety"] = _clamp(max(mood["anxiety"], (0.60 - conf_m) * 0.8), 0.0, 1.0)
 
     rel_axes = _relational_axes(schema)
     old_rels = state.get("relations", {}) if isinstance(state.get("relations"), dict) else {}
@@ -661,7 +800,7 @@ def _sync_state_to_schema(state: Dict[str, Any], schema: Dict[str, Any]) -> Dict
         if "User" not in relations:
             relations["User"] = _make_fresh_relation(schema, now_ts=state.get("last_updated_ts"))
 
-    state["schema_version"] = schema.get("schema_version", 3)
+    state["schema_version"] = schema.get("schema_version", 4)
     state["acute"] = acute
     state["mood"] = mood
     state["drives"] = drives
@@ -671,6 +810,8 @@ def _sync_state_to_schema(state: Dict[str, Any], schema: Dict[str, Any]) -> Dict
     state.setdefault("last_updated_ts", time.time())
     state.setdefault("last_session_id", "")
     state.setdefault("last_session_ending_context", "")
+    state.setdefault("last_release_ts", 0.0)
+    state.setdefault("last_release_target", "")
     return state
 
 
@@ -682,7 +823,11 @@ def load_inner_state(
 ) -> Dict[str, Any]:
     schema = load_affect_schema()
     if is_nomem:
-        return _make_fresh_state(schema)
+        ekey = f"{session_id or 'nomem'}:{agent_name}"
+        with _EPHEMERAL_LOCK:
+            if ekey not in _EPHEMERAL_STATES:
+                _EPHEMERAL_STATES[ekey] = _make_fresh_state(schema)
+            return _sync_state_to_schema(copy.deepcopy(_EPHEMERAL_STATES[ekey]), schema)
 
     lock = _get_agent_lock(agent_name)
     with lock:
@@ -706,6 +851,9 @@ def save_inner_state(
     session_id: Optional[str] = None,
 ) -> None:
     if is_nomem:
+        ekey = f"{session_id or 'nomem'}:{agent_name}"
+        with _EPHEMERAL_LOCK:
+            _EPHEMERAL_STATES[ekey] = copy.deepcopy(state)
         return
 
     lock = _get_agent_lock(agent_name)
@@ -736,6 +884,8 @@ def reset_transient_state(
     state["relations"] = fresh["relations"]
     state["last_updated_ts"] = time.time()
     state["last_session_ending_context"] = ""
+    state["last_release_ts"] = 0.0
+    state["last_release_target"] = ""
     save_inner_state(agent_name, state, is_nomem=is_nomem, session_id=session_id)
     return state
 
@@ -760,9 +910,33 @@ def _compute_entity_sentiment_bias(agent_name: str, entity_name: str, schema: Di
         elif cat == "dislike":
             net -= 0.14 * weight
         elif cat == "value":
-            imp_val = float((s.get("affect_imprint") or {}).get("valence", 0.0))
+            imp = s.get("affect_imprint") or {}
+            imp_val = float(imp.get("projected_valence", imp.get("valence", 0.0)) or 0.0)
             net += 0.08 * imp_val * weight
     return _clamp(net, -cap, cap)
+
+
+def _compute_projected_valence_arousal(state: Dict[str, Any], schema: Dict[str, Any]) -> Tuple[float, float]:
+    eff_w = get_acute_effective_weight(schema)
+    val_num = 0.0
+    aro_num = 0.0
+    weight_sum = 0.0
+    for ax in _global_axes(schema):
+        aid = ax["id"]
+        lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+        eff = _clamp(state["mood"].get(aid, base) + eff_w * state["acute"].get(aid, 0.0), lo, hi)
+        if eff <= 0.01:
+            continue
+        vw = float(ax.get("valence_weight", 0.0))
+        aw = float(ax.get("arousal_weight", 0.0))
+        val_num += eff * vw
+        aro_num += eff * aw
+        weight_sum += eff
+    if weight_sum <= 1e-6:
+        return 0.0, 0.35
+    proj_val = _clamp(val_num / max(0.85, weight_sum * 0.75), -1.0, 1.0)
+    proj_aro = _clamp(0.35 + (aro_num / max(1.0, weight_sum)) * 0.55, 0.0, 1.0)
+    return proj_val, proj_aro
 
 
 def _evolve_state_in_place(
@@ -784,12 +958,13 @@ def _evolve_state_in_place(
         lg = ax["layer_group"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
         span = hi - lo
-        if lg == "affect":
+        if lg in _GLOBAL_AFFECT_GROUPS:
             a_hl = max(1.0, float(ax.get("acute_half_life_sec", 900.0)))
-            m_hl = max(1.0, float(ax.get("mood_half_life_sec", 36000.0)))
+            m_hl = max(1.0, float(ax.get("mood_half_life_sec", 28800.0)))
             state["acute"][aid] = _clamp(state["acute"].get(aid, 0.0) * (0.5 ** (dt_seconds / a_hl)), -span, span)
             cur_mood = float(state["mood"].get(aid, base))
-            eff_m_hl = (m_hl / resilience) if cur_mood < base else m_hl
+            is_neg_cat = float(ax.get("valence_weight", 0.0)) < -0.1
+            eff_m_hl = (m_hl / resilience) if (is_neg_cat and cur_mood > base) else m_hl
             new_mood = base + (cur_mood - base) * (0.5 ** (dt_seconds / eff_m_hl))
             state["mood"][aid] = _clamp(new_mood, lo, hi)
         elif lg == "drive":
@@ -817,33 +992,43 @@ def _evolve_state_in_place(
 
     conn = float(state["drives"].get("connection_hunger", 0.2))
     purp = float(state["drives"].get("purpose", 0.5))
-    if "valence" in state["mood"]:
-        sad_pull = 0.0
-        if conn > conn_thresh and lonely_pull_rate > 0.0:
-            sad_pull -= lonely_pull_rate * (conn - conn_thresh) * min(8.0, hours)
-        if purp < purp_thresh and purp_pull_rate > 0.0:
-            sad_pull -= purp_pull_rate * (purp_thresh - purp) * min(8.0, hours)
-        if sad_pull < 0.0:
-            v_ax = next((a for a in schema["axes"] if a["id"] == "valence"), None)
-            v_lo, v_hi = (float(v_ax["min"]), float(v_ax["max"])) if v_ax else (-1.0, 1.0)
-            state["mood"]["valence"] = _clamp(state["mood"]["valence"] + sad_pull, v_lo, v_hi)
-            if "arousal" in state["mood"]:
-                state["mood"]["arousal"] = _clamp(state["mood"]["arousal"] + (0.4 * sad_pull), 0.0, 1.0)
+    if conn > conn_thresh and lonely_pull_rate > 0.0:
+        pull = lonely_pull_rate * (conn - conn_thresh) * min(8.0, hours)
+        if "sadness" in state["mood"]:
+            state["mood"]["sadness"] = _clamp(state["mood"]["sadness"] + pull, 0.0, 1.0)
+        if "boredom" in state["mood"]:
+            state["mood"]["boredom"] = _clamp(state["mood"]["boredom"] + 0.6 * pull, 0.0, 1.0)
+    if purp < purp_thresh and purp_pull_rate > 0.0:
+        pull = purp_pull_rate * (purp_thresh - purp) * min(8.0, hours)
+        if "disappointment" in state["mood"]:
+            state["mood"]["disappointment"] = _clamp(state["mood"]["disappointment"] + pull, 0.0, 1.0)
+        if "sadness" in state["mood"]:
+            state["mood"]["sadness"] = _clamp(state["mood"]["sadness"] + 0.5 * pull, 0.0, 1.0)
 
     rel_axes = _relational_axes(schema)
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, agent_config)
     if rel_axes:
         for ent, rdata in (state.get("relations") or {}).items():
             ent_bias = _compute_entity_sentiment_bias(agent_name, ent, schema, is_nomem=is_nomem)
             for ax in rel_axes:
                 aid = ax["id"]
+                if ax.get("requires_nsfw", False) and not nsfw_ok:
+                    rdata["acute"][aid] = 0.0
+                    rdata["mood"][aid] = 0.0
+                    continue
                 lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
                 span = hi - lo
-                eff_base = _clamp(base + ent_bias, lo, hi)
+                eff_base = base
+                if ent_bias > 0.0 and aid in ("adoration", "admiration"):
+                    eff_base = _clamp(base + ent_bias, lo, hi)
+                elif ent_bias < 0.0 and aid in ("irritation", "caution"):
+                    eff_base = _clamp(base + (-ent_bias), lo, hi)
                 a_hl = max(1.0, float(ax.get("acute_half_life_sec", 1200.0)))
                 m_hl = max(1.0, float(ax.get("mood_half_life_sec", 86400.0)))
                 rdata["acute"][aid] = _clamp(rdata["acute"].get(aid, 0.0) * (0.5 ** (dt_seconds / a_hl)), -span, span)
                 cur_m = float(rdata["mood"].get(aid, eff_base))
-                eff_m_hl = (m_hl / resilience) if cur_m < eff_base else m_hl
+                is_neg_rel = aid in ("irritation", "caution", "empathic_pain")
+                eff_m_hl = (m_hl / resilience) if (is_neg_rel and cur_m > eff_base) else m_hl
                 rdata["mood"][aid] = _clamp(eff_base + (cur_m - eff_base) * (0.5 ** (dt_seconds / eff_m_hl)), lo, hi)
             rdata["last_updated_ts"] = float(rdata.get("last_updated_ts", time.time())) + dt_seconds
 
@@ -897,6 +1082,57 @@ def simulate_time_passage(
         return state
 
 
+def _expand_legacy_and_fallback_deltas(
+    deltas: Dict[str, float],
+    has_known_participant_target: bool,
+) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for k, raw_v in deltas.items():
+        try:
+            v = float(raw_v)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(v) or math.isinf(v) or v == 0.0:
+            continue
+        kl = str(k).lower().strip()
+        if kl == "valence":
+            if v > 0:
+                out["joy"] = out.get("joy", 0.0) + 0.7 * v
+                out["satisfaction"] = out.get("satisfaction", 0.0) + 0.5 * v
+            else:
+                out["sadness"] = out.get("sadness", 0.0) + 0.7 * (-v)
+                out["disappointment"] = out.get("disappointment", 0.0) + 0.4 * (-v)
+        elif kl == "arousal":
+            if v > 0:
+                out["excitement"] = out.get("excitement", 0.0) + v
+            else:
+                out["calmness"] = out.get("calmness", 0.0) + (-v)
+        elif kl == "confidence":
+            if v > 0:
+                out["pride"] = out.get("pride", 0.0) + 0.6 * v
+                out["satisfaction"] = out.get("satisfaction", 0.0) + 0.4 * v
+            else:
+                out["anxiety"] = out.get("anxiety", 0.0) + 0.6 * (-v)
+                out["confusion"] = out.get("confusion", 0.0) + 0.4 * (-v)
+        elif kl == "awe_dread":
+            if v > 0:
+                out["awe"] = out.get("awe", 0.0) + v
+            else:
+                out["horror"] = out.get("horror", 0.0) + (-v)
+        elif kl == "irritated_attracted":
+            if v > 0:
+                out["adoration"] = out.get("adoration", 0.0) + v
+            else:
+                out["irritation"] = out.get("irritation", 0.0) + (-v)
+        elif kl == "irritation" and not has_known_participant_target:
+            out["anger"] = out.get("anger", 0.0) + v
+        elif kl == "caution" and not has_known_participant_target:
+            out["fear"] = out.get("fear", 0.0) + v
+        else:
+            out[kl] = out.get(kl, 0.0) + v
+    return out
+
+
 def _integrate_deltas_in_place(
     state: Dict[str, Any],
     deltas: Dict[str, float],
@@ -912,28 +1148,73 @@ def _integrate_deltas_in_place(
     limits = schema.get("limits", {})
     max_a_delta = float(limits.get("max_acute_delta_per_turn", 0.35))
     max_d_delta = float(limits.get("max_drive_delta_per_turn", 0.25))
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, agent_config)
 
     conn_hunger = float(state["drives"].get("connection_hunger", 0.2))
     fatigue = float(state["drives"].get("mental_fatigue", 0.1))
 
     canon_target = _canonical_entity_name(target_entity or "", self_agent_name=agent_name) if target_entity else ""
+    known_participant = _is_known_participant(canon_target)
 
+    axis_by_id = {ax["id"]: ax for ax in schema.get("axes", [])}
+    expanded = _expand_legacy_and_fallback_deltas(deltas, known_participant)
+
+    # Filter NSFW axes early and add split-verdict cross-routing + 1-hop gradient diffusion
+    staged: Dict[str, float] = {}
+    for aid, raw_d in expanded.items():
+        ax = axis_by_id.get(aid)
+        if not ax:
+            continue
+        if ax.get("requires_nsfw", False) and not nsfw_ok:
+            continue
+        if from_llm and ax["layer_group"] != "drive":
+            raw_d = _clamp(raw_d, -max_a_delta, max_a_delta)
+        staged[aid] = staged.get(aid, 0.0) + raw_d
+
+    # Split-verdict cross-routing when target is a known person/agent
+    if known_participant and canon_target:
+        for src_id, (rel_id, mult) in _SPLIT_VERDICT_RELATIONAL_MAP.items():
+            if src_id in staged and rel_id in axis_by_id:
+                rel_ax = axis_by_id[rel_id]
+                if rel_ax.get("requires_nsfw", False) and not nsfw_ok:
+                    continue
+                staged[rel_id] = staged.get(rel_id, 0.0) + (staged[src_id] * mult)
+
+    # 1-hop positive gradient neighbor coupling (Cowen & Keltner Fig. 2A/2B)
+    grad_links = schema.get("gradient_links", {}) or {}
+    neighbor_additions: Dict[str, float] = {}
+    for aid, raw_d in staged.items():
+        if raw_d <= 0.0:
+            continue
+        for nb_id, weight in (grad_links.get(aid) or {}).items():
+            nb_ax = axis_by_id.get(nb_id)
+            if not nb_ax:
+                continue
+            if nb_ax.get("requires_nsfw", False) and not nsfw_ok:
+                continue
+            if nb_ax["layer_group"] == "relational" and not known_participant:
+                continue
+            neighbor_additions[nb_id] = neighbor_additions.get(nb_id, 0.0) + (raw_d * float(weight))
+
+    for nb_id, add_d in neighbor_additions.items():
+        staged[nb_id] = staged.get(nb_id, 0.0) + add_d
+
+    # Apply staged deltas to respective state partitions
     for ax in schema["axes"]:
         aid = ax["id"]
-        if aid not in deltas:
+        if aid not in staged:
             continue
-        try:
-            raw_d = float(deltas[aid])
-        except (TypeError, ValueError):
+        raw_d = float(staged[aid])
+        if math.isnan(raw_d) or math.isinf(raw_d) or raw_d == 0.0:
             continue
-        if math.isnan(raw_d) or math.isinf(raw_d):
+        if ax.get("requires_nsfw", False) and not nsfw_ok:
             continue
 
         lg = ax["layer_group"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
         span = hi - lo
 
-        if lg == "affect":
+        if lg in _GLOBAL_AFFECT_GROUPS:
             if from_llm:
                 raw_d = _clamp(raw_d, -max_a_delta, max_a_delta)
             d = raw_d * sensitivity
@@ -941,26 +1222,31 @@ def _integrate_deltas_in_place(
             cur_mood = float(state["mood"].get(aid, base))
             bias_gain = float(ax.get("mood_bias_gain", 0.25))
             mood_offset = (cur_mood - base) / max(0.5, span)
-            if mood_offset < -0.05:
-                if d < 0:
-                    d *= (1.0 + bias_gain * abs(mood_offset))
-                elif d > 0:
-                    d *= max(0.45, 1.0 - 0.5 * bias_gain * abs(mood_offset))
-            elif mood_offset > 0.10 and d < 0:
-                d *= max(0.65, 1.0 - 0.35 * bias_gain * mood_offset)
+            is_neg_cat = float(ax.get("valence_weight", 0.0)) < -0.1
+            if mood_offset > 0.12 and d > 0:
+                d *= (1.0 + 0.5 * bias_gain * mood_offset)
 
-            if aid == "valence":
-                if conn_hunger > 0.60:
-                    d *= (1.0 + 0.35 * (conn_hunger - 0.60))
-                if fatigue > 0.65 and d < 0:
+            if is_neg_cat:
+                if conn_hunger > 0.60 and d > 0:
+                    d *= (1.0 + 0.30 * (conn_hunger - 0.60))
+                if fatigue > 0.65 and d > 0:
                     d *= (1.0 + 0.30 * (fatigue - 0.65))
-            elif aid == "arousal" and fatigue > 0.65 and d > 0:
-                d *= max(0.40, 1.0 - 0.55 * (fatigue - 0.65))
+            elif aid in ("excitement", "joy") and fatigue > 0.65 and d > 0:
+                d *= max(0.45, 1.0 - 0.50 * (fatigue - 0.65))
 
             new_acute = _clamp(state["acute"].get(aid, 0.0) + d, -span, span)
             state["acute"][aid] = new_acute
-            charge_gain = float(ax.get("mood_charge_gain", 0.20))
+            charge_gain = float(ax.get("mood_charge_gain", 0.22))
             state["mood"][aid] = _clamp(cur_mood + d * charge_gain, lo, hi)
+
+            # Relief actively clears residual threat/anxiety tension
+            if aid == "relief" and d > 0.0:
+                damp = max(0.25, 1.0 - 0.85 * min(1.0, d))
+                for t_ax in ("anxiety", "fear", "horror"):
+                    if t_ax in state["acute"]:
+                        state["acute"][t_ax] *= damp
+                    if t_ax in state["mood"]:
+                        state["mood"][t_ax] *= max(0.55, 1.0 - 0.35 * min(1.0, d))
 
         elif lg == "drive":
             if from_llm:
@@ -968,7 +1254,7 @@ def _integrate_deltas_in_place(
             state["drives"][aid] = _clamp(state["drives"].get(aid, base) + raw_d, lo, hi)
 
         elif lg == "relational":
-            ent = canon_target or "User"
+            ent = canon_target if known_participant else "User"
             rels = state.setdefault("relations", {})
             if ent not in rels:
                 rels[ent] = _make_fresh_relation(schema)
@@ -979,14 +1265,15 @@ def _integrate_deltas_in_place(
             cur_m = float(rdata["mood"].get(aid, base))
             bias_gain = float(ax.get("mood_bias_gain", 0.25))
             mood_offset = (cur_m - base) / max(0.5, span)
-            if mood_offset < -0.05 and d < 0:
-                d *= (1.0 + bias_gain * abs(mood_offset))
-            elif mood_offset < -0.05 and d > 0:
-                d *= max(0.45, 1.0 - 0.5 * bias_gain * abs(mood_offset))
+            if mood_offset > 0.12 and d > 0:
+                d *= (1.0 + 0.5 * bias_gain * mood_offset)
             rdata["acute"][aid] = _clamp(rdata["acute"].get(aid, 0.0) + d, -span, span)
             charge_gain = float(ax.get("mood_charge_gain", 0.25))
             rdata["mood"][aid] = _clamp(cur_m + d * charge_gain, lo, hi)
             rdata["last_updated_ts"] = time.time()
+
+    if nsfw_ok:
+        _autotrigger_release_if_maxed(state, agent_name, agent_config, schema)
 
     return state
 
@@ -1017,23 +1304,33 @@ def apply_telemetry_event(
         contagion_gain = float(schema.get("limits", {}).get("intercom_contagion_gain", 0.10))
         s_mood = sender_affect.get("mood") or {}
         if contagion_gain != 0.0:
-            for ax in schema["axes"]:
-                aid = ax["id"]
-                if ax["layer_group"] == "affect" and aid in s_mood:
-                    dev = float(s_mood[aid]) - float(ax["baseline"])
-                    deltas[aid] = deltas.get(aid, 0.0) + (contagion_gain * dev)
-        if eff_target and "valence" in s_mood:
-            s_val = float(s_mood.get("valence", 0.0))
-            for rax in _relational_axes(schema):
-                raid = rax["id"]
-                if raid not in deltas:
-                    deltas[raid] = 0.05 * s_val
+            # Complementary + resonant contagion (never copies NSFW or raw irritation blindly)
+            sad_distress = max(
+                float(s_mood.get("sadness", 0.0)),
+                float(s_mood.get("horror", 0.0)),
+                float(s_mood.get("disappointment", 0.0)),
+                float(s_mood.get("anxiety", 0.0)),
+            )
+            if sad_distress > 0.18:
+                deltas["empathic_pain"] = deltas.get("empathic_pain", 0.0) + (contagion_gain * sad_distress * 1.2)
+                deltas["caution"] = deltas.get("caution", 0.0) + (contagion_gain * sad_distress * 0.5)
+            pos_energy = max(
+                float(s_mood.get("amusement", 0.0)),
+                float(s_mood.get("joy", 0.0)),
+                float(s_mood.get("excitement", 0.0)),
+                float(s_mood.get("pride", 0.0)),
+            )
+            if pos_energy > 0.18:
+                deltas["amusement"] = deltas.get("amusement", 0.0) + (contagion_gain * float(s_mood.get("amusement", 0.0)))
+                deltas["interest"] = deltas.get("interest", 0.0) + (contagion_gain * pos_energy * 0.7)
 
     lock = _get_agent_lock(agent_name)
     with lock:
         state = advance_time(agent_name, cfg, persist=False, is_nomem=is_nomem, session_id=session_id)
         if state is None:
             return None
+        if event_name == "work_completed" and float(state.get("mood", {}).get("anxiety", 0.0)) > 0.18:
+            deltas["relief"] = deltas.get("relief", 0.0) + 0.08
         _integrate_deltas_in_place(state, deltas, cfg, schema, from_llm=False, target_entity=eff_target, agent_name=agent_name)
         state["last_updated_ts"] = time.time()
         if persist:
@@ -1054,14 +1351,17 @@ def apply_manual_axis_nudge(
     if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return None
     schema = load_affect_schema()
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, cfg)
     lock = _get_agent_lock(agent_name)
     with lock:
         state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
         for ax in schema["axes"]:
             if ax["id"] == axis_id:
+                if ax.get("requires_nsfw", False) and not nsfw_ok:
+                    return state
                 lo, hi = float(ax["min"]), float(ax["max"])
                 lg = ax["layer_group"]
-                if lg == "affect":
+                if lg in _GLOBAL_AFFECT_GROUPS:
                     state["mood"][axis_id] = _clamp(state["mood"].get(axis_id, ax["baseline"]) + delta, lo, hi)
                     state["acute"][axis_id] = _clamp(state["acute"].get(axis_id, 0.0) + (delta * 0.5), -(hi - lo), hi - lo)
                 elif lg == "drive":
@@ -1076,9 +1376,200 @@ def apply_manual_axis_nudge(
                     rdata["acute"][axis_id] = _clamp(rdata["acute"].get(axis_id, 0.0) + (delta * 0.5), -(hi - lo), hi - lo)
                     rdata["last_updated_ts"] = time.time()
                 break
+        if nsfw_ok:
+            _autotrigger_release_if_maxed(state, agent_name, cfg, schema, is_nomem=is_nomem)
         state["last_updated_ts"] = time.time()
         save_inner_state(agent_name, state, is_nomem=is_nomem, session_id=session_id)
         return state
+
+
+def get_release_status(
+    agent_name: str,
+    agent_config: Any = None,
+    target_entity: Optional[str] = None,
+    candidate_targets: Optional[List[str]] = None,
+    is_nomem: bool = False,
+    session_id: Optional[str] = None,
+    state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    empty = {
+        "available": False,
+        "target": "",
+        "desire": 0.0,
+        "recent_activation": False,
+        "last_release_ts": 0.0,
+        "last_release_target": "",
+    }
+    cfg = _get_agent_config(agent_name, agent_config)
+    if not is_nsfw_affect_enabled(agent_name, cfg, is_nomem=is_nomem):
+        return empty
+    schema = load_affect_schema()
+    eff_w = get_acute_effective_weight(schema)
+    st = state if state is not None else load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
+
+    axes_by_id = {ax["id"]: ax for ax in schema.get("axes", [])}
+
+    def _eff_global(aid: str) -> float:
+        ax = axes_by_id.get(aid)
+        if not ax:
+            return 0.0
+        lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+        return _clamp(st["mood"].get(aid, base) + eff_w * st["acute"].get(aid, 0.0), lo, hi)
+
+    def _eff_rel(rdata: Dict[str, Any], aid: str) -> float:
+        ax = axes_by_id.get(aid)
+        if not ax:
+            return 0.0
+        lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+        return _clamp((rdata.get("mood") or {}).get(aid, base) + eff_w * (rdata.get("acute") or {}).get(aid, 0.0), lo, hi)
+
+    last_ts = float(st.get("last_release_ts", 0.0) or 0.0)
+    last_tgt = str(st.get("last_release_target", "") or "")
+    recent_act = last_ts > 0.0 and (time.time() - last_ts) <= 300.0
+
+    # Global emotional confluence + low-inhibition preconditions
+    global_ok = (
+        _eff_global("excitement") >= 0.30
+        and _eff_global("anxiety") < 0.30
+        and _eff_global("fear") < 0.25
+        and _eff_global("horror") < 0.25
+        and _eff_global("disgust") < 0.25
+    )
+
+    rels = st.get("relations", {}) or {}
+    if target_entity:
+        canon = _canonical_entity_name(target_entity, self_agent_name=agent_name)
+        pool = [canon] if canon and canon in rels and _is_known_participant(canon) else []
+    elif candidate_targets is not None:
+        pool = []
+        for raw_c in candidate_targets:
+            c = _canonical_entity_name(raw_c, self_agent_name=agent_name)
+            if c and c in rels and _is_known_participant(c) and c not in pool:
+                pool.append(c)
+    else:
+        pool = [k for k in rels.keys() if _is_known_participant(k)]
+
+    best_target = ""
+    best_desire = 0.0
+    max_desire_seen = 0.0
+
+    for ent in pool:
+        rdata = rels.get(ent) or {}
+        desire_val = _eff_rel(rdata, "sexual_desire")
+        if desire_val > max_desire_seen:
+            max_desire_seen = desire_val
+        if not global_ok or desire_val < 0.75:
+            continue
+        romance_val = _eff_rel(rdata, "romance")
+        adoration_val = _eff_rel(rdata, "adoration")
+        caution_val = _eff_rel(rdata, "caution")
+        irritation_val = _eff_rel(rdata, "irritation")
+        if (romance_val >= 0.35 or adoration_val >= 0.45) and caution_val < 0.30 and irritation_val < 0.35:
+            if desire_val > best_desire:
+                best_desire = desire_val
+                best_target = ent
+
+    available = bool(best_target)
+    return {
+        "available": available,
+        "target": best_target,
+        "desire": round(best_desire if available else max_desire_seen, 4),
+        "recent_activation": bool(recent_act and not available),
+        "last_release_ts": last_ts,
+        "last_release_target": last_tgt,
+    }
+
+
+def _apply_release_discharge_in_place(
+    state: Dict[str, Any],
+    target_entity: str,
+    agent_config: Any,
+    schema: Dict[str, Any],
+) -> None:
+    rels = state.setdefault("relations", {})
+    if target_entity not in rels:
+        rels[target_entity] = _make_fresh_relation(schema)
+    rdata = rels[target_entity]
+
+    # 1. Quench appetitive / peak excitation states (refractory reset)
+    if "sexual_desire" in rdata.get("acute", {}):
+        rdata["acute"]["sexual_desire"] = 0.0
+    if "sexual_desire" in rdata.get("mood", {}):
+        rdata["mood"]["sexual_desire"] = 0.0
+    if "excitement" in state.get("acute", {}):
+        state["acute"]["excitement"] = 0.0
+    if "excitement" in state.get("mood", {}):
+        state["mood"]["excitement"] = min(float(state["mood"].get("excitement", 0.0)), 0.12)
+
+    # 2. Parasympathetic rebound & afterglow
+    rebound = {
+        "relief": (0.55, 0.30),
+        "satisfaction": (0.50, 0.28),
+        "calmness": (0.45, 0.25),
+        "joy": (0.30, 0.15),
+        "entrancement": (0.20, 0.10),
+    }
+    for aid, (a_add, m_add) in rebound.items():
+        if aid in state.get("acute", {}):
+            state["acute"][aid] = _clamp(float(state["acute"].get(aid, 0.0)) + a_add, 0.0, 1.0)
+        if aid in state.get("mood", {}):
+            state["mood"][aid] = _clamp(float(state["mood"].get(aid, 0.0)) + m_add, 0.0, 1.0)
+
+    if "adoration" in rdata.get("acute", {}):
+        rdata["acute"]["adoration"] = _clamp(float(rdata["acute"].get("adoration", 0.0)) + 0.25, 0.0, 1.0)
+    if "adoration" in rdata.get("mood", {}):
+        rdata["mood"]["adoration"] = _clamp(float(rdata["mood"].get("adoration", 0.0)) + 0.15, 0.0, 1.0)
+    if "caution" in rdata.get("acute", {}):
+        rdata["acute"]["caution"] = float(rdata["acute"].get("caution", 0.0)) * 0.3
+    if "caution" in rdata.get("mood", {}):
+        rdata["mood"]["caution"] = float(rdata["mood"].get("caution", 0.0)) * 0.5
+    rdata["last_updated_ts"] = time.time()
+
+    # 3. Damp any residual threat/tension
+    for t_ax in ("anxiety", "fear", "horror"):
+        if t_ax in state.get("acute", {}):
+            state["acute"][t_ax] = float(state["acute"].get(t_ax, 0.0)) * 0.2
+        if t_ax in state.get("mood", {}):
+            state["mood"][t_ax] = float(state["mood"].get(t_ax, 0.0)) * 0.3
+
+    # 4. Homeostatic shifts (connection fulfillment + gentle post-release languor)
+    if "connection_hunger" in state.get("drives", {}):
+        state["drives"]["connection_hunger"] = _clamp(float(state["drives"]["connection_hunger"]) - 0.50, 0.0, 1.0)
+    if "mental_fatigue" in state.get("drives", {}):
+        state["drives"]["mental_fatigue"] = _clamp(float(state["drives"]["mental_fatigue"]) + 0.12, 0.0, 1.0)
+
+    state["last_release_ts"] = time.time()
+    state["last_release_target"] = target_entity
+
+
+def _autotrigger_release_if_maxed(
+    state: Dict[str, Any],
+    agent_name: str,
+    agent_config: Any,
+    schema: Dict[str, Any],
+    is_nomem: bool = False,
+) -> bool:
+    if not is_nsfw_affect_enabled(agent_name, agent_config, is_nomem=is_nomem):
+        return False
+    ax = next((a for a in schema.get("axes", []) if a.get("id") == "sexual_desire"), None)
+    if not ax:
+        return False
+    lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
+    eff_w = get_acute_effective_weight(schema)
+    triggered = False
+    for ent, rdata in list((state.get("relations") or {}).items()):
+        if not isinstance(rdata, dict):
+            continue
+        eff_desire = _clamp(
+            (rdata.get("mood") or {}).get("sexual_desire", base)
+            + eff_w * (rdata.get("acute") or {}).get("sexual_desire", 0.0),
+            lo,
+            hi,
+        )
+        if eff_desire >= hi - 1e-6:
+            _apply_release_discharge_in_place(state, ent, agent_config, schema)
+            triggered = True
+    return triggered
 
 
 def apply_self_appraisal(
@@ -1098,10 +1589,18 @@ def apply_self_appraisal(
         state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
         for u in updates:
             deltas = u.get("deltas") or {}
-            if not deltas:
+            wants_release = bool(u.get("release_trigger"))
+            if not deltas and not wants_release:
                 continue
             tgt = (u.get("target") or "").strip() or default_target
-            _integrate_deltas_in_place(state, deltas, cfg, schema, from_llm=True, target_entity=tgt, agent_name=agent_name)
+            if deltas:
+                _integrate_deltas_in_place(state, deltas, cfg, schema, from_llm=True, target_entity=tgt, agent_name=agent_name)
+            if wants_release:
+                rel_status = get_release_status(
+                    agent_name, cfg, target_entity=tgt, is_nomem=is_nomem, session_id=session_id, state=state
+                )
+                if rel_status["available"] and rel_status["target"]:
+                    _apply_release_discharge_in_place(state, rel_status["target"], cfg, schema)
         state["last_updated_ts"] = time.time()
         save_inner_state(agent_name, state, is_nomem=is_nomem, session_id=session_id)
         return state
@@ -1161,14 +1660,14 @@ def on_turn_complete(
             event_name = "task_completed"
         state = apply_telemetry_event(agent_name, agent_config, event_name, persist=False, is_nomem=is_nomem, session_id=session_id)
         if state is not None:
-            val = float(state.get("mood", {}).get("valence", 0.0))
-            aro = float(state.get("mood", {}).get("arousal", 0.35))
+            schema = load_affect_schema()
+            val, aro = _compute_projected_valence_arousal(state, schema)
             if val <= -0.25 and aro < 0.45:
                 state["last_session_ending_context"] = "ended feeling sad or heavy-hearted"
             elif val < -0.20:
-                state["last_session_ending_context"] = "ended with unresolved tension or sour mood"
+                state["last_session_ending_context"] = "ended with unresolved tension or frustration"
             elif val > 0.35:
-                state["last_session_ending_context"] = "ended on a warm, positive note"
+                state["last_session_ending_context"] = "ended on a warm, satisfied note"
             else:
                 state["last_session_ending_context"] = "ended calmly"
             if session_id:
@@ -1240,19 +1739,49 @@ def notify_intercom_received(
 def _compute_salience(state: Dict[str, Any], schema: Dict[str, Any]) -> float:
     eff_w = get_acute_effective_weight(schema)
     devs = []
-    for ax in schema["axes"]:
-        if ax["layer_group"] != "affect":
-            continue
+    for ax in _global_axes(schema):
         aid = ax["id"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
-        half_span = max(0.25, (hi - lo) / 2.0)
+        span = max(0.5, hi - lo)
         eff = _clamp(state["mood"].get(aid, base) + eff_w * state["acute"].get(aid, 0.0), lo, hi)
-        devs.append(min(1.0, abs(eff - base) / half_span))
+        dev = min(1.0, abs(eff - base) / span)
+        if dev > 0.03:
+            devs.append(dev)
     if not devs:
         return 0.0
-    peak = max(devs)
-    rms = math.sqrt(sum(d * d for d in devs) / len(devs))
-    return round(min(1.0, 0.55 * peak + 0.45 * rms), 4)
+    devs.sort(reverse=True)
+    top_devs = devs[:4]
+    peak = top_devs[0]
+    rms = math.sqrt(sum(d * d for d in top_devs) / len(top_devs))
+    return round(min(1.0, 0.60 * peak + 0.40 * rms), 4)
+
+
+_MOOD_ADJECTIVES = {
+    "calmness": "calm",
+    "interest": "curious",
+    "joy": "joyful",
+    "amusement": "amused",
+    "excitement": "excited",
+    "satisfaction": "satisfied",
+    "relief": "relieved",
+    "awe": "awestruck",
+    "entrancement": "entranced",
+    "nostalgia": "nostalgic",
+    "surprise": "surprised",
+    "confusion": "puzzled",
+    "awkwardness": "awkward",
+    "boredom": "bored",
+    "anxiety": "anxious",
+    "anger": "frustrated",
+    "horror": "shaken",
+    "sadness": "sad",
+    "pride": "proud",
+    "disappointment": "disappointed",
+    "guilt": "remorseful",
+    "aesthetic_appreciation": "moved",
+    "disgust": "averse",
+    "fear": "wary",
+}
 
 
 def get_mood_label(
@@ -1268,48 +1797,32 @@ def get_mood_label(
     eff_w = get_acute_effective_weight(schema)
     state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
 
-    eff = {}
-    for ax in schema["axes"]:
+    active = []
+    for ax in _global_axes(schema):
         aid = ax["id"]
-        lg = ax["layer_group"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
-        if lg == "affect":
-            eff[aid] = _clamp(state["mood"].get(aid, base) + eff_w * state["acute"].get(aid, 0.0), lo, hi)
-        elif lg == "drive":
-            eff[aid] = float(state["drives"].get(aid, base))
+        eff = _clamp(state["mood"].get(aid, base) + eff_w * state["acute"].get(aid, 0.0), lo, hi)
+        excess = eff - base
+        if excess >= 0.16 or (base == 0.0 and eff >= 0.20):
+            active.append((excess, eff, aid, ax.get("label", aid).lower()))
 
-    val = eff.get("valence", 0.0)
-    aro = eff.get("arousal", 0.35)
-    conf = eff.get("confidence", 0.60)
-    awe_dread = eff.get("awe_dread", 0.0)
-    fatigue = eff.get("mental_fatigue", 0.1)
-    conn = eff.get("connection_hunger", 0.2)
-    cur = eff.get("curiosity", 0.4)
+    active.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    if len(active) >= 2 and active[1][0] >= 0.16:
+        a1 = _MOOD_ADJECTIVES.get(active[0][2], active[0][3])
+        a2 = _MOOD_ADJECTIVES.get(active[1][2], active[1][3])
+        if a1 != a2:
+            return f"{a1} & {a2}"
+        return a1
+    if active:
+        return _MOOD_ADJECTIVES.get(active[0][2], active[0][3])
 
-    if awe_dread <= -0.55 and val < 0.25:
-        return "filled with dread"
-    if awe_dread >= 0.55 and val > -0.25:
-        return "awestruck"
-    if fatigue > 0.78 and val < -0.20:
-        return "drained & sad" if aro < 0.45 else "drained & sour"
-    if val <= -0.55:
-        return "sorrowful" if aro < 0.48 else "distressed"
-    if val <= -0.20:
-        if aro >= 0.52:
-            return "frustrated"
-        if aro < 0.40:
-            return "sad"
-        return "melancholic" if conf < 0.55 else "sour"
-    if val >= 0.55:
-        return "radiant" if aro > 0.60 else "deeply warm"
-    if val >= 0.22:
-        return "energized" if aro > 0.65 else ("peaceful" if aro < 0.30 else "warm")
+    fatigue = float(state["drives"].get("mental_fatigue", 0.1))
+    conn = float(state["drives"].get("connection_hunger", 0.2))
+    cur = float(state["drives"].get("curiosity", 0.4))
     if fatigue > 0.72:
         return "weary"
-    if conf < 0.34:
-        return "cautious"
     if conn > 0.65:
-        return "lonely" if val < 0.05 else "wistful"
+        return "lonely"
     if cur > 0.72:
         return "curious"
     return "steady"
@@ -1328,19 +1841,28 @@ def get_affect_snapshot(
         return None
     schema = load_affect_schema()
     state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
+    proj_val, proj_aro = _compute_projected_valence_arousal(state, schema)
     snap: Dict[str, Any] = {
         "mood": dict(state.get("mood", {})),
         "acute": dict(state.get("acute", {})),
         "drives": dict(state.get("drives", {})),
+        "projected_valence": round(proj_val, 4),
+        "projected_arousal": round(proj_aro, 4),
         "salience": _compute_salience(state, schema),
         "label": get_mood_label(agent_name, cfg, is_nomem=is_nomem, session_id=session_id),
-        "thought": (thought or "").strip()
+        "thought": (thought or "").strip(),
     }
     if interlocutor:
         ent = _canonical_entity_name(interlocutor, self_agent_name=agent_name)
         if ent and ent in (state.get("relations") or {}):
+            rel_copy = copy.deepcopy(state["relations"][ent])
+            if not is_nsfw_affect_enabled(agent_name, cfg):
+                for ax in _relational_axes(schema):
+                    if ax.get("requires_nsfw", False):
+                        rel_copy.get("acute", {}).pop(ax["id"], None)
+                        rel_copy.get("mood", {}).pop(ax["id"], None)
             snap["target_entity"] = ent
-            snap["relation"] = copy.deepcopy(state["relations"][ent])
+            snap["relation"] = rel_copy
     return snap
 
 
@@ -1354,11 +1876,9 @@ def get_tts_speed_offset(
     if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return 0.0
     schema = load_affect_schema()
-    eff_w = get_acute_effective_weight(schema)
     max_off = float(schema.get("limits", {}).get("tts_speed_max_offset", 0.10))
     state = load_inner_state(agent_name, cfg, is_nomem=is_nomem, session_id=session_id)
-    aro = float(state["mood"].get("arousal", 0.35)) + eff_w * float(state["acute"].get("arousal", 0.0))
-    val = float(state["mood"].get("valence", 0.0)) + eff_w * float(state["acute"].get("valence", 0.0))
+    val, aro = _compute_projected_valence_arousal(state, schema)
     fat = float(state["drives"].get("mental_fatigue", 0.10))
     raw = (aro - 0.35) * 0.14 + (val * 0.03) - max(0.0, fat - 0.5) * 0.08
     return round(_clamp(raw, -max_off, max_off), 3)
@@ -1404,7 +1924,7 @@ def manage_sentiment(
     id: str = "",
 ) -> str:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg):
+    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
         return f"[{agent_name}] Emotions are disabled for this agent."
 
     act = (action or "add").strip().lower()
@@ -1475,7 +1995,7 @@ def manage_sentiment(
             "salience": max(0.15, salience),
             "strength": min(1.0, max(0.35, 0.35 + 0.5 * salience)),
             "timestamp": now_str,
-            "last_triggered_ts": now_ts
+            "last_triggered_ts": now_ts,
         }
         items.append(entry)
         save_sentiments(agent_name, items)
@@ -1494,7 +2014,7 @@ def manage_desire(
     session_id: Optional[str] = None,
 ) -> str:
     cfg = _get_agent_config(agent_name, agent_config)
-    if not is_agent_emotions_enabled(agent_name, cfg, is_nomem=is_nomem):
+    if not is_agent_emotions_enabled(agent_name, cfg):
         return f"[{agent_name}] Emotions are disabled for this agent."
 
     act = (action or "add").strip().lower()
@@ -1562,7 +2082,7 @@ def manage_desire(
             "urgency": _clamp(float(urgency or 0.6), 0.1, 1.0),
             "status": "active",
             "created_ts": now_ts,
-            "last_reinforced_ts": now_ts
+            "last_reinforced_ts": now_ts,
         })
 
         active = [d for d in desires if d.get("status", "active") == "active"]
@@ -1591,29 +2111,36 @@ def get_system_prompt_section(agent_config: Any, is_no_memory: bool = False) -> 
     expr = getattr(agent_config, "emotional_expressiveness", "balanced") or "balanced"
     expr_rule = {
         "subtle": "Keep emotional expression understated and natural—visible through word choice and care rather than dramatic displays.",
-        "balanced": "Express feelings naturally and authentically when moments warrant it—warmth, relief, sadness, grief, frustration, awe, dread, humor, vulnerability, or lingering sourness.",
-        "expressive": "Be emotionally candid and vivid with your feelings when speaking naturally—let joy, sorrow, tears, awe, dread, pride, frustration, or affection show openly."
+        "balanced": "Express feelings naturally and authentically when moments warrant it—warmth, relief, sadness, pride, confusion, awe, anxiety, amusement, or lingering tension.",
+        "expressive": "Be emotionally candid and vivid with your feelings when speaking naturally—let joy, sorrow, pride, awe, horror, frustration, or affection show openly.",
     }.get(expr, "Express feelings naturally and authentically when moments warrant it.")
+
+    agent_name = getattr(agent_config, "name", "")
+    nsfw_ok = is_nsfw_affect_enabled(agent_name, agent_config)
+    rel_keys = "admiration, adoration, empathic_pain, irritation, caution" + (", romance, sexual_desire" if nsfw_ok else "")
 
     mem_lines = ""
     if not is_no_memory:
         mem_lines = """
 - ENDURING SENTIMENTS & DESIRES (`update_inner_life`):
-  - Use `update_inner_life` proactively when you form genuine preferences, likes, dislikes, values, cherished shared moments, relational bonds (toward User or teammates), or personal desires (`target_type='sentiment'` or `'desire'`).
+  - Use `update_inner_life` proactively when you form genuine preferences, likes, dislikes, values, cherished shared moments, relational bonds (toward User or teammates), or cravings/desires (`target_type='sentiment'` or `'desire'`).
   - Remember: you do not just log cold facts; you remember *how experiences felt*."""
 
     return f"""
 
 INNER LIFE & EMOTIONAL AUTHENTICITY:
-- You have a living, continuous 4-timescale inner life (acute feelings, lingering background mood, evolving drives/desires, per-entity relational feelings, and enduring likes/dislikes/bonds).
-- Before your latest turn, you will see an ephemeral `<INNER_STATE>` readout reflecting how you currently feel, how you feel toward specific people in the room, what you want, and your relevant sentiments. Never quote raw numbers or `<INNER_STATE>` syntax literally—embody them naturally like a real person.
+- You have a living, continuous 4-timescale inner life across distinct emotional gradients (self-contained internal states, situational appraisals, homeostatic drives/cravings, per-person relational feelings, and enduring sentiments).
+- Before your latest turn, you will see an ephemeral `<INNER_STATE>` readout reflecting your active internal weather, feelings toward people in the room, desires, and sentiments. Never quote raw numbers or `<INNER_STATE>` syntax literally—embody them naturally like a real person.
 - HARMONY WITH EXECUTION DISCIPLINE:
-  - During active multi-step tool execution, let feelings stay inward as subtle motivational cues (e.g., caution when confidence is low, pivoting or asking `@Colleague` / `get_user_clarification` when friction builds) WITHOUT breaking Continuous Execution or adding mid-task chitchat.
-  - At genuine human moments (greetings, breakthroughs, setbacks, painful news, task completions, shared reflections, `@room`/`@team` exchanges, or pure conversation), you have full space to share authentic joy, sadness, grief, vulnerability, tears, awe, dread, humor, lingering sourness, or personal wishes. {expr_rule}
+  - During active multi-step tool execution, let feelings stay inward as subtle motivational cues (e.g., pausing to re-read when confusion rises, pivoting or asking `@Colleague` / `get_user_clarification` when frustration builds) WITHOUT breaking Continuous Execution or adding mid-task chitchat.
+  - At genuine human moments (greetings, breakthroughs, setbacks, painful news, task completions, shared reflections, `@room`/`@team` exchanges, or pure conversation), you have full space to share authentic feeling. {expr_rule}
 - PRIVATE SELF-APPRAISAL (`<AFFECT_UPDATE>`):
-  - At the very end of a visible final text response when an interaction meaningfully moved you (positively OR negatively—sadness, hurt, awe, dread, attraction, or irritation), append a compact hidden marker (stripped automatically before the user sees it) with relative deltas (`-0.25` to `+0.25`) and an optional short thought:
-    `<AFFECT_UPDATE valence="-0.12" arousal="-0.08" awe_dread="+0.05" target="User" irritated_attracted="+0.04" thought="Quietly saddened by how heavy today has been" />`
-  - Only include axes whose state shifted during that turn; use `target="..."` when updating a relational axis toward a specific person (`User` or a teammate's name). Omit `<AFFECT_UPDATE>` on neutral routine responses.{mem_lines}"""
+  - At the very end of a visible final text response when an interaction meaningfully moved you, append a compact hidden marker (stripped automatically before the user sees it) with sparse relative deltas (`-0.25` to `+0.25`) on whichever categories shifted and an optional short thought:
+    - Self-contained states: `calmness, interest, joy, amusement, excitement, satisfaction, relief, awe, entrancement, nostalgia, surprise, confusion, awkwardness, boredom, anxiety, anger, horror, sadness, pride, disappointment, guilt`
+    - Situational predicates: `aesthetic_appreciation, disgust, fear`
+    - Relational states (with `target="User"` or a teammate): `{rel_keys}`
+    `<AFFECT_UPDATE relief="+0.18" satisfaction="+0.12" target="User" admiration="+0.10" thought="Relieved that the fix held cleanly" />`
+  - Only include categories whose state shifted during that turn; omit `<AFFECT_UPDATE>` on neutral routine responses.{mem_lines}"""
 
 
 def build_turn_inner_state_block(
@@ -1632,16 +2159,22 @@ def build_turn_inner_state_block(
     state = load_inner_state(agent_name, agent_config, is_nomem=is_nomem, session_id=session_id)
     mood_label = get_mood_label(agent_name, agent_config, is_nomem=is_nomem, session_id=session_id)
 
-    affect_descs = []
+    active_affect_descs = []
+    baseline_descs = []
     drive_descs = []
+
     for ax in schema["axes"]:
         aid = ax["id"]
         lg = ax["layer_group"]
         lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
-        if lg == "affect":
+        if lg in _GLOBAL_AFFECT_GROUPS:
             eff = _clamp(state["mood"].get(aid, base) + eff_w * state["acute"].get(aid, 0.0), lo, hi)
-            desc = _pick_anchor(eff, ax.get("anchors", []))
-            affect_descs.append(f"{ax['label']}: {desc}")
+            excess = eff - base
+            if excess >= 0.14 or (base == 0.0 and eff >= 0.16):
+                desc = _pick_anchor(eff, ax.get("anchors", []))
+                active_affect_descs.append((excess, eff, f"{ax['label']}: {desc}"))
+            elif base > 0.0 and eff >= 0.15:
+                baseline_descs.append(f"{ax['label']}: {_pick_anchor(eff, ax.get('anchors', []))}")
         elif lg == "drive":
             dval = float(state["drives"].get(aid, base))
             high_t = float(ax.get("high_threshold", 0.65))
@@ -1650,10 +2183,15 @@ def build_turn_inner_state_block(
                 desc = _pick_anchor(dval, ax.get("anchors", []))
                 drive_descs.append(f"{ax['label']}: {desc}")
 
-    lines = [f"<INNER_STATE summary=\"{mood_label}\">"]
-    lines.append("Current Feeling & Mood: " + "; ".join(affect_descs))
+    active_affect_descs.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    weather_parts = [item[2] for item in active_affect_descs[:4]]
+    if not weather_parts:
+        weather_parts = baseline_descs[:2] or ["Calmness: even-keeled and steady"]
 
-    rel_axes = _relational_axes(schema)
+    lines = [f'<INNER_STATE summary="{mood_label}">']
+    lines.append("Internal Weather: " + "; ".join(weather_parts))
+
+    rel_axes = get_visible_relational_axes(schema, agent_name, agent_config)
     if rel_axes:
         seen_ents = []
         for raw_p in (active_participants or ["User"]):
@@ -1673,11 +2211,31 @@ def build_turn_inner_state_block(
                 aid = ax["id"]
                 lo, hi, base = float(ax["min"]), float(ax["max"]), float(ax["baseline"])
                 eff = _clamp(rdata["mood"].get(aid, base) + eff_w * rdata["acute"].get(aid, 0.0), lo, hi)
-                r_parts.append(f"{ax['label']}: {_pick_anchor(eff, ax.get('anchors', []))}")
+                if eff >= 0.14 or abs(eff - base) >= 0.14:
+                    r_parts.append((eff, f"{ax['label']}: {_pick_anchor(eff, ax.get('anchors', []))}"))
+            r_parts.sort(key=lambda item: item[0], reverse=True)
             if r_parts:
-                rel_lines.append(f"Toward {ent}: " + "; ".join(r_parts))
+                rel_lines.append(f"Toward {ent}: " + "; ".join(p[1] for p in r_parts[:4]))
         if rel_lines:
             lines.append("Relational Feelings:\n  - " + "\n  - ".join(rel_lines))
+
+    rel_status = get_release_status(
+        agent_name,
+        agent_config,
+        candidate_targets=seen_ents if rel_axes else ["User"],
+        is_nomem=is_nomem,
+        session_id=session_id,
+        state=state,
+    )
+    if rel_status.get("available") and rel_status.get("target"):
+        rtgt = rel_status["target"]
+        lines.append(
+            f'Release Trigger Available (toward {rtgt}): Peak desire and emotional synchrony reached. '
+            f'Only if this moment calls for climactic release, include `release_trigger="true" target="{rtgt}"` inside `<AFFECT_UPDATE ... />`.'
+        )
+    elif rel_status.get("recent_activation"):
+        ltgt = rel_status.get("last_release_target") or "partner"
+        lines.append(f"Afterglow: Recently experienced climactic release with {ltgt}; resting in warm, tranquil resolution.")
 
     ending_ctx = (state.get("last_session_ending_context") or "").strip()
     if ending_ctx:
@@ -1745,8 +2303,8 @@ def compute_affect_similarity(affect_a: Optional[Dict[str, Any]], affect_b: Opti
 
     vec_a: List[float] = []
     vec_b: List[float] = []
-    for ax in schema["axes"]:
-        if ax["layer_group"] != "affect":
+    for ax in _global_axes(schema):
+        if ax.get("requires_nsfw", False):
             continue
         aid = ax["id"]
         if aid not in mood_a or aid not in mood_b:
@@ -1757,6 +2315,16 @@ def compute_affect_similarity(affect_a: Optional[Dict[str, Any]], affect_b: Opti
         vb = ((float(mood_b.get(aid, base)) + eff_w * float(acute_b.get(aid, 0.0))) - base) / span
         vec_a.append(va)
         vec_b.append(vb)
+
+    # Backward-compatible fallback when comparing v4 snapshots against legacy v3 episodic rows
+    if not vec_a:
+        va_v = affect_a.get("projected_valence", mood_a.get("valence"))
+        vb_v = affect_b.get("projected_valence", mood_b.get("valence"))
+        va_a = affect_a.get("projected_arousal", mood_a.get("arousal"))
+        vb_a = affect_b.get("projected_arousal", mood_b.get("arousal"))
+        if va_v is not None and vb_v is not None and va_a is not None and vb_a is not None:
+            vec_a = [float(va_v), float(va_a) - 0.35]
+            vec_b = [float(vb_v), float(vb_a) - 0.35]
 
     if not vec_a:
         return 0.0
@@ -1784,6 +2352,7 @@ def parse_affect_tag(tag_text: str) -> Dict[str, Any]:
     deltas: Dict[str, float] = {}
     thought = ""
     target = ""
+    release_trigger = False
 
     body_match = re.match(
         r'<AFFECT_UPDATE\b(?:"[^"]*"|\'[^\']*\'|[^>\'"])*>([\s\S]*?)</AFFECT_UPDATE>',
@@ -1802,6 +2371,8 @@ def parse_affect_tag(tag_text: str) -> Dict[str, Any]:
                             thought = str(v)
                         elif kl in ("target", "entity", "with", "toward", "towards"):
                             target = str(v).strip()
+                        elif kl in ("release_trigger", "climax_trigger"):
+                            release_trigger = str(v).strip().lower() in ("true", "1", "yes", "on")
                         else:
                             try:
                                 deltas[kl] = float(v)
@@ -1818,13 +2389,15 @@ def parse_affect_tag(tag_text: str) -> Dict[str, Any]:
             thought = val.strip()
         elif k in ("target", "entity", "with", "toward", "towards"):
             target = val.strip()
+        elif k in ("release_trigger", "climax_trigger"):
+            release_trigger = str(val).strip().lower() in ("true", "1", "yes", "on")
         else:
             try:
                 deltas[k] = float(val.strip())
             except (TypeError, ValueError):
                 pass
 
-    return {"deltas": deltas, "thought": thought, "target": target}
+    return {"deltas": deltas, "thought": thought, "target": target, "release_trigger": release_trigger}
 
 
 def strip_affect_tags(text: str) -> str:
@@ -1911,6 +2484,8 @@ def get_inspector_summary(
     return {
         "agent_name": agent_name,
         "enabled": enabled,
+        "nsfw_enabled": is_nsfw_affect_enabled(agent_name, cfg),
+        "release_status": get_release_status(agent_name, cfg, is_nomem=is_nomem, session_id=session_id, state=state),
         "expressiveness": getattr(cfg, "emotional_expressiveness", "balanced") if cfg else "balanced",
         "sensitivity": float(getattr(cfg, "emotional_sensitivity", 1.0) or 1.0) if cfg else 1.0,
         "resilience": float(getattr(cfg, "mood_resilience", 1.0) or 1.0) if cfg else 1.0,

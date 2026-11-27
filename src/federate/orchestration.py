@@ -132,14 +132,21 @@ class AgentConfig:
     tts_ref_text: str = "" # Reference transcript for zero-shot cloning (F5-TTS/IndicF5)
     pronouns: str = "she/her" # <-- NEW: Binary Pronoun Field (Default: she/her)
     disable_all_tools: bool = False # <-- NEW: Disable All Tools Checkbox
+    enable_streaming: Optional[bool] = None
     reasoning_effort: str = "none"
     temperature: float = 1.0
     max_tokens: int = 256000
     token_equivalent_char_number: float = 3.9
     enable_emotions: bool = True
+    enable_nsfw_affect: bool = False
     emotional_sensitivity: float = 1.0
     mood_resilience: float = 1.0
     emotional_expressiveness: str = "balanced"
+
+    def __post_init__(self):
+        if self.enable_streaming is None:
+            active_model = self.backup_model if (self.use_backup and self.backup_model) else self.model
+            self.enable_streaming = not str(active_model or "").strip().lower().startswith("gemini")
     
     def get_api_key(self) -> str:
         try:
@@ -470,6 +477,8 @@ class AgentManager:
         return valid_names
 
     def save_agent(self, agent: AgentConfig):
+        if getattr(agent, "pronouns", "she/her") == "neither" or not getattr(agent, "enable_emotions", True):
+            agent.enable_nsfw_affect = False
         path = os.path.join(self.agents_dir, f"{agent.name}.json")
         with open(path, "w") as f:
             json.dump(asdict(agent), f, indent=4)
