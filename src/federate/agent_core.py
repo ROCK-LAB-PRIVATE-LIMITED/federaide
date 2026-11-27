@@ -308,6 +308,7 @@ def get_executor_core(agent_view, agent_config: AgentConfig):
         base_url=base_url,
         max_retries=5,
         timeout=120,
+        disable_streaming=not getattr(agent_config, "enable_streaming", True),
         **extra_args
     )
 
@@ -980,7 +981,7 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
 
                         if event_type == "messages":
                             chunk, metadata = event_data
-                            if metadata.get("langgraph_node") == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
+                            if getattr(agent, "enable_streaming", True) and metadata.get("langgraph_node") == "agent" and isinstance(chunk, AIMessageChunk) and chunk.content:
                                 raw_c = chunk.content
                                 text_chunk = raw_c if isinstance(raw_c, str) else ("".join(b.get("text", "") for b in raw_c if isinstance(b, dict) and b.get("type") == "text") if isinstance(raw_c, list) else str(raw_c))
                                 visible_chunk = stream_filter.feed(text_chunk) if (emotions_active and stream_filter is not None) else text_chunk
@@ -1004,6 +1005,22 @@ def run_agent_task_core(agent_view, agent: AgentConfig, prompt: str, override_th
                                     messages = [messages]
 
                                 if node_name == "agent":
+                                    if not getattr(agent, "enable_streaming", True):
+                                        for msg in messages:
+                                            if getattr(msg, "content", None):
+                                                raw_c = msg.content
+                                                text_chunk = raw_c if isinstance(raw_c, str) else ("".join(b.get("text", "") for b in raw_c if isinstance(b, dict) and b.get("type") == "text") if isinstance(raw_c, list) else str(raw_c))
+                                                visible_chunk = stream_filter.feed(text_chunk) if (emotions_active and stream_filter is not None) else text_chunk
+                                                if visible_chunk:
+                                                    current_ai_text += visible_chunk
+                                                    full_ai_response += visible_chunk
+                                                    if getattr(agent_view, "tts_enabled", False):
+                                                        agent_view.tts_manager.stream_text(visible_chunk, agent_name=agent.name, voice=agent.tts_voice)
+                                                    if not has_mounted_ai_box:
+                                                        agent_view.app.call_from_thread(agent_view.mount_ai_message_box, agent.name, agent.color)
+                                                        has_mounted_ai_box = True
+                                                    display_text = agent_view.render_latex_to_unicode_ext(current_ai_text)
+                                                    agent_view.app.call_from_thread(agent_view.update_ai_message, display_text, agent.name)
                                     if emotions_active and stream_filter is not None:
                                         rem_visible, seg_updates = stream_filter.finalize_segment()
                                         if seg_updates:

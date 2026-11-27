@@ -654,26 +654,39 @@ class SwitchAgentModal(ModalScreen[dict]):
     #agent_list { margin: 1 0; height: auto; max-height: 12; overflow-y: scroll; border: round $primary; background: $boost; }
     #agent_list Button { width: 100%; margin-bottom: 0; border: none; content-align: left middle; }
     """
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
     def __init__(self, agents: List[str], current_default: str):
         super().__init__()
         self.agents = agents
         self.current_default = current_default
+        self._agent_map = {f"sel_{i}": name for i, name in enumerate(self.agents)}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="switch_dialog"):
             yield Label(" Switch Active Agent", classes="pane_title")
             yield Checkbox("Set as Default Agent", id="set_default")
-            yield Label(f"[dim]Default: {self.current_default}[/dim]", classes="status_center")
+            yield Label(f"[dim]Default: {escape(str(self.current_default))}[/dim]", classes="status_center")
             with VerticalScroll(id="agent_list"):
-                for name in self.agents:
-                    yield Button(f" {name}", id=f"sel_{name}")
+                for btn_id, name in self._agent_map.items():
+                    yield Button(f" {name}", id=btn_id)
             yield Button("Cancel", id="cancel", variant="error")
+
+    def on_mount(self):
+        btns = self.query("#agent_list Button")
+        if btns:
+            btns.first().focus()
+        else:
+            self.query_one("#cancel").focus()
+
+    def action_cancel(self):
+        self.dismiss(None)
 
     @on(Button.Pressed)
     def handle_click(self, event: Button.Pressed):
         if event.button.id == "cancel": self.dismiss(None)
-        elif event.button.id.startswith("sel_"):
-            self.dismiss({"name": event.button.id[4:], "default": self.query_one("#set_default", Checkbox).value})
+        elif event.button.id in self._agent_map:
+            self.dismiss({"name": self._agent_map[event.button.id], "default": self.query_one("#set_default", Checkbox).value})
 
 class ChatManagerModal(ModalScreen[str]):
     DEFAULT_CSS = """
@@ -1152,7 +1165,7 @@ class GlobalSettingsModal(ModalScreen[str]):
                     lbl = ax.get("label", aid)
                     self._affect_axis_fields.append((ax, safe_aid))
                     yield Label(f"{lbl} ({aid} — {lg}, range [{ax['min']}..{ax['max']}])", classes="affect_axis_title")
-                    if lg in ("affect", "relational"):
+                    if lg in ("affect", "self_contained", "situational_predicate", "relational"):
                         with Horizontal(classes="affect_pair_row"):
                             with Vertical(classes="affect_pair_col"):
                                 yield Label("Baseline", classes="field_label")
@@ -1251,7 +1264,7 @@ class GlobalSettingsModal(ModalScreen[str]):
         for ax, safe_aid in getattr(self, "_affect_axis_fields", []):
             lg = ax.get("layer_group", "affect")
             self.query_one(f"#aff_ax_{safe_aid}_baseline", Input).value = str(ax.get("baseline", 0.0))
-            if lg in ("affect", "relational"):
+            if lg in ("affect", "self_contained", "situational_predicate", "relational"):
                 self.query_one(f"#aff_ax_{safe_aid}_acute_hl", Input).value = str(ax.get("acute_half_life_sec", 900.0))
                 self.query_one(f"#aff_ax_{safe_aid}_mood_hl", Input).value = str(ax.get("mood_half_life_sec", 36000.0))
                 self.query_one(f"#aff_ax_{safe_aid}_charge", Input).value = str(ax.get("mood_charge_gain", 0.20))
@@ -1480,7 +1493,7 @@ class GlobalSettingsModal(ModalScreen[str]):
             lg = ax.get("layer_group", "affect")
             lo, hi = float(ax.get("min", 0.0)), float(ax.get("max", 1.0))
             ax["baseline"] = _pfloat(f"#aff_ax_{safe_aid}_baseline", ax.get("baseline", 0.0), lo, hi)
-            if lg in ("affect", "relational"):
+            if lg in ("affect", "self_contained", "situational_predicate", "relational"):
                 ax["acute_half_life_sec"] = _pfloat(f"#aff_ax_{safe_aid}_acute_hl", ax.get("acute_half_life_sec", 900.0), 1.0)
                 ax["mood_half_life_sec"] = _pfloat(f"#aff_ax_{safe_aid}_mood_hl", ax.get("mood_half_life_sec", 36000.0), 1.0)
                 ax["mood_charge_gain"] = _pfloat(f"#aff_ax_{safe_aid}_charge", ax.get("mood_charge_gain", 0.20), 0.0, 2.0)
@@ -1968,6 +1981,8 @@ class ConfigModal(ModalScreen[str]):
                     with Horizontal(classes="config_row"):
                         yield Checkbox("Vision Capable", id="ai_vision_capable", value=self.agent_config.is_capable_vision)
                         yield Checkbox("Disable All Tools", id="ai_disable_all_tools", value=self.agent_config.disable_all_tools)
+                    with Horizontal(classes="config_row"):
+                        yield Checkbox("Stream Responses", id="ai_enable_streaming", value=getattr(self.agent_config, "enable_streaming", True))
 
                     yield Label("Emotions & Inner Life", classes="section_label")
                     with Horizontal(classes="config_row"):
@@ -2047,6 +2062,19 @@ class ConfigModal(ModalScreen[str]):
             with self.prevent(Select.Changed):
                 select_widget.value = matched
         self.update_auth_btn_visibility()
+
+    @on(Input.Changed, "#ai_model")
+    @on(Input.Changed, "#ai_backup_model")
+    @on(Checkbox.Changed, "#ai_use_backup")
+    def on_active_model_changed(self):
+        try:
+            use_backup = self.query_one("#ai_use_backup", Checkbox).value
+            b_model = self.query_one("#ai_backup_model", Input).value.strip()
+            p_model = self.query_one("#ai_model", Input).value.strip()
+            active_model = b_model if (use_backup and b_model) else p_model
+            self.query_one("#ai_enable_streaming", Checkbox).value = not active_model.lower().startswith("gemini")
+        except Exception:
+            pass
     
     @on(Button.Pressed, "#ai_abilities_btn")
     def open_abilities_btn(self):
@@ -2103,6 +2131,7 @@ class ConfigModal(ModalScreen[str]):
             "base_url": self.query_one("#ai_base_url", Input).value.strip(),
             "is_capable_vision": self.query_one("#ai_vision_capable", Checkbox).value,
             "disable_all_tools": self.query_one("#ai_disable_all_tools", Checkbox).value,
+            "enable_streaming": self.query_one("#ai_enable_streaming", Checkbox).value,
             "api_key": api_key_val,
             "color": self.query_one("#ai_color", Input).value.strip() or "#00FFFF",
             "backup_model": self.query_one("#ai_backup_model", Input).value.strip(),
@@ -4289,7 +4318,9 @@ class InnerLifeModal(ModalScreen[None]):
         agents = list(self.agent_view.agent_manager.agents.keys())
         default_agent = self.agent_view.active_agent.name if getattr(self.agent_view, "active_agent", None) else (agents[0] if agents else "Rita")
         schema = affect_engine.load_affect_schema()
-        axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in schema.get("axes", [])]
+        default_cfg = self.agent_view.agent_manager.get_agent(default_agent)
+        vis_axes = affect_engine.get_visible_axes(schema, default_agent, default_cfg)
+        axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in vis_axes]
         default_axis = axis_opts[0][1] if axis_opts else Select.BLANK
         state = affect_engine.load_inner_state(default_agent)
         ent_opts = self._entity_options(default_agent, state)
@@ -4376,9 +4407,11 @@ class InnerLifeModal(ModalScreen[None]):
         if state.get("last_session_ending_context"):
             out.append(f"Carryover Context: {state['last_session_ending_context']}\n", style="italic yellow")
 
-        out.append("\n[Layers 1 & 2] Acute Affect & Background Mood\n", style="bold green")
+        out.append("\n[Layers 1 & 2] Internal Weather (Self-Contained & Situational)\n", style="bold green")
+        sc_entries = []
+        dormant_labels = []
         for ax in axes:
-            if ax.get("layer_group") != "affect":
+            if ax.get("layer_group") not in ("affect", "self_contained", "situational_predicate"):
                 continue
             aid = ax["id"]
             lbl = str(ax.get("label", aid))
@@ -4386,10 +4419,19 @@ class InnerLifeModal(ModalScreen[None]):
             m_val = float(state["mood"].get(aid, base))
             a_val = float(state["acute"].get(aid, 0.0))
             eff = max(lo, min(hi, m_val + eff_w * a_val))
+            if eff >= 0.05 or abs(eff - base) >= 0.03:
+                sc_entries.append((eff, ax, lbl, lo, hi, m_val, a_val))
+            else:
+                dormant_labels.append(lbl)
+        sc_entries.sort(key=lambda item: item[0], reverse=True)
+        for eff, ax, lbl, lo, hi, m_val, a_val in sc_entries:
             bar = self._make_bar(eff, lo, hi)
             desc = affect_engine._pick_anchor(eff, ax.get("anchors", []))
-            out.append(f"  {lbl:<{lbl_w}} [{bar}] eff={eff:+.2f} (mood={m_val:+.2f}, acute={a_val:+.2f})\n")
-            out.append(f"{indent_pad}{desc}\n", style="dim")
+            tag = " (sit.)" if ax.get("layer_group") == "situational_predicate" else ""
+            out.append(f"  {lbl + tag:<{lbl_w + 7}} [{bar}] eff={eff:+.2f} (mood={m_val:+.2f}, acute={a_val:+.2f})\n")
+            out.append(f"{indent_pad}       {desc}\n", style="dim")
+        if dormant_labels:
+            out.append(f"  Dormant (~0.00): {', '.join(dormant_labels)}\n", style="dim")
 
         out.append("\n[Layer 3] Homeostatic Drives & Needs\n", style="bold yellow")
         for ax in axes:
@@ -4404,7 +4446,7 @@ class InnerLifeModal(ModalScreen[None]):
             out.append(f"  {lbl:<{lbl_w}} [{bar}] {d_val:.2f}\n")
             out.append(f"{indent_pad}{desc}\n", style="dim")
 
-        rel_axes = affect_engine._relational_axes(schema)
+        rel_axes = affect_engine.get_visible_relational_axes(schema, a_name, a_cfg)
         if rel_axes:
             out.append("\n[Relational Affect] Per-Entity Gradients\n", style="bold cyan")
             rels = state.get("relations", {}) or {}
@@ -4448,8 +4490,26 @@ class InnerLifeModal(ModalScreen[None]):
 
         self.query_one("#il_body", Static).update(out)
 
+    def _sync_axis_select(self, schema=None):
+        import affect_engine
+        a_name = self._current_agent_name()
+        a_cfg = self.agent_view.agent_manager.get_agent(a_name)
+        sc = schema or affect_engine.load_affect_schema()
+        vis_axes = affect_engine.get_visible_axes(sc, a_name, a_cfg)
+        axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in vis_axes]
+        sel = self.query_one("#il_axis_select", Select)
+        cur_val = str(sel.value) if sel.value != Select.BLANK else ""
+        valid_ids = {o[1] for o in axis_opts}
+        with self.prevent(Select.Changed):
+            sel.set_options(axis_opts)
+            if cur_val in valid_ids:
+                sel.value = cur_val
+            elif axis_opts:
+                sel.value = axis_opts[0][1]
+
     @on(Select.Changed, "#il_agent_select")
     def on_agent_changed(self):
+        self._sync_axis_select()
         self._sync_entity_select()
         self.refresh_view()
 
@@ -4473,12 +4533,7 @@ class InnerLifeModal(ModalScreen[None]):
 
         if bid == "il_reload_schema":
             schema = affect_engine.load_affect_schema(force_reload=True)
-            axis_opts = [(f"{ax.get('label', ax['id'])} ({ax['layer_group']})", ax["id"]) for ax in schema.get("axes", [])]
-            sel = self.query_one("#il_axis_select", Select)
-            with self.prevent(Select.Changed):
-                sel.set_options(axis_opts)
-                if axis_opts:
-                    sel.value = axis_opts[0][1]
+            self._sync_axis_select(schema=schema)
             self._sync_entity_select()
             self.notify("Reloaded affect_schema.json!", severity="information")
         elif bid == "il_reset_btn":
@@ -4772,19 +4827,44 @@ class AIAgentView(Vertical):
     def check_chatgpt_oauth_status(self, agent=None):
         if getattr(self, "_chatgpt_auth_modal_open", False):
             return
-        if toolbox.is_keyring_locked():
-            return
         target_agent = agent or getattr(self, "active_agent", None)
-        if target_agent and is_chatgpt_oauth_agent(target_agent) and not has_valid_chatgpt_token():
-            self._chatgpt_auth_modal_open = True
-            def on_auth_done(success: bool):
-                self._chatgpt_auth_modal_open = False
-                if success:
-                    self.notify(f"ChatGPT Subscription authorized for {target_agent.name}!", severity="information")
-                    self.update_status_bar()
-                else:
-                    self.notify(f"ChatGPT OAuth authentication required for {target_agent.name}.", severity="warning")
-            self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
+        if not target_agent or not is_chatgpt_oauth_agent(target_agent):
+            return
+        self._chatgpt_check_gen = getattr(self, "_chatgpt_check_gen", 0) + 1
+        check_gen = self._chatgpt_check_gen
+
+        def _bg_check():
+            try:
+                if toolbox.is_keyring_locked():
+                    return
+                if has_valid_chatgpt_token():
+                    return
+                def _push_auth():
+                    if check_gen != getattr(self, "_chatgpt_check_gen", 0):
+                        return
+                    if getattr(self, "_chatgpt_auth_modal_open", False):
+                        return
+                    if getattr(self, "active_agent", None) is not target_agent:
+                        return
+                    self._chatgpt_auth_modal_open = True
+                    def on_auth_done(success: bool):
+                        self._chatgpt_auth_modal_open = False
+                        waiters = getattr(self, "_chatgpt_auth_waiters", [])
+                        self._chatgpt_auth_waiters = []
+                        for cb in waiters:
+                            try: cb(bool(success))
+                            except Exception: pass
+                        if success:
+                            self.notify(f"ChatGPT Subscription authorized for {target_agent.name}!", severity="information")
+                            self.update_status_bar()
+                        else:
+                            self.notify(f"ChatGPT OAuth authentication required for {target_agent.name}.", severity="warning")
+                    self.app.push_screen(ChatGPTAuthModal(), on_auth_done)
+                self.app.call_from_thread(_push_auth)
+            except Exception:
+                pass
+
+        threading.Thread(target=_bg_check, daemon=True).start()
 
     def ensure_chatgpt_auth_for_agent(self, agent) -> bool:
         if not is_chatgpt_oauth_agent(agent):
@@ -4801,12 +4881,20 @@ class AIAgentView(Vertical):
             
         def push_modal():
             if getattr(self, "_chatgpt_auth_modal_open", False):
+                if not hasattr(self, "_chatgpt_auth_waiters"):
+                    self._chatgpt_auth_waiters = []
+                self._chatgpt_auth_waiters.append(on_done)
                 return
             self._chatgpt_auth_modal_open = True
             self.notify(f"ChatGPT Subscription authentication required for {agent.name}.", severity="warning")
             def on_modal_done(ok: bool):
                 self._chatgpt_auth_modal_open = False
-                on_done(ok)
+                waiters = getattr(self, "_chatgpt_auth_waiters", [])
+                self._chatgpt_auth_waiters = []
+                for cb in waiters:
+                    try: cb(bool(ok))
+                    except Exception: pass
+                on_done(bool(ok))
             self.app.push_screen(ChatGPTAuthModal(), on_modal_done)
             
         self.app.call_from_thread(push_modal)
@@ -5117,6 +5205,8 @@ class AIAgentView(Vertical):
         self.app.push_screen(ChatManagerModal(), handle_chat_mgr)
 
     def action_switch_agent(self):
+        if isinstance(getattr(self.app, "screen", None), SwitchAgentModal):
+            return
         names = list(self.agent_manager.agents.keys())
         default = self.agent_manager.get_default_agent_name()
         def handle_switch(res):

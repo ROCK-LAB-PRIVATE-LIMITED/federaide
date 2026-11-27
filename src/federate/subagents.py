@@ -100,6 +100,7 @@ def _build_subagent_llm(agent_config):
         base_url=base_url,
         max_retries=5,
         timeout=120,
+        disable_streaming=not getattr(agent_config, "enable_streaming", True),
         **extra_args,
     )
 

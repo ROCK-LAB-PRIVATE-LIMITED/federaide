@@ -130,7 +130,7 @@ LEGACY_KEY = "chatgpt_oauth_token"
 
 class _FileChatGPTOAuthTokenProvider:
     def __init__(self):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def _clear_chunks_unlocked(self, keyring_mod):
         try:
@@ -215,7 +215,8 @@ class _FileChatGPTOAuthTokenProvider:
                     token = _token_from_response(resp.json(), fallback_refresh=token.refresh_token, fallback_account_id=token.account_id)
                     self.save(token)
                 except Exception as e:
-                    self.clear()
+                    if isinstance(e, httpx.HTTPStatusError) and e.response is not None and e.response.status_code in (400, 401):
+                        self.clear()
                     raise RuntimeError(f"Failed to refresh ChatGPT OAuth token: {e}")
             return token
 
@@ -263,10 +264,11 @@ def is_chatgpt_oauth_agent(agent: Any) -> bool:
             return True
     return False
 
+_provider = _FileChatGPTOAuthTokenProvider()
+
 def has_valid_chatgpt_token() -> bool:
     try:
-        provider = _FileChatGPTOAuthTokenProvider()
-        token = provider.get_token()
+        token = _provider.get_token()
         return bool(token and token.access_token)
     except Exception:
         return False
@@ -425,8 +427,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
         tok_resp.raise_for_status()
         token = _token_from_response(tok_resp.json())
-        provider = _FileChatGPTOAuthTokenProvider()
-        provider.save(token)
+        _provider.save(token)
 
         def success_and_close():
             self.notify("ChatGPT Subscription authorized successfully!", severity="information")
@@ -538,8 +539,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
             tok_resp.raise_for_status()
             token = _token_from_response(tok_resp.json())
-            provider = _FileChatGPTOAuthTokenProvider()
-            provider.save(token)
+            _provider.save(token)
 
             def success_and_close():
                 self.notify("ChatGPT Subscription authorized successfully!", severity="information")
@@ -554,8 +554,7 @@ class ChatGPTAuthModal(ModalScreen[bool]):
 
     @on(Button.Pressed, "#purge_btn")
     def purge_token(self):
-        provider = _FileChatGPTOAuthTokenProvider()
-        provider.clear()
+        _provider.clear()
         self.notify("Local ChatGPT OAuth token purged from keyring.", severity="warning")
         self.query_one("#status_label", Label).update("[bold yellow]Token purged. Re-authenticating...[/bold yellow]")
         is_termux = os.path.exists("/data/data/com.termux") or ("TERMUX_VERSION" in os.environ)
@@ -589,8 +588,6 @@ class ChatGPTAuthModal(ModalScreen[bool]):
         self.safe_dismiss(False)
 
 # --- HTTP TRANSPORT PROTOCOL TRANSLATOR ---
-
-_provider = _FileChatGPTOAuthTokenProvider()
 
 import platform
 
